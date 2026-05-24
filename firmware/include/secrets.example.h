@@ -49,11 +49,6 @@
 // already uses secrets.h as the local, untracked per-device config file.
 #define ENABLE_INA219_SOLAR      0
 #define ENABLE_MAX17048_BATTERY  0
-#define ENABLE_SIM7080G          0
-
-// OTA over cellular is intentionally disabled by default to avoid large data use.
-// Normal measurement upload and command polling work over SIM7080G when enabled.
-#define CELLULAR_OTA_ENABLED     0
 
 // INA219 solar monitor. Default address is 0x40 on most breakout boards.
 #define INA219_I2C_ADDRESS       0x40
@@ -61,26 +56,32 @@
 // MAX17048 LiPo fuel gauge alert threshold, in percent.
 #define MAX17048_ALERT_PERCENT   20
 
-// SIM7080G network settings. APN is required for most SIMs.
-#define SIM7080G_APN             ""
-#define SIM7080G_USER            ""
-#define SIM7080G_PASS            ""
-#define SIM7080G_PIN             ""
+// ==============================
+// INMP441 STEREO MICROPHONES
+// ==============================
+// Two INMP441 I2S MEMS microphones sharing a single I2S bus.
+// Wire L/R on one mic to GND (left channel) and L/R on the other mic to 3.3V
+// (right channel). Both mics share BCLK, WS (LRCLK) and SD (data) lines.
+//
+// Default pinout (free on this board):
+//   GPIO 14 -> BCLK (SCK on the mic boards)
+//   GPIO 13 -> WS   (LRCLK / WS on the mic boards)
+//   GPIO 34 -> SD   (data out from both mics, ESP32 input-only pin)
+//
+// VDD on each mic -> 3.3V, GND -> GND.
+#define ENABLE_INMP441_MICS      1
 
-// SIM7080G UART and power-control pins.
-// Adjust RX/TX to match your ESP32 wiring. RX means ESP32 RX connected to modem TX.
-#define SIM7080G_BAUD            115200
-#define SIM7080G_RX_PIN          26
-#define SIM7080G_TX_PIN          25
+#define INMP441_BCLK_PIN         14
+#define INMP441_WS_PIN           13
+#define INMP441_SD_PIN           34
 
-// Set to a GPIO if your board exposes modem PWRKEY / power enable, otherwise -1.
-#define SIM7080G_PWRKEY_PIN      -1
-#define SIM7080G_POWER_EN_PIN    -1
-#define SIM7080G_POWER_EN_ACTIVE_HIGH 1
+// Sample rate in Hz. 16 kHz is plenty for hive sounds (fundamental ~200 Hz,
+// harmonics up to a few kHz) and keeps the buffer small.
+#define INMP441_SAMPLE_RATE      16000
 
-// Cellular attach timeouts. NB-IoT/LTE-M registration can be slow off-grid.
-#define SIM7080G_NETWORK_TIMEOUT_MS 180000UL
-#define SIM7080G_GPRS_TIMEOUT_MS    60000UL
+// Number of stereo frames captured per measurement cycle.
+// 8000 frames at 16 kHz = ~500 ms of audio.
+#define INMP441_SAMPLE_FRAMES    8000
 
 // ==============================
 // OPTIONAL FLAGS

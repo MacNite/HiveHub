@@ -8,7 +8,8 @@
 compile_commands.json
 
 #PCB-Design
-/_OLD DESIGN V0 PCB
+/_OLD*
+/HiveScale_V0-backups
 
 # Python
 __pycache__/

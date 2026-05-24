@@ -15,6 +15,7 @@
 #include <Preferences.h>
 #include <time.h>
 #include <sys/time.h>
+#include <math.h>
 #include <esp_sleep.h>
 #include <driver/gpio.h>
 #include <driver/rtc_io.h>
@@ -37,23 +38,13 @@
 // OPTIONAL OFF-GRID FEATURES
 // ==============================
 // Keep all optional hardware compiled out by default. Enable per device in
-// secrets.h with 0/1 values. Credentials such as the cellular APN belong in
-// secrets.h; feature flags can live there too in this project because it is
-// already used as the per-device build configuration file.
+// secrets.h with 0/1 values.
 #ifndef ENABLE_INA219_SOLAR
 #define ENABLE_INA219_SOLAR 0
 #endif
 
 #ifndef ENABLE_MAX17048_BATTERY
 #define ENABLE_MAX17048_BATTERY 0
-#endif
-
-#ifndef ENABLE_SIM7080G
-#define ENABLE_SIM7080G 0
-#endif
-
-#ifndef CELLULAR_OTA_ENABLED
-#define CELLULAR_OTA_ENABLED 0
 #endif
 
 #ifndef INA219_I2C_ADDRESS
@@ -64,80 +55,36 @@
 #define MAX17048_ALERT_PERCENT 20
 #endif
 
-#ifndef SIM7080G_APN
-#define SIM7080G_APN ""
+// ==============================
+// INMP441 STEREO MICS (defaults)
+// ==============================
+#ifndef ENABLE_INMP441_MICS
+#define ENABLE_INMP441_MICS 0
 #endif
 
-#ifndef SIM7080G_USER
-#define SIM7080G_USER ""
+#ifndef INMP441_BCLK_PIN
+#define INMP441_BCLK_PIN 14
 #endif
 
-#ifndef SIM7080G_PASS
-#define SIM7080G_PASS ""
+#ifndef INMP441_WS_PIN
+#define INMP441_WS_PIN 13
 #endif
 
-#ifndef SIM7080G_PIN
-#define SIM7080G_PIN ""
+#ifndef INMP441_SD_PIN
+#define INMP441_SD_PIN 34
 #endif
 
-#ifndef SIM7080G_BAUD
-#define SIM7080G_BAUD 115200
+#ifndef INMP441_SAMPLE_RATE
+#define INMP441_SAMPLE_RATE 16000
 #endif
 
-#ifndef SIM7080G_RX_PIN
-#define SIM7080G_RX_PIN 26
+#ifndef INMP441_SAMPLE_FRAMES
+#define INMP441_SAMPLE_FRAMES 8000
 #endif
 
-#ifndef SIM7080G_TX_PIN
-#define SIM7080G_TX_PIN 25
-#endif
-
-#ifndef SIM7080G_PWRKEY_PIN
-#define SIM7080G_PWRKEY_PIN -1
-#endif
-
-#ifndef SIM7080G_PWRKEY_WAKE_PULSE_MS
-#define SIM7080G_PWRKEY_WAKE_PULSE_MS 1100UL
-#endif
-
-#ifndef SIM7080G_PWRKEY_RESET_PULSE_MS
-#define SIM7080G_PWRKEY_RESET_PULSE_MS 13000UL
-#endif
-
-#ifndef SIM7080G_PWRKEY_POWER_OFF_PULSE_MS
-#define SIM7080G_PWRKEY_POWER_OFF_PULSE_MS 1800UL
-#endif
-
-#ifndef SIM7080G_PWRKEY_BOOT_DELAY_MS
-#define SIM7080G_PWRKEY_BOOT_DELAY_MS 6000UL
-#endif
-
-#ifndef SIM7080G_POWER_CYCLE_OFF_MS
-#define SIM7080G_POWER_CYCLE_OFF_MS 3000UL
-#endif
-
-#ifndef SIM7080G_POWER_EN_PIN
-#define SIM7080G_POWER_EN_PIN -1
-#endif
-
-#ifndef SIM7080G_POWER_EN_ACTIVE_HIGH
-#define SIM7080G_POWER_EN_ACTIVE_HIGH 1
-#endif
-
-#ifndef SIM7080G_NETWORK_TIMEOUT_MS
-#define SIM7080G_NETWORK_TIMEOUT_MS 180000UL
-#endif
-
-#ifndef SIM7080G_GPRS_TIMEOUT_MS
-#define SIM7080G_GPRS_TIMEOUT_MS 60000UL
-#endif
-
-#ifndef SIM7080G_CONNECT_RETRIES
-#define SIM7080G_CONNECT_RETRIES 3
-#endif
-
-#ifndef SIM7080G_RETRY_BACKOFF_MS
-#define SIM7080G_RETRY_BACKOFF_MS 5000UL
+// Use I2S port 0. Port 0 has access to the most peripherals on the ESP32.
+#ifndef INMP441_I2S_PORT
+#define INMP441_I2S_PORT I2S_NUM_0
 #endif
 
 #if ENABLE_INA219_SOLAR
@@ -148,16 +95,11 @@
 #include <SparkFun_MAX1704x_Fuel_Gauge_Arduino_Library.h>
 #endif
 
-#if ENABLE_SIM7080G
-#define TINY_GSM_MODEM_SIM7080
-#ifndef TINY_GSM_RX_BUFFER
-#define TINY_GSM_RX_BUFFER 2048
-#endif
-#include <TinyGsmClient.h>
-#include <ArduinoHttpClient.h>
+#if ENABLE_INMP441_MICS
+#include <driver/i2s.h>
 #endif
 
-static const char* FIRMWARE_VERSION = "0.6.3-sd-cache-fix";
+static const char* FIRMWARE_VERSION = "0.7.0-mics-no-modem";
 
 #define HX1_DOUT 16
 #define HX1_SCK  17
@@ -230,16 +172,22 @@ SFE_MAX1704X batteryGauge(MAX1704X_MAX17048);
 bool batteryMonitorOk = false;
 #endif
 
-#if ENABLE_SIM7080G
-HardwareSerial simSerial(2);
-TinyGsm simModem(simSerial);
-TinyGsmClient simClient(simModem, 0);
-TinyGsmClientSecure simSecureClient(simModem, 1);
-bool cellularModemInitialized = false;
-bool cellularConnected = false;
-bool cellularModemMayBeOn = false;
-bool cellularRecoveryResetAttempted = false;
-int lastCellularCsq = 99;
+#if ENABLE_INMP441_MICS
+bool micsI2sInstalled = false;
+
+struct MicChannelStats {
+  bool ok = false;
+  float rmsDbfs = NAN;      // RMS level in dB relative to full scale (negative; 0 = full scale)
+  float peakDbfs = NAN;     // Peak level in dB relative to full scale
+  float rmsNormalized = NAN; // Linear RMS as fraction of full scale (0..1)
+  uint32_t sampleCount = 0;
+};
+
+struct MicMeasurement {
+  bool ok = false;
+  MicChannelStats left;
+  MicChannelStats right;
+};
 #endif
 
 bool sdOk = false;
@@ -281,7 +229,6 @@ String timestampNow();
 void syncTime();
 bool connectNetwork();
 void preparePowerMonitorsForSleep();
-void shutdownCellularForSleep();
 
 void debugLine() {
   Serial.println("----------------------------------------");
@@ -460,6 +407,172 @@ void startCalibrationMode(unsigned long intervalSeconds, unsigned long timeoutSe
   );
 }
 
+// ==============================
+// INMP441 stereo microphone support
+// ==============================
+#if ENABLE_INMP441_MICS
+
+bool initMicsI2s() {
+  if (micsI2sInstalled) return true;
+
+  i2s_config_t i2sConfig = {};
+  i2sConfig.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+  i2sConfig.sample_rate = INMP441_SAMPLE_RATE;
+  // INMP441 outputs 24 bits, MSB-aligned in a 32-bit slot. Read as 32-bit samples
+  // and shift right by 8 to get the 24-bit signed value.
+  i2sConfig.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
+  // Stereo so we capture both mics (one wired L, the other wired R).
+  i2sConfig.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+  i2sConfig.communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S);
+  i2sConfig.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+  i2sConfig.dma_buf_count = 4;
+  i2sConfig.dma_buf_len = 512; // frames per DMA buffer
+  i2sConfig.use_apll = false;
+  i2sConfig.tx_desc_auto_clear = false;
+  i2sConfig.fixed_mclk = 0;
+
+  esp_err_t err = i2s_driver_install(INMP441_I2S_PORT, &i2sConfig, 0, nullptr);
+  if (err != ESP_OK) {
+    Serial.printf("[INMP441] i2s_driver_install failed: %d\n", (int)err);
+    return false;
+  }
+
+  i2s_pin_config_t pinConfig = {};
+  pinConfig.bck_io_num = INMP441_BCLK_PIN;
+  pinConfig.ws_io_num = INMP441_WS_PIN;
+  pinConfig.data_out_num = I2S_PIN_NO_CHANGE;
+  pinConfig.data_in_num = INMP441_SD_PIN;
+
+  err = i2s_set_pin(INMP441_I2S_PORT, &pinConfig);
+  if (err != ESP_OK) {
+    Serial.printf("[INMP441] i2s_set_pin failed: %d\n", (int)err);
+    i2s_driver_uninstall(INMP441_I2S_PORT);
+    return false;
+  }
+
+  i2s_zero_dma_buffer(INMP441_I2S_PORT);
+  micsI2sInstalled = true;
+  Serial.printf("[INMP441] I2S installed: BCLK=%d WS=%d SD=%d rate=%d\n",
+                INMP441_BCLK_PIN, INMP441_WS_PIN, INMP441_SD_PIN, INMP441_SAMPLE_RATE);
+  return true;
+}
+
+void shutdownMicsI2s() {
+  if (!micsI2sInstalled) return;
+  i2s_driver_uninstall(INMP441_I2S_PORT);
+  micsI2sInstalled = false;
+  Serial.println("[INMP441] I2S uninstalled");
+}
+
+MicMeasurement readMicSamples() {
+  MicMeasurement result;
+
+  if (!initMicsI2s()) {
+    Serial.println("[INMP441] I2S init failed; skipping mic measurement");
+    return result;
+  }
+
+  // INMP441 needs a brief settling time after the BCLK starts. Read and discard
+  // a small amount of data first so the AGC/DC blocking inside the mic settles.
+  const size_t WARMUP_FRAMES = 256;
+  int32_t warmup[WARMUP_FRAMES * 2];
+  size_t bytesRead = 0;
+  i2s_read(INMP441_I2S_PORT, (void*)warmup, sizeof(warmup), &bytesRead, pdMS_TO_TICKS(500));
+
+  // Capture INMP441_SAMPLE_FRAMES stereo frames in chunks so we don't allocate
+  // a huge buffer. Process each chunk into running sums for RMS and peak.
+  const size_t CHUNK_FRAMES = 512;
+  int32_t chunk[CHUNK_FRAMES * 2];
+
+  double leftSumSquares = 0.0;
+  double rightSumSquares = 0.0;
+  int32_t leftPeak = 0;
+  int32_t rightPeak = 0;
+  uint32_t leftCount = 0;
+  uint32_t rightCount = 0;
+
+  uint32_t framesRemaining = INMP441_SAMPLE_FRAMES;
+
+  while (framesRemaining > 0) {
+    size_t framesThisRound = framesRemaining > CHUNK_FRAMES ? CHUNK_FRAMES : framesRemaining;
+    size_t bytesWanted = framesThisRound * 2 * sizeof(int32_t);
+    bytesRead = 0;
+    esp_err_t err = i2s_read(INMP441_I2S_PORT, (void*)chunk, bytesWanted, &bytesRead, pdMS_TO_TICKS(1000));
+
+    if (err != ESP_OK) {
+      Serial.printf("[INMP441] i2s_read failed: %d\n", (int)err);
+      break;
+    }
+
+    if (bytesRead == 0) {
+      Serial.println("[INMP441] i2s_read timed out with no data");
+      break;
+    }
+
+    size_t framesRead = bytesRead / (2 * sizeof(int32_t));
+    for (size_t i = 0; i < framesRead; i++) {
+      // Channel order with I2S_CHANNEL_FMT_RIGHT_LEFT: index 0 = right, 1 = left
+      // (this is the ESP-IDF convention for the legacy I2S driver).
+      // INMP441 samples are 24-bit signed in the MSBs of a 32-bit word; shift
+      // right by 8 to recover the 24-bit signed value as int32.
+      int32_t rightSample = chunk[i * 2 + 0] >> 8;
+      int32_t leftSample  = chunk[i * 2 + 1] >> 8;
+
+      double rf = (double)rightSample;
+      double lf = (double)leftSample;
+      rightSumSquares += rf * rf;
+      leftSumSquares  += lf * lf;
+
+      int32_t absR = rightSample < 0 ? -rightSample : rightSample;
+      int32_t absL = leftSample  < 0 ? -leftSample  : leftSample;
+      if (absR > rightPeak) rightPeak = absR;
+      if (absL > leftPeak)  leftPeak  = absL;
+
+      rightCount++;
+      leftCount++;
+    }
+
+    framesRemaining -= framesRead;
+    if (framesRead == 0) break;
+  }
+
+  // 24-bit signed full scale.
+  const double FULL_SCALE = 8388608.0; // 2^23
+
+  auto fillStats = [&](MicChannelStats& s, double sumSquares, int32_t peak, uint32_t count) {
+    if (count == 0) return;
+    s.ok = true;
+    s.sampleCount = count;
+    double meanSquare = sumSquares / (double)count;
+    double rms = sqrt(meanSquare);
+    s.rmsNormalized = (float)(rms / FULL_SCALE);
+    if (s.rmsNormalized > 0.0f) {
+      s.rmsDbfs = (float)(20.0 * log10((double)s.rmsNormalized));
+    } else {
+      s.rmsDbfs = -200.0f;
+    }
+    if (peak > 0) {
+      double peakNorm = (double)peak / FULL_SCALE;
+      s.peakDbfs = (float)(20.0 * log10(peakNorm));
+    } else {
+      s.peakDbfs = -200.0f;
+    }
+  };
+
+  fillStats(result.left, leftSumSquares, leftPeak, leftCount);
+  fillStats(result.right, rightSumSquares, rightPeak, rightCount);
+  result.ok = result.left.ok || result.right.ok;
+
+  Serial.printf("[INMP441] L: rms=%.2f dBFS peak=%.2f dBFS samples=%u\n",
+                result.left.rmsDbfs, result.left.peakDbfs, result.left.sampleCount);
+  Serial.printf("[INMP441] R: rms=%.2f dBFS peak=%.2f dBFS samples=%u\n",
+                result.right.rmsDbfs, result.right.peakDbfs, result.right.sampleCount);
+
+  return result;
+}
+
+#endif // ENABLE_INMP441_MICS
+
 void enterDeepSleep(unsigned long sleepMs) {
   if (!DEEP_SLEEP_ENABLED) return;
 
@@ -477,8 +590,10 @@ void enterDeepSleep(unsigned long sleepMs) {
 
   powerDownScalesForSleep();
   preparePowerMonitorsForSleep();
+#if ENABLE_INMP441_MICS
+  shutdownMicsI2s();
+#endif
   prepareSdForSleep();
-  shutdownCellularForSleep();
   shutdownWifiAndBt();
 
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
@@ -745,409 +860,8 @@ bool connectWifi(unsigned long timeoutMs = WIFI_CONNECT_TIMEOUT_MS) {
   return false;
 }
 
-#if ENABLE_SIM7080G
-struct ParsedUrl {
-  bool valid = false;
-  bool https = false;
-  String host;
-  String path;
-  int port = 80;
-};
-
-ParsedUrl parseUrl(const String& url) {
-  ParsedUrl parsed;
-  String work = url;
-  work.trim();
-
-  int schemeEnd = work.indexOf("://");
-  if (schemeEnd < 0) return parsed;
-
-  String scheme = work.substring(0, schemeEnd);
-  scheme.toLowerCase();
-  parsed.https = scheme == "https";
-  if (scheme != "http" && scheme != "https") return parsed;
-  parsed.port = parsed.https ? 443 : 80;
-
-  String rest = work.substring(schemeEnd + 3);
-  int slash = rest.indexOf('/');
-  String hostPort = slash >= 0 ? rest.substring(0, slash) : rest;
-  parsed.path = slash >= 0 ? rest.substring(slash) : "/";
-  if (parsed.path.length() == 0) parsed.path = "/";
-
-  int colon = hostPort.lastIndexOf(':');
-  if (colon > 0) {
-    parsed.host = hostPort.substring(0, colon);
-    parsed.port = hostPort.substring(colon + 1).toInt();
-  } else {
-    parsed.host = hostPort;
-  }
-
-  parsed.valid = parsed.host.length() > 0 && parsed.port > 0;
-  return parsed;
-}
-
-int csqToDbm(int csq) {
-  if (csq < 0 || csq == 99) return 0;
-  if (csq > 31) csq = 31;
-  return -113 + (2 * csq);
-}
-
-void releaseCellularPowerKeyPin() {
-  if (SIM7080G_PWRKEY_PIN < 0) return;
-
-  // PWRKEY is pulled up inside the SIM7080G to 1.8 V. Use open-drain so the
-  // ESP32 only pulls it low and never drives 3.3 V into the modem pin.
-  pinMode(SIM7080G_PWRKEY_PIN, OUTPUT_OPEN_DRAIN);
-  digitalWrite(SIM7080G_PWRKEY_PIN, HIGH);
-}
-
-void assertCellularPowerKeyPin() {
-  if (SIM7080G_PWRKEY_PIN < 0) return;
-
-  pinMode(SIM7080G_PWRKEY_PIN, OUTPUT_OPEN_DRAIN);
-  digitalWrite(SIM7080G_PWRKEY_PIN, LOW);
-}
-
-void setupCellularPowerPins() {
-  if (SIM7080G_POWER_EN_PIN >= 0) {
-    pinMode(SIM7080G_POWER_EN_PIN, OUTPUT);
-    digitalWrite(SIM7080G_POWER_EN_PIN, SIM7080G_POWER_EN_ACTIVE_HIGH ? HIGH : LOW);
-    cellularModemMayBeOn = true;
-    delay(200);
-  }
-
-  releaseCellularPowerKeyPin();
-}
-
-void pulseCellularPowerKey(unsigned long lowMs = SIM7080G_PWRKEY_WAKE_PULSE_MS, unsigned long afterMs = SIM7080G_PWRKEY_BOOT_DELAY_MS) {
-  if (SIM7080G_PWRKEY_PIN < 0) return;
-
-  assertCellularPowerKeyPin();
-  delay(lowMs);
-  releaseCellularPowerKeyPin();
-  if (afterMs > 0) delay(afterMs);
-}
-
-void wakeCellularModemWithPowerKey() {
-  pulseCellularPowerKey(SIM7080G_PWRKEY_WAKE_PULSE_MS, SIM7080G_PWRKEY_BOOT_DELAY_MS);
-  if (SIM7080G_PWRKEY_PIN >= 0) cellularModemMayBeOn = true;
-}
-
-void powerOffCellularModemWithPowerKey() {
-  if (SIM7080G_PWRKEY_PIN < 0) return;
-
-  Serial.println("[SIM7080G] Powering off modem with PWRKEY pulse");
-  pulseCellularPowerKey(SIM7080G_PWRKEY_POWER_OFF_PULSE_MS, 2000UL);
-  cellularModemMayBeOn = false;
-}
-
-void resetCellularModem(const char* reason) {
-  Serial.print("[SIM7080G] Resetting modem");
-  if (reason && reason[0]) {
-    Serial.print(": ");
-    Serial.println(reason);
-  } else {
-    Serial.println();
-  }
-
-  cellularConnected = false;
-  cellularModemInitialized = false;
-  simSerial.end();
-  setupCellularPowerPins();
-
-  if (SIM7080G_POWER_EN_PIN >= 0) {
-    Serial.println("[SIM7080G] Power-cycling modem enable pin");
-    digitalWrite(SIM7080G_POWER_EN_PIN, SIM7080G_POWER_EN_ACTIVE_HIGH ? LOW : HIGH);
-    delay(SIM7080G_POWER_CYCLE_OFF_MS);
-    digitalWrite(SIM7080G_POWER_EN_PIN, SIM7080G_POWER_EN_ACTIVE_HIGH ? HIGH : LOW);
-    cellularModemMayBeOn = true;
-    delay(200);
-    wakeCellularModemWithPowerKey();
-  } else if (SIM7080G_PWRKEY_PIN >= 0) {
-    Serial.println("[SIM7080G] Holding PWRKEY low for hardware reset");
-    pulseCellularPowerKey(SIM7080G_PWRKEY_RESET_PULSE_MS, SIM7080G_PWRKEY_BOOT_DELAY_MS);
-    cellularModemMayBeOn = true;
-  } else {
-    Serial.println("[SIM7080G] No PWRKEY or power-enable pin configured; cannot hardware-reset modem");
-  }
-}
-
-bool initCellularModem() {
-  if (cellularModemInitialized) return true;
-
-  Serial.println("[SIM7080G] Initializing modem");
-  setupCellularPowerPins();
-  wakeCellularModemWithPowerKey();
-
-  simSerial.begin(SIM7080G_BAUD, SERIAL_8N1, SIM7080G_RX_PIN, SIM7080G_TX_PIN);
-  delay(300);
-
-  bool ok = simModem.init(SIM7080G_PIN);
-  if (!ok) {
-    Serial.println("[SIM7080G] init() failed; trying restart()");
-    ok = simModem.restart(SIM7080G_PIN);
-  }
-
-  if (!ok && !cellularRecoveryResetAttempted && (SIM7080G_PWRKEY_PIN >= 0 || SIM7080G_POWER_EN_PIN >= 0)) {
-    cellularRecoveryResetAttempted = true;
-    resetCellularModem("init failed");
-    simSerial.begin(SIM7080G_BAUD, SERIAL_8N1, SIM7080G_RX_PIN, SIM7080G_TX_PIN);
-    delay(300);
-
-    Serial.println("[SIM7080G] Retrying init after hardware reset");
-    ok = simModem.init(SIM7080G_PIN);
-    if (!ok) {
-      Serial.println("[SIM7080G] init() still failed; trying restart()");
-      ok = simModem.restart(SIM7080G_PIN);
-    }
-  }
-
-  if (!ok) {
-    Serial.println("[SIM7080G] Modem init failed");
-    return false;
-  }
-
-  cellularModemInitialized = true;
-  Serial.print("[SIM7080G] Modem info: ");
-  Serial.println(simModem.getModemInfo());
-
-  if (String(SIM7080G_PIN).length() > 0 && simModem.getSimStatus() != 3) {
-    Serial.println("[SIM7080G] Unlocking SIM");
-    simModem.simUnlock(SIM7080G_PIN);
-  }
-
-  return true;
-}
-
-bool connectCellular() {
-  if (!initCellularModem()) return false;
-
-  if (cellularConnected && simModem.isGprsConnected()) {
-    cellularRecoveryResetAttempted = false;
-    return true;
-  }
-
-  for (int attempt = 1; attempt <= SIM7080G_CONNECT_RETRIES; attempt++) {
-    Serial.printf("[SIM7080G] Waiting for LTE/NB-IoT network attempt %d/%d\n", attempt, SIM7080G_CONNECT_RETRIES);
-    if (!simModem.waitForNetwork(SIM7080G_NETWORK_TIMEOUT_MS, true)) {
-      Serial.println("[SIM7080G] Network registration failed");
-      cellularConnected = false;
-    } else {
-      lastCellularCsq = simModem.getSignalQuality();
-      Serial.printf("[SIM7080G] Network connected; CSQ=%d approx_rssi=%d dBm\n", lastCellularCsq, csqToDbm(lastCellularCsq));
-
-      Serial.print("[SIM7080G] Connecting APN: ");
-      Serial.println(SIM7080G_APN);
-      if (simModem.gprsConnect(SIM7080G_APN, SIM7080G_USER, SIM7080G_PASS)) {
-        cellularConnected = simModem.isGprsConnected();
-        Serial.printf("[SIM7080G] Data connection: %s\n", cellularConnected ? "OK" : "FAILED");
-        if (cellularConnected) {
-          cellularRecoveryResetAttempted = false;
-          return true;
-        }
-      } else {
-        Serial.println("[SIM7080G] APN/data connection failed");
-        cellularConnected = false;
-      }
-    }
-
-    if (attempt < SIM7080G_CONNECT_RETRIES) {
-      unsigned long backoff = SIM7080G_RETRY_BACKOFF_MS * attempt;
-      Serial.printf("[SIM7080G] Backing off for %lu ms before retry\n", backoff);
-      delay(backoff);
-    }
-  }
-
-  if (!cellularRecoveryResetAttempted && (SIM7080G_PWRKEY_PIN >= 0 || SIM7080G_POWER_EN_PIN >= 0)) {
-    cellularRecoveryResetAttempted = true;
-    resetCellularModem("network/APN connect failed");
-    return connectCellular();
-  }
-
-  return false;
-}
-
-template <typename TClient>
-bool cellularGetWithClient(TClient& client, const ParsedUrl& parsed, String& body, int& code) {
-  HttpClient http(client, parsed.host.c_str(), parsed.port);
-  http.connectionKeepAlive();
-
-  Serial.print("[SIM7080G HTTP GET] ");
-  Serial.println(parsed.path);
-  http.beginRequest();
-  http.get(parsed.path.c_str());
-  if (apiKey.length() > 0) http.sendHeader("X-API-Key", apiKey.c_str());
-  http.endRequest();
-
-  code = http.responseStatusCode();
-  body = http.responseBody();
-  http.stop();
-  return true;
-}
-
-template <typename TClient>
-bool cellularPostWithClient(TClient& client, const ParsedUrl& parsed, const String& json, String& body, int& code) {
-  HttpClient http(client, parsed.host.c_str(), parsed.port);
-  http.connectionKeepAlive();
-
-  Serial.print("[SIM7080G HTTP POST] ");
-  Serial.println(parsed.path);
-  http.beginRequest();
-  http.post(parsed.path.c_str());
-  http.sendHeader("Content-Type", "application/json");
-  if (apiKey.length() > 0) http.sendHeader("X-API-Key", apiKey.c_str());
-  http.sendHeader("Content-Length", json.length());
-  http.beginBody();
-  http.print(json);
-  http.endRequest();
-
-  code = http.responseStatusCode();
-  body = http.responseBody();
-  http.stop();
-  return true;
-}
-
-bool httpGetJsonCellular(const String& url, JsonDocument& doc) {
-  if (!connectCellular()) return false;
-
-  ParsedUrl parsed = parseUrl(url);
-  if (!parsed.valid) {
-    Serial.println("[SIM7080G HTTP GET] Invalid URL");
-    return false;
-  }
-
-  String body;
-  int code = 0;
-  bool requestOk = parsed.https
-    ? cellularGetWithClient(simSecureClient, parsed, body, code)
-    : cellularGetWithClient(simClient, parsed, body, code);
-
-  if (!requestOk) return false;
-
-  Serial.printf("[SIM7080G HTTP GET] Status: %d\n", code);
-  Serial.print("[SIM7080G HTTP GET] Body: ");
-  Serial.println(body);
-
-  if (code < 200 || code >= 300) return false;
-
-  DeserializationError err = deserializeJson(doc, body);
-  if (err) {
-    Serial.print("[SIM7080G HTTP GET] JSON parse error: ");
-    Serial.println(err.c_str());
-    return false;
-  }
-
-  return true;
-}
-
-bool httpPostJsonCellular(const String& url, const String& json, String* response = nullptr) {
-  if (!connectCellular()) return false;
-
-  ParsedUrl parsed = parseUrl(url);
-  if (!parsed.valid) {
-    Serial.println("[SIM7080G HTTP POST] Invalid URL");
-    return false;
-  }
-
-  String body;
-  int code = 0;
-  bool requestOk = parsed.https
-    ? cellularPostWithClient(simSecureClient, parsed, json, body, code)
-    : cellularPostWithClient(simClient, parsed, json, body, code);
-
-  if (!requestOk) return false;
-
-  Serial.printf("[SIM7080G HTTP POST] Status: %d\n", code);
-  Serial.print("[SIM7080G HTTP POST] Response: ");
-  Serial.println(body);
-  if (response) *response = body;
-
-  return code >= 200 && code < 300;
-}
-
-bool syncTimeFromCellular() {
-  if (!connectCellular()) {
-    Serial.println("[TIME] Cannot sync time: cellular unavailable");
-    return false;
-  }
-
-  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-  float timezone = 0.0f;
-  if (!simModem.getNetworkTime(&year, &month, &day, &hour, &minute, &second, &timezone)) {
-    Serial.println("[TIME] Cellular network time unavailable");
-    return false;
-  }
-
-  if (year < 2024 || year > 2099) {
-    Serial.println("[TIME] Cellular network time invalid");
-    return false;
-  }
-
-  DateTime localTime(year, month, day, hour, minute, second);
-  int64_t utcEpoch64 = (int64_t)localTime.unixtime() - (int64_t)(timezone * 3600.0f);
-  if (utcEpoch64 < 0) {
-    Serial.println("[TIME] Cellular network time conversion invalid");
-    return false;
-  }
-  uint32_t utcEpoch = (uint32_t)utcEpoch64;
-  DateTime utcTime(utcEpoch);
-
-  struct timeval tv;
-  tv.tv_sec = utcEpoch;
-  tv.tv_usec = 0;
-  settimeofday(&tv, nullptr);
-
-  if (rtcOk) {
-    rtc.adjust(utcTime);
-    Serial.println("[TIME] RTC updated from cellular network time");
-  }
-
-  timeSource = "cellular";
-  Serial.print("[TIME] Current timestamp: ");
-  Serial.println(timestampNow());
-  return true;
-}
-#endif
-
-bool usingCellularTransport() {
-#if ENABLE_SIM7080G
-  return true;
-#else
-  return false;
-#endif
-}
-
 bool connectNetwork() {
-#if ENABLE_SIM7080G
-  return connectCellular();
-#else
   return connectWifi();
-#endif
-}
-
-void shutdownCellularForSleep() {
-#if ENABLE_SIM7080G
-  if (cellularModemInitialized) {
-    if (cellularConnected) {
-      simModem.gprsDisconnect();
-      cellularConnected = false;
-    }
-    Serial.println("[SIM7080G] Powering off modem for sleep");
-    simModem.poweroff();
-    cellularModemInitialized = false;
-    cellularModemMayBeOn = false;
-  } else if (cellularModemMayBeOn && SIM7080G_POWER_EN_PIN < 0) {
-    // If init failed after a PWRKEY wake/reset, AT+CPOWD is unavailable. Use a
-    // shorter PWRKEY power-off pulse before ESP32 deep sleep to avoid leaving
-    // the modem draining the battery.
-    powerOffCellularModemWithPowerKey();
-  }
-
-  if (SIM7080G_POWER_EN_PIN >= 0) {
-    digitalWrite(SIM7080G_POWER_EN_PIN, SIM7080G_POWER_EN_ACTIVE_HIGH ? LOW : HIGH);
-    cellularModemMayBeOn = false;
-  }
-#endif
 }
 
 void preparePowerMonitorsForSleep() {
@@ -1508,18 +1222,6 @@ String timestampNow() {
 }
 
 void syncTime() {
-#if ENABLE_SIM7080G
-  if (syncTimeFromCellular()) return;
-
-  if (rtcOk && rtcHasValidTime()) {
-    timeSource = "rtc";
-    Serial.println("[TIME] Falling back to RTC after cellular time failure");
-    return;
-  }
-
-  timeSource = "invalid";
-  return;
-#else
   if (!connectWifi()) {
     Serial.println("[TIME] Cannot sync time: WiFi unavailable");
     return;
@@ -1563,7 +1265,6 @@ void syncTime() {
   }
 
   timeSource = "invalid";
-#endif
 }
 
 void addAuthHeader(HTTPClient& http) {
@@ -1571,9 +1272,6 @@ void addAuthHeader(HTTPClient& http) {
 }
 
 bool httpGetJson(const String& url, JsonDocument& doc) {
-#if ENABLE_SIM7080G
-  return httpGetJsonCellular(url, doc);
-#else
   if (!connectWifi()) return false;
 
   Serial.println("[HTTP GET]");
@@ -1609,15 +1307,9 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
   }
 
   return true;
-#endif
 }
 
 bool httpPostJson(const String& url, const String& json, String* response = nullptr) {
-#if ENABLE_SIM7080G
-  bool ok = httpPostJsonCellular(url, json, response);
-  Serial.printf("[HTTP POST] %s\n", ok ? "SUCCESS" : "FAILED");
-  return ok;
-#else
   if (!connectWifi()) {
     Serial.println("[HTTP POST] No WiFi");
     return false;
@@ -1659,7 +1351,6 @@ bool httpPostJson(const String& url, const String& json, String* response = null
 
   Serial.println("[HTTP POST] FAILED");
   return false;
-#endif
 }
 
 size_t sdFileSize(const char* path) {
@@ -1851,6 +1542,10 @@ String createMeasurementJson() {
   }
 #endif
 
+#if ENABLE_INMP441_MICS
+  MicMeasurement micResult = readMicSamples();
+#endif
+
   Serial.printf("[MEASURE] raw1=%ld weight1=%.3f kg\n", raw1, weight1);
   Serial.printf("[MEASURE] raw2=%ld weight2=%.3f kg\n", raw2, weight2);
   Serial.printf("[MEASURE] hiveTemp1=%.2f hiveTemp2=%.2f\n", hiveTemp1, hiveTemp2);
@@ -1872,16 +1567,8 @@ String createMeasurementJson() {
   doc["hive_2_temp_c"] = hiveTemp2;
   doc["ambient_temp_c"] = ambientTemp;
   doc["ambient_humidity_percent"] = ambientHumidity;
-#if ENABLE_SIM7080G
-  lastCellularCsq = cellularConnected ? simModem.getSignalQuality() : lastCellularCsq;
-  doc["network_transport"] = "sim7080g";
-  doc["cellular_ok"] = cellularConnected;
-  doc["cellular_csq"] = lastCellularCsq;
-  doc["rssi_dbm"] = csqToDbm(lastCellularCsq);
-#else
   doc["network_transport"] = "wifi";
   doc["rssi_dbm"] = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
-#endif
   doc["firmware_version"] = FIRMWARE_VERSION;
   doc["calibration_mode"] = calibrationModeActive;
   doc["boot_count"] = rtcBootCount;
@@ -1904,6 +1591,19 @@ String createMeasurementJson() {
   doc["battery_voltage_v"] = batteryVoltage;
   doc["battery_soc_percent"] = batterySoc;
   doc["battery_alert"] = batteryAlert;
+#endif
+#if ENABLE_INMP441_MICS
+  doc["mic_ok"] = micResult.ok;
+  doc["mic_sample_rate_hz"] = (uint32_t)INMP441_SAMPLE_RATE;
+  doc["mic_sample_frames"] = (uint32_t)INMP441_SAMPLE_FRAMES;
+  doc["mic_left_ok"] = micResult.left.ok;
+  doc["mic_left_rms_dbfs"] = micResult.left.rmsDbfs;
+  doc["mic_left_peak_dbfs"] = micResult.left.peakDbfs;
+  doc["mic_left_rms_normalized"] = micResult.left.rmsNormalized;
+  doc["mic_right_ok"] = micResult.right.ok;
+  doc["mic_right_rms_dbfs"] = micResult.right.rmsDbfs;
+  doc["mic_right_peak_dbfs"] = micResult.right.peakDbfs;
+  doc["mic_right_rms_normalized"] = micResult.right.rmsNormalized;
 #endif
 
   String output;
@@ -2066,16 +1766,7 @@ String absoluteUrl(String maybeRelativeUrl) {
 }
 
 bool performFirmwareUpdate(const String& firmwareUrl) {
-#if ENABLE_SIM7080G
-  if (!CELLULAR_OTA_ENABLED) {
-    Serial.println("[OTA] Skipping firmware download on cellular transport; set CELLULAR_OTA_ENABLED=1 to allow cellular OTA after validating data plan and TLS behavior");
-    return false;
-  }
-  Serial.println("[OTA] Cellular OTA is not implemented in this build path; use WiFi/provisioning for firmware updates");
-  return false;
-#else
   if (!connectWifi()) return false;
-#endif
 
   String url = absoluteUrl(firmwareUrl);
   Serial.print("[OTA] Downloading firmware: ");
@@ -2238,16 +1929,6 @@ void runUploadCycle() {
   debugLine();
   Serial.println("[CYCLE] Starting measurement/upload cycle");
 
-#if ENABLE_SIM7080G
-  // Attach once before creating the payload so the cellular status and CSQ in
-  // this measurement describe the same upload attempt. The uploadLine() call
-  // below reuses this connection if it succeeded. If cellular is unavailable,
-  // continue and cache the measurement for the next cycle.
-  if (!connectNetwork()) {
-    Serial.println("[CYCLE] Cellular unavailable; measurement will be cached if SD is available");
-  }
-#endif
-
   String json = createMeasurementJson();
 
   if (sdOk) {
@@ -2308,7 +1989,8 @@ void setup() {
   debugLine();
   Serial.println("Hive Scale ESP32 firmware with provisioning + OTA");
   Serial.printf("Firmware version: %s\n", FIRMWARE_VERSION);
-  Serial.printf("Optional modules: SIM7080G=%d INA219=%d MAX17048=%d\n", ENABLE_SIM7080G, ENABLE_INA219_SOLAR, ENABLE_MAX17048_BATTERY);
+  Serial.printf("Optional modules: INA219=%d MAX17048=%d INMP441=%d\n",
+                ENABLE_INA219_SOLAR, ENABLE_MAX17048_BATTERY, ENABLE_INMP441_MICS);
   Serial.printf("Wake reason: %s; RTC boot count: %u\n", wakeReasonName(wakeReason).c_str(), rtcBootCount);
   debugLine();
 
