@@ -100,7 +100,7 @@
 #include <driver/i2s.h>
 #endif
 
-static const char* FIRMWARE_VERSION = "0.7.1-ap-mode";
+static const char* FIRMWARE_VERSION = "0.7.0-mics-no-modem";
 
 #define HX1_DOUT 16
 #define HX1_SCK  17
@@ -977,7 +977,7 @@ String jsonNumberOrNA(JsonDocument& doc, const char* key, uint8_t decimals, cons
   double value = doc[key].as<double>();
   if (isnan(value)) return "n/a";
 
-  String text = String(value, decimals);
+  String text = String(value, static_cast<unsigned int>(decimals));
   if (unit != nullptr && unit[0] != '\0') {
     text += " ";
     text += unit;
