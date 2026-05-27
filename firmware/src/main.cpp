@@ -579,10 +579,18 @@ MicMeasurement readMicSamples() {
   }
  
   // Settling: discard the first 256 frames so the mic's DC blocker stabilises.
+  // Heap-allocated (512 * 4 = 2 KB) to avoid eating into the loopTask stack.
   const size_t WARMUP_FRAMES = 256;
-  int32_t warmup[WARMUP_FRAMES * 2];
-  size_t bytesRead = 0;
-  i2s_read(INMP441_I2S_PORT, warmup, sizeof(warmup), &bytesRead, pdMS_TO_TICKS(500));
+  {
+    int32_t* warmup = (int32_t*)malloc(WARMUP_FRAMES * 2 * sizeof(int32_t));
+    if (warmup) {
+      size_t warmupBytesRead = 0;
+      i2s_read(INMP441_I2S_PORT, warmup, WARMUP_FRAMES * 2 * sizeof(int32_t), &warmupBytesRead, pdMS_TO_TICKS(500));
+      free(warmup);
+    } else {
+      Serial.println("[INMP441] warmup alloc failed; continuing without settling");
+    }
+  }
  
   // ── RMS / Peak pass ──────────────────────────────────────────────────────
   // We store every sample so we can reuse the same data for the FFT pass,
@@ -600,8 +608,16 @@ MicMeasurement readMicSamples() {
     leftBuf = rightBuf = nullptr;
   }
  
+  // chunk is 512 frames * 2 channels * 4 bytes = 4 KB — moved to heap to
+  // prevent the "Stack canary watchpoint triggered (loopTask)" crash.
   const size_t CHUNK_FRAMES = 512;
-  int32_t chunk[CHUNK_FRAMES * 2];
+  int32_t* chunk = (int32_t*)malloc(CHUNK_FRAMES * 2 * sizeof(int32_t));
+  if (!chunk) {
+    Serial.println("[INMP441] chunk alloc failed; skipping mic measurement");
+    free(leftBuf);
+    free(rightBuf);
+    return result;
+  }
  
   double leftSumSq = 0.0, rightSumSq = 0.0;
   int32_t leftPeak = 0, rightPeak = 0;
@@ -613,7 +629,7 @@ MicMeasurement readMicSamples() {
   while (framesRemaining > 0) {
     size_t framesThisRound = framesRemaining > CHUNK_FRAMES ? CHUNK_FRAMES : framesRemaining;
     size_t bytesWanted = framesThisRound * 2 * sizeof(int32_t);
-    bytesRead = 0;
+    size_t bytesRead = 0;
     esp_err_t err = i2s_read(INMP441_I2S_PORT, chunk, bytesWanted, &bytesRead, pdMS_TO_TICKS(1000));
     if (err != ESP_OK || bytesRead == 0) break;
  
@@ -642,6 +658,8 @@ MicMeasurement readMicSamples() {
     framesRemaining -= framesRead;
     if (framesRead == 0) break;
   }
+ 
+  free(chunk);  // release before FFT heap allocations in computeBands()
  
   // ── Fill RMS / Peak stats ─────────────────────────────────────────────────
   const double FULL_SCALE = 8388608.0; // 2^23
