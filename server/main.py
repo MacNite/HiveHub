@@ -88,6 +88,44 @@ class MeasurementIn(BaseModel):
     mic_right_band_stress_dbfs:   Optional[float] = None
     mic_right_band_high_dbfs:     Optional[float] = None
 
+    # ── BeeCounter (per-hive entrance gate counts) ───────────────────────────
+    # One BeeCounter per hive. Up to two on the shared I2C bus, addresses
+    # 0x30 / 0x31. Each block is independent — a missing unit reports
+    # bee_counter_N_ok=False and the rest of its fields are null.
+    #
+    # The per-gate 24-byte arrays live in raw_json as bee_counter_N_per_gate_in
+    # / bee_counter_N_per_gate_out — they are forensic data, not surfaced as
+    # columns.
+    bee_counter_1_ok:                Optional[bool] = None
+    bee_counter_1_protocol_version:  Optional[int]  = None
+    bee_counter_1_status_flags:      Optional[int]  = None
+    bee_counter_1_uptime_s:          Optional[int]  = None
+    bee_counter_1_num_gates:         Optional[int]  = None
+    bee_counter_1_gates_healthy:     Optional[int]  = None
+    bee_counter_1_total_in:          Optional[int]  = None
+    bee_counter_1_total_out:         Optional[int]  = None
+    bee_counter_1_interval_in:       Optional[int]  = None
+    bee_counter_1_interval_out:      Optional[int]  = None
+    bee_counter_1_glitch_count:      Optional[int]  = None
+    bee_counter_1_busy_retries:      Optional[int]  = None
+    bee_counter_1_read_attempts:     Optional[int]  = None
+    bee_counter_1_latch_succeeded:   Optional[bool] = None
+
+    bee_counter_2_ok:                Optional[bool] = None
+    bee_counter_2_protocol_version:  Optional[int]  = None
+    bee_counter_2_status_flags:      Optional[int]  = None
+    bee_counter_2_uptime_s:          Optional[int]  = None
+    bee_counter_2_num_gates:         Optional[int]  = None
+    bee_counter_2_gates_healthy:     Optional[int]  = None
+    bee_counter_2_total_in:          Optional[int]  = None
+    bee_counter_2_total_out:         Optional[int]  = None
+    bee_counter_2_interval_in:       Optional[int]  = None
+    bee_counter_2_interval_out:      Optional[int]  = None
+    bee_counter_2_glitch_count:      Optional[int]  = None
+    bee_counter_2_busy_retries:      Optional[int]  = None
+    bee_counter_2_read_attempts:     Optional[int]  = None
+    bee_counter_2_latch_succeeded:   Optional[bool] = None
+
 
 class DeviceConfig(BaseModel):
     device_id: str
@@ -290,6 +328,35 @@ def init_db():
                     mic_right_band_piping_dbfs   DOUBLE PRECISION,
                     mic_right_band_stress_dbfs   DOUBLE PRECISION,
                     mic_right_band_high_dbfs     DOUBLE PRECISION,
+                    -- BeeCounter entrance counter columns (per hive)
+                    bee_counter_1_ok                BOOLEAN,
+                    bee_counter_1_protocol_version  INTEGER,
+                    bee_counter_1_status_flags      INTEGER,
+                    bee_counter_1_uptime_s          INTEGER,
+                    bee_counter_1_num_gates         INTEGER,
+                    bee_counter_1_gates_healthy     INTEGER,
+                    bee_counter_1_total_in          BIGINT,
+                    bee_counter_1_total_out         BIGINT,
+                    bee_counter_1_interval_in       BIGINT,
+                    bee_counter_1_interval_out      BIGINT,
+                    bee_counter_1_glitch_count      INTEGER,
+                    bee_counter_1_busy_retries      INTEGER,
+                    bee_counter_1_read_attempts     INTEGER,
+                    bee_counter_1_latch_succeeded   BOOLEAN,
+                    bee_counter_2_ok                BOOLEAN,
+                    bee_counter_2_protocol_version  INTEGER,
+                    bee_counter_2_status_flags      INTEGER,
+                    bee_counter_2_uptime_s          INTEGER,
+                    bee_counter_2_num_gates         INTEGER,
+                    bee_counter_2_gates_healthy     INTEGER,
+                    bee_counter_2_total_in          BIGINT,
+                    bee_counter_2_total_out         BIGINT,
+                    bee_counter_2_interval_in       BIGINT,
+                    bee_counter_2_interval_out      BIGINT,
+                    bee_counter_2_glitch_count      INTEGER,
+                    bee_counter_2_busy_retries      INTEGER,
+                    bee_counter_2_read_attempts     INTEGER,
+                    bee_counter_2_latch_succeeded   BOOLEAN,
                     raw_json JSONB NOT NULL
                 );
 
@@ -338,6 +405,36 @@ def init_db():
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS mic_right_band_piping_dbfs   DOUBLE PRECISION;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS mic_right_band_stress_dbfs   DOUBLE PRECISION;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS mic_right_band_high_dbfs     DOUBLE PRECISION;
+
+                -- bee counter columns (idempotent for existing deployments)
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_ok                BOOLEAN;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_protocol_version  INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_status_flags      INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_uptime_s          INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_num_gates         INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_gates_healthy     INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_total_in          BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_total_out         BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_interval_in       BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_interval_out      BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_glitch_count      INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_busy_retries      INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_read_attempts     INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_latch_succeeded   BOOLEAN;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_ok                BOOLEAN;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_protocol_version  INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_status_flags      INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_uptime_s          INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_num_gates         INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_gates_healthy     INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_total_in          BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_total_out         BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_interval_in       BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_interval_out      BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_glitch_count      INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_busy_retries      INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_read_attempts     INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_latch_succeeded   BOOLEAN;
 
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS claim_code_hash TEXT;
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
@@ -473,6 +570,18 @@ def create_measurement(payload: MeasurementIn):
                     mic_left_band_stress_dbfs, mic_left_band_high_dbfs,
                     mic_right_band_sub_bass_dbfs, mic_right_band_hum_dbfs, mic_right_band_piping_dbfs,
                     mic_right_band_stress_dbfs, mic_right_band_high_dbfs,
+                    bee_counter_1_ok, bee_counter_1_protocol_version, bee_counter_1_status_flags,
+                    bee_counter_1_uptime_s, bee_counter_1_num_gates, bee_counter_1_gates_healthy,
+                    bee_counter_1_total_in, bee_counter_1_total_out,
+                    bee_counter_1_interval_in, bee_counter_1_interval_out,
+                    bee_counter_1_glitch_count, bee_counter_1_busy_retries,
+                    bee_counter_1_read_attempts, bee_counter_1_latch_succeeded,
+                    bee_counter_2_ok, bee_counter_2_protocol_version, bee_counter_2_status_flags,
+                    bee_counter_2_uptime_s, bee_counter_2_num_gates, bee_counter_2_gates_healthy,
+                    bee_counter_2_total_in, bee_counter_2_total_out,
+                    bee_counter_2_interval_in, bee_counter_2_interval_out,
+                    bee_counter_2_glitch_count, bee_counter_2_busy_retries,
+                    bee_counter_2_read_attempts, bee_counter_2_latch_succeeded,
                     raw_json
                 )
                 VALUES (
@@ -495,6 +604,18 @@ def create_measurement(payload: MeasurementIn):
                     %(mic_left_band_stress_dbfs)s, %(mic_left_band_high_dbfs)s,
                     %(mic_right_band_sub_bass_dbfs)s, %(mic_right_band_hum_dbfs)s, %(mic_right_band_piping_dbfs)s,
                     %(mic_right_band_stress_dbfs)s, %(mic_right_band_high_dbfs)s,
+                    %(bee_counter_1_ok)s, %(bee_counter_1_protocol_version)s, %(bee_counter_1_status_flags)s,
+                    %(bee_counter_1_uptime_s)s, %(bee_counter_1_num_gates)s, %(bee_counter_1_gates_healthy)s,
+                    %(bee_counter_1_total_in)s, %(bee_counter_1_total_out)s,
+                    %(bee_counter_1_interval_in)s, %(bee_counter_1_interval_out)s,
+                    %(bee_counter_1_glitch_count)s, %(bee_counter_1_busy_retries)s,
+                    %(bee_counter_1_read_attempts)s, %(bee_counter_1_latch_succeeded)s,
+                    %(bee_counter_2_ok)s, %(bee_counter_2_protocol_version)s, %(bee_counter_2_status_flags)s,
+                    %(bee_counter_2_uptime_s)s, %(bee_counter_2_num_gates)s, %(bee_counter_2_gates_healthy)s,
+                    %(bee_counter_2_total_in)s, %(bee_counter_2_total_out)s,
+                    %(bee_counter_2_interval_in)s, %(bee_counter_2_interval_out)s,
+                    %(bee_counter_2_glitch_count)s, %(bee_counter_2_busy_retries)s,
+                    %(bee_counter_2_read_attempts)s, %(bee_counter_2_latch_succeeded)s,
                     %(raw_json)s
                 )
                 RETURNING id;
@@ -553,6 +674,34 @@ def create_measurement(payload: MeasurementIn):
                     "mic_right_band_piping_dbfs":   payload.mic_right_band_piping_dbfs,
                     "mic_right_band_stress_dbfs":   payload.mic_right_band_stress_dbfs,
                     "mic_right_band_high_dbfs":     payload.mic_right_band_high_dbfs,
+                    "bee_counter_1_ok":               payload.bee_counter_1_ok,
+                    "bee_counter_1_protocol_version": payload.bee_counter_1_protocol_version,
+                    "bee_counter_1_status_flags":     payload.bee_counter_1_status_flags,
+                    "bee_counter_1_uptime_s":         payload.bee_counter_1_uptime_s,
+                    "bee_counter_1_num_gates":        payload.bee_counter_1_num_gates,
+                    "bee_counter_1_gates_healthy":    payload.bee_counter_1_gates_healthy,
+                    "bee_counter_1_total_in":         payload.bee_counter_1_total_in,
+                    "bee_counter_1_total_out":        payload.bee_counter_1_total_out,
+                    "bee_counter_1_interval_in":      payload.bee_counter_1_interval_in,
+                    "bee_counter_1_interval_out":     payload.bee_counter_1_interval_out,
+                    "bee_counter_1_glitch_count":     payload.bee_counter_1_glitch_count,
+                    "bee_counter_1_busy_retries":     payload.bee_counter_1_busy_retries,
+                    "bee_counter_1_read_attempts":    payload.bee_counter_1_read_attempts,
+                    "bee_counter_1_latch_succeeded":  payload.bee_counter_1_latch_succeeded,
+                    "bee_counter_2_ok":               payload.bee_counter_2_ok,
+                    "bee_counter_2_protocol_version": payload.bee_counter_2_protocol_version,
+                    "bee_counter_2_status_flags":     payload.bee_counter_2_status_flags,
+                    "bee_counter_2_uptime_s":         payload.bee_counter_2_uptime_s,
+                    "bee_counter_2_num_gates":        payload.bee_counter_2_num_gates,
+                    "bee_counter_2_gates_healthy":    payload.bee_counter_2_gates_healthy,
+                    "bee_counter_2_total_in":         payload.bee_counter_2_total_in,
+                    "bee_counter_2_total_out":        payload.bee_counter_2_total_out,
+                    "bee_counter_2_interval_in":      payload.bee_counter_2_interval_in,
+                    "bee_counter_2_interval_out":     payload.bee_counter_2_interval_out,
+                    "bee_counter_2_glitch_count":     payload.bee_counter_2_glitch_count,
+                    "bee_counter_2_busy_retries":     payload.bee_counter_2_busy_retries,
+                    "bee_counter_2_read_attempts":    payload.bee_counter_2_read_attempts,
+                    "bee_counter_2_latch_succeeded":  payload.bee_counter_2_latch_succeeded,
                     "raw_json": psycopg.types.json.Jsonb(payload.model_dump(mode="json", exclude={"claim_code"})),
                 },
             )
@@ -602,6 +751,34 @@ def create_measurement(payload: MeasurementIn):
 #                               52  mic_right_band_piping_dbfs
 #                               53  mic_right_band_stress_dbfs
 #                               54  mic_right_band_high_dbfs
+#                               55  bee_counter_1_ok
+#                               56  bee_counter_1_protocol_version
+#                               57  bee_counter_1_status_flags
+#                               58  bee_counter_1_uptime_s
+#                               59  bee_counter_1_num_gates
+#                               60  bee_counter_1_gates_healthy
+#                               61  bee_counter_1_total_in
+#                               62  bee_counter_1_total_out
+#                               63  bee_counter_1_interval_in
+#                               64  bee_counter_1_interval_out
+#                               65  bee_counter_1_glitch_count
+#                               66  bee_counter_1_busy_retries
+#                               67  bee_counter_1_read_attempts
+#                               68  bee_counter_1_latch_succeeded
+#                               69  bee_counter_2_ok
+#                               70  bee_counter_2_protocol_version
+#                               71  bee_counter_2_status_flags
+#                               72  bee_counter_2_uptime_s
+#                               73  bee_counter_2_num_gates
+#                               74  bee_counter_2_gates_healthy
+#                               75  bee_counter_2_total_in
+#                               76  bee_counter_2_total_out
+#                               77  bee_counter_2_interval_in
+#                               78  bee_counter_2_interval_out
+#                               79  bee_counter_2_glitch_count
+#                               80  bee_counter_2_busy_retries
+#                               81  bee_counter_2_read_attempts
+#                               82  bee_counter_2_latch_succeeded
 # ---------------------------------------------------------------------------
 
 MEASUREMENT_SELECT_COLUMNS = """
@@ -646,7 +823,35 @@ MEASUREMENT_SELECT_COLUMNS = """
     COALESCE(mic_right_band_hum_dbfs,      NULLIF(raw_json->>'mic_right_band_hum_dbfs',      '')::double precision) AS mic_right_band_hum_dbfs,
     COALESCE(mic_right_band_piping_dbfs,   NULLIF(raw_json->>'mic_right_band_piping_dbfs',   '')::double precision) AS mic_right_band_piping_dbfs,
     COALESCE(mic_right_band_stress_dbfs,   NULLIF(raw_json->>'mic_right_band_stress_dbfs',   '')::double precision) AS mic_right_band_stress_dbfs,
-    COALESCE(mic_right_band_high_dbfs,     NULLIF(raw_json->>'mic_right_band_high_dbfs',     '')::double precision) AS mic_right_band_high_dbfs
+    COALESCE(mic_right_band_high_dbfs,     NULLIF(raw_json->>'mic_right_band_high_dbfs',     '')::double precision) AS mic_right_band_high_dbfs,
+    COALESCE(bee_counter_1_ok,                NULLIF(raw_json->>'bee_counter_1_ok',                '')::boolean) AS bee_counter_1_ok,
+    COALESCE(bee_counter_1_protocol_version,  NULLIF(raw_json->>'bee_counter_1_protocol_version',  '')::integer) AS bee_counter_1_protocol_version,
+    COALESCE(bee_counter_1_status_flags,      NULLIF(raw_json->>'bee_counter_1_status_flags',      '')::integer) AS bee_counter_1_status_flags,
+    COALESCE(bee_counter_1_uptime_s,          NULLIF(raw_json->>'bee_counter_1_uptime_s',          '')::integer) AS bee_counter_1_uptime_s,
+    COALESCE(bee_counter_1_num_gates,         NULLIF(raw_json->>'bee_counter_1_num_gates',         '')::integer) AS bee_counter_1_num_gates,
+    COALESCE(bee_counter_1_gates_healthy,     NULLIF(raw_json->>'bee_counter_1_gates_healthy',     '')::integer) AS bee_counter_1_gates_healthy,
+    COALESCE(bee_counter_1_total_in,          NULLIF(raw_json->>'bee_counter_1_total_in',          '')::bigint)  AS bee_counter_1_total_in,
+    COALESCE(bee_counter_1_total_out,         NULLIF(raw_json->>'bee_counter_1_total_out',         '')::bigint)  AS bee_counter_1_total_out,
+    COALESCE(bee_counter_1_interval_in,       NULLIF(raw_json->>'bee_counter_1_interval_in',       '')::bigint)  AS bee_counter_1_interval_in,
+    COALESCE(bee_counter_1_interval_out,      NULLIF(raw_json->>'bee_counter_1_interval_out',      '')::bigint)  AS bee_counter_1_interval_out,
+    COALESCE(bee_counter_1_glitch_count,      NULLIF(raw_json->>'bee_counter_1_glitch_count',      '')::integer) AS bee_counter_1_glitch_count,
+    COALESCE(bee_counter_1_busy_retries,      NULLIF(raw_json->>'bee_counter_1_busy_retries',      '')::integer) AS bee_counter_1_busy_retries,
+    COALESCE(bee_counter_1_read_attempts,     NULLIF(raw_json->>'bee_counter_1_read_attempts',     '')::integer) AS bee_counter_1_read_attempts,
+    COALESCE(bee_counter_1_latch_succeeded,   NULLIF(raw_json->>'bee_counter_1_latch_succeeded',   '')::boolean) AS bee_counter_1_latch_succeeded,
+    COALESCE(bee_counter_2_ok,                NULLIF(raw_json->>'bee_counter_2_ok',                '')::boolean) AS bee_counter_2_ok,
+    COALESCE(bee_counter_2_protocol_version,  NULLIF(raw_json->>'bee_counter_2_protocol_version',  '')::integer) AS bee_counter_2_protocol_version,
+    COALESCE(bee_counter_2_status_flags,      NULLIF(raw_json->>'bee_counter_2_status_flags',      '')::integer) AS bee_counter_2_status_flags,
+    COALESCE(bee_counter_2_uptime_s,          NULLIF(raw_json->>'bee_counter_2_uptime_s',          '')::integer) AS bee_counter_2_uptime_s,
+    COALESCE(bee_counter_2_num_gates,         NULLIF(raw_json->>'bee_counter_2_num_gates',         '')::integer) AS bee_counter_2_num_gates,
+    COALESCE(bee_counter_2_gates_healthy,     NULLIF(raw_json->>'bee_counter_2_gates_healthy',     '')::integer) AS bee_counter_2_gates_healthy,
+    COALESCE(bee_counter_2_total_in,          NULLIF(raw_json->>'bee_counter_2_total_in',          '')::bigint)  AS bee_counter_2_total_in,
+    COALESCE(bee_counter_2_total_out,         NULLIF(raw_json->>'bee_counter_2_total_out',         '')::bigint)  AS bee_counter_2_total_out,
+    COALESCE(bee_counter_2_interval_in,       NULLIF(raw_json->>'bee_counter_2_interval_in',       '')::bigint)  AS bee_counter_2_interval_in,
+    COALESCE(bee_counter_2_interval_out,      NULLIF(raw_json->>'bee_counter_2_interval_out',      '')::bigint)  AS bee_counter_2_interval_out,
+    COALESCE(bee_counter_2_glitch_count,      NULLIF(raw_json->>'bee_counter_2_glitch_count',      '')::integer) AS bee_counter_2_glitch_count,
+    COALESCE(bee_counter_2_busy_retries,      NULLIF(raw_json->>'bee_counter_2_busy_retries',      '')::integer) AS bee_counter_2_busy_retries,
+    COALESCE(bee_counter_2_read_attempts,     NULLIF(raw_json->>'bee_counter_2_read_attempts',     '')::integer) AS bee_counter_2_read_attempts,
+    COALESCE(bee_counter_2_latch_succeeded,   NULLIF(raw_json->>'bee_counter_2_latch_succeeded',   '')::boolean) AS bee_counter_2_latch_succeeded
 """
 
 
@@ -710,6 +915,35 @@ def measurement_row_to_dict(r):
         "mic_right_band_piping_dbfs":   r[52],
         "mic_right_band_stress_dbfs":   r[53],
         "mic_right_band_high_dbfs":     r[54],
+        # bee counter (per-hive entrance counters)
+        "bee_counter_1_ok":                r[55],
+        "bee_counter_1_protocol_version":  r[56],
+        "bee_counter_1_status_flags":      r[57],
+        "bee_counter_1_uptime_s":          r[58],
+        "bee_counter_1_num_gates":         r[59],
+        "bee_counter_1_gates_healthy":     r[60],
+        "bee_counter_1_total_in":          r[61],
+        "bee_counter_1_total_out":         r[62],
+        "bee_counter_1_interval_in":       r[63],
+        "bee_counter_1_interval_out":      r[64],
+        "bee_counter_1_glitch_count":      r[65],
+        "bee_counter_1_busy_retries":      r[66],
+        "bee_counter_1_read_attempts":     r[67],
+        "bee_counter_1_latch_succeeded":   r[68],
+        "bee_counter_2_ok":                r[69],
+        "bee_counter_2_protocol_version":  r[70],
+        "bee_counter_2_status_flags":      r[71],
+        "bee_counter_2_uptime_s":          r[72],
+        "bee_counter_2_num_gates":         r[73],
+        "bee_counter_2_gates_healthy":     r[74],
+        "bee_counter_2_total_in":          r[75],
+        "bee_counter_2_total_out":         r[76],
+        "bee_counter_2_interval_in":       r[77],
+        "bee_counter_2_interval_out":      r[78],
+        "bee_counter_2_glitch_count":      r[79],
+        "bee_counter_2_busy_retries":      r[80],
+        "bee_counter_2_read_attempts":     r[81],
+        "bee_counter_2_latch_succeeded":   r[82],
     }
 
 

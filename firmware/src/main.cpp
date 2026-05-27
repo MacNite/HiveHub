@@ -22,6 +22,7 @@
 #include <driver/rtc_io.h>
 
 #include "secrets.h"
+#include "bee_counter_client.h"
 
 #ifndef CLAIM_CODE
 #define CLAIM_CODE ""
@@ -100,7 +101,7 @@
 #include <driver/i2s.h>
 #endif
 
-static const char* FIRMWARE_VERSION = "0.7.1-mic-fft";
+static const char* FIRMWARE_VERSION = "0.8.0-beecounter";
 
 #define HX1_DOUT 16
 #define HX1_SCK  17
@@ -1871,6 +1872,14 @@ String createMeasurementJson() {
   MicMeasurement micResult = readMicSamples();
 #endif
 
+// ---- BeeCounter polling -------------------------------------------------
+  // Poll both possible BeeCounters on the shared I2C bus. Each slot is
+  // independent — a missing counter just reports "ok=false". Reading both
+  // takes roughly 30–80 ms; well within our wake budget.
+  beecnt::Snapshot beeSnap1;
+  beecnt::Snapshot beeSnap2;
+  (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_1, beeSnap1);
+  (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_2, beeSnap2);
 
   Serial.printf("[MEASURE] raw1=%ld weight1=%.3f kg\n", raw1, weight1);
   Serial.printf("[MEASURE] raw2=%ld weight2=%.3f kg\n", raw2, weight2);
@@ -1941,6 +1950,9 @@ String createMeasurementJson() {
   doc["mic_right_band_stress_dbfs"]   = micResult.right.bands.stress_dbfs;
   doc["mic_right_band_high_dbfs"]     = micResult.right.bands.high_dbfs;
 #endif
+
+  beecnt::writeSnapshotToJson(doc, 1, beeSnap1);
+  beecnt::writeSnapshotToJson(doc, 2, beeSnap2);
 
   String output;
   serializeJson(doc, output);
