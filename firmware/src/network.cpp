@@ -10,6 +10,9 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <Update.h>
+#include <esp_heap_caps.h>
+
+#include "bee_counter_client.h"
 
 String apiUrl(const String& path) {
   String base = trimTrailingSlash(apiBaseUrl);
@@ -376,6 +379,90 @@ bool performFirmwareUpdate(const String& firmwareUrl) {
   return true;
 }
 
+// Download a BeeCounter firmware image fully into RAM, then relay it to the
+// BeeCounter slave over I2C. `expectedCrc32` is the image CRC the backend
+// computed at release time (0 = compute locally, less safe). Returns true on a
+// confirmed update.
+bool updateBeeCounter(uint8_t address, const String& firmwareUrl, uint32_t expectedCrc32) {
+  if (!connectWifi()) return false;
+
+  String url = absoluteUrl(firmwareUrl);
+  Serial.print("[BEE-OTA] Downloading BeeCounter firmware: ");
+  Serial.println(url);
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (!http.begin(client, url)) {
+    Serial.println("[BEE-OTA] http.begin failed");
+    return false;
+  }
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("[BEE-OTA] Download failed. HTTP %d\n", code);
+    http.end();
+    return false;
+  }
+
+  int contentLength = http.getSize();
+  if (contentLength <= 0 || contentLength > 1024 * 1024) {
+    Serial.printf("[BEE-OTA] Invalid content length %d\n", contentLength);
+    http.end();
+    return false;
+  }
+
+  // Allocate the image buffer. Prefer PSRAM if the board has it; fall back to
+  // internal heap. 400 KB fits comfortably in C6 PSRAM; on a no-PSRAM build
+  // confirm ESP.getFreeHeap() has room before relying on this.
+  uint8_t* buf = (uint8_t*)heap_caps_malloc(contentLength, MALLOC_CAP_SPIRAM);
+  if (!buf) buf = (uint8_t*)malloc(contentLength);
+  if (!buf) {
+    Serial.printf("[BEE-OTA] OOM for %d bytes (free heap %u)\n",
+                  contentLength, (unsigned)ESP.getFreeHeap());
+    http.end();
+    return false;
+  }
+
+  WiFiClient* stream = http.getStreamPtr();
+  int read = 0;
+  unsigned long lastData = millis();
+  while (read < contentLength && (http.connected() || stream->available())) {
+    size_t avail = stream->available();
+    if (avail) {
+      int r = stream->readBytes(buf + read,
+                                min((size_t)(contentLength - read), avail));
+      read += r;
+      lastData = millis();
+    } else if (millis() - lastData > 10000) {
+      Serial.println("[BEE-OTA] download stalled");
+      break;
+    } else {
+      delay(1);
+    }
+  }
+  http.end();
+
+  if (read != contentLength) {
+    Serial.printf("[BEE-OTA] short download %d/%d\n", read, contentLength);
+    free(buf);
+    return false;
+  }
+
+  uint32_t crc = beecnt::crc32_buf(buf, read);
+  if (expectedCrc32 != 0 && crc != expectedCrc32) {
+    Serial.printf("[BEE-OTA] download CRC mismatch: got 0x%08X expected 0x%08X\n",
+                  (unsigned)crc, (unsigned)expectedCrc32);
+    free(buf);
+    return false;
+  }
+
+  bool ok = beecnt::pushFirmwareToBeeCounter(address, buf, read, crc);
+  free(buf);
+  return ok;
+}
+
 void checkForOtaUpdate() {
   if (!connectNetwork()) {
     Serial.println("[OTA] Skipping: network unavailable");
@@ -455,6 +542,21 @@ void checkCommands() {
   } else if (type == "check_ota" || type == "ota_update") {
     postCommandResult(commandId, true, "OTA check started");
     checkForOtaUpdate();
+  } else if (type == "update_beecounter") {
+    // payload: { "slot": 1|2, "url": "/firmware/bee-x.bin", "crc32": <uint32> }
+    int slot = payload["slot"] | 1;
+    uint8_t addr = (slot == 2) ? beecnt::SLAVE_ADDR_SLOT_2 : beecnt::SLAVE_ADDR_SLOT_1;
+    String fwUrl = payload["url"] | "";
+    uint32_t crc = (uint32_t)(payload["crc32"] | 0);
+    if (fwUrl.length() == 0) {
+      postCommandResult(commandId, false, "update_beecounter missing url");
+    } else {
+      postCommandResult(commandId, true, "BeeCounter OTA started");
+      bool ok = updateBeeCounter(addr, fwUrl, crc);
+      Serial.printf("[BEE-OTA] update result: %s\n", ok ? "OK" : "FAIL");
+      // Optionally report a second, final result here via a follow-up endpoint
+      // if you want the backend to record success/failure after the fact.
+    }
   } else if (type == "start_provisioning") {
     // This only makes sense while someone is physically near the device.
     postCommandResult(commandId, true, "Provisioning AP started");

@@ -40,6 +40,26 @@ constexpr uint8_t CMD_CLEAR_FAULTS  = 0x04;
 
 constexpr uint8_t PER_GATE_ARRAY_LEN = 24;
 
+// ---- OTA-over-I2C (BeeCounter PROTOCOL_VERSION >= 2) ----------------------
+// Keep in sync with i2c_slave_protocol.h on the BeeCounter side.
+constexpr uint8_t REG_OTA_BEGIN  = 0x90;   // write 8 bytes: size(4 BE)+crc32(4 BE)
+constexpr uint8_t REG_OTA_DATA   = 0x91;   // write offset(4 BE)+data
+constexpr uint8_t REG_OTA_END    = 0x92;   // write 0 bytes -> finalize
+constexpr uint8_t REG_OTA_ABORT  = 0x93;   // write 0 bytes -> cancel
+constexpr uint8_t REG_OTA_STATUS = 0x94;   // read 6 bytes: state(1)+recv(4)+err(1)
+
+constexpr uint8_t OTA_CHUNK_MAX  = 64;     // data bytes per REG_OTA_DATA frame
+
+constexpr uint8_t OTA_STATE_IDLE      = 0x00;
+constexpr uint8_t OTA_STATE_RECEIVING = 0x01;
+constexpr uint8_t OTA_STATE_DONE      = 0x02;
+constexpr uint8_t OTA_STATE_ERR_BEGIN = 0x10;   // first error code; >= is fatal
+constexpr uint8_t OTA_STATE_ERR_SEQ   = 0x11;
+constexpr uint8_t OTA_STATE_ERR_WRITE = 0x12;
+constexpr uint8_t OTA_STATE_ERR_CRC   = 0x13;
+constexpr uint8_t OTA_STATE_ERR_SIZE  = 0x14;
+constexpr uint8_t OTA_STATE_ERR_END   = 0x15;
+
 // Status bits — we forward as-is to the backend but it's convenient to
 // have the names locally for debug prints.
 constexpr uint8_t STATUS_READY              = 0x01;
@@ -80,5 +100,18 @@ bool pollSlot(uint8_t address, Snapshot& out);
 // Serialize a snapshot into the parent measurement JSON document
 // under a per-slot key prefix (e.g. "bee_counter_1_").
 void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap);
+
+// CRC-32 (IEEE 802.3, poly 0xEDB88420) over a buffer, finalized. Matches the
+// BeeCounter and the backend (zlib.crc32). Exposed so the relay/download
+// layer can compute or verify an image checksum.
+uint32_t crc32_buf(const uint8_t* data, size_t len);
+
+// Push a firmware image (already in RAM, `len` bytes, with precomputed
+// `imageCrc32`) to the BeeCounter at `address` over I2C. Temporarily raises
+// the bus to 400 kHz, restores 100 kHz afterward. Returns true only if the
+// BeeCounter reports OTA_STATE_DONE. The BeeCounter pauses bee counting and
+// reboots into the new image on success.
+bool pushFirmwareToBeeCounter(uint8_t address, const uint8_t* image, size_t len,
+                              uint32_t imageCrc32);
 
 }  // namespace beecnt

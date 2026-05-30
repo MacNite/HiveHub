@@ -27,6 +27,7 @@ bool uploadCachedLines();
 // ---- Config / OTA / commands ---------------------------------------------
 void fetchRemoteConfig();
 bool performFirmwareUpdate(const String& firmwareUrl);
+bool updateBeeCounter(uint8_t address, const String& firmwareUrl, uint32_t expectedCrc32 = 0);
 void checkForOtaUpdate();
 void postCommandResult(int commandId, bool success, const String& message);
 void checkCommands();

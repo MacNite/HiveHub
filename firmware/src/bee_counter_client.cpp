@@ -183,4 +183,150 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
     for (uint8_t i = 0; i < PER_GATE_ARRAY_LEN; i++) gout.add(snap.per_gate_out[i]);
 }
 
+// ---------------------------------------------------------------------------
+// OTA-over-I2C relay (master side)
+// ---------------------------------------------------------------------------
+
+uint32_t crc32_buf(const uint8_t* data, size_t len) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t b = 0; b < 8; b++)
+            crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88420u : (crc >> 1);
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+namespace {
+
+bool otaReadStatus(uint8_t addr, uint8_t& state, uint32_t& received, uint8_t& err) {
+    Wire.beginTransmission(addr);
+    Wire.write(REG_OTA_STATUS);
+    if (Wire.endTransmission() != 0) return false;
+    size_t got = Wire.requestFrom((int)addr, 6);
+    if (got != 6) { while (Wire.available()) (void)Wire.read(); return false; }
+    uint8_t b[6];
+    for (int i = 0; i < 6; i++) b[i] = (uint8_t)Wire.read();
+    state    = b[0];
+    received = (uint32_t(b[1]) << 24) | (uint32_t(b[2]) << 16) |
+               (uint32_t(b[3]) << 8)  |  uint32_t(b[4]);
+    err      = b[5];
+    return true;
+}
+
+bool otaWriteBegin(uint8_t addr, uint32_t size, uint32_t crc) {
+    Wire.beginTransmission(addr);
+    Wire.write(REG_OTA_BEGIN);
+    uint8_t p[8] = {
+        (uint8_t)(size >> 24), (uint8_t)(size >> 16), (uint8_t)(size >> 8), (uint8_t)size,
+        (uint8_t)(crc  >> 24), (uint8_t)(crc  >> 16), (uint8_t)(crc  >> 8), (uint8_t)crc,
+    };
+    Wire.write(p, 8);
+    return Wire.endTransmission() == 0;
+}
+
+bool otaWriteData(uint8_t addr, uint32_t offset, const uint8_t* data, size_t n) {
+    Wire.beginTransmission(addr);
+    Wire.write(REG_OTA_DATA);
+    uint8_t off[4] = {
+        (uint8_t)(offset >> 24), (uint8_t)(offset >> 16),
+        (uint8_t)(offset >> 8),  (uint8_t)offset,
+    };
+    Wire.write(off, 4);
+    Wire.write(data, n);
+    return Wire.endTransmission() == 0;
+}
+
+bool otaWriteBareReg(uint8_t addr, uint8_t reg) {
+    Wire.beginTransmission(addr);
+    Wire.write(reg);
+    return Wire.endTransmission() == 0;
+}
+
+}  // namespace
+
+bool pushFirmwareToBeeCounter(uint8_t address, const uint8_t* image, size_t len,
+                              uint32_t imageCrc32) {
+    Serial.printf("[BEE-OTA] Pushing %u bytes to 0x%02X (crc=0x%08X)\n",
+                  (unsigned)len, address, (unsigned)imageCrc32);
+
+    if (!slavePresent(address)) {
+        Serial.println("[BEE-OTA] slave not present, aborting");
+        return false;
+    }
+
+    Wire.setClock(400000);   // fast transfer; restored before every return path
+
+    if (!otaWriteBegin(address, (uint32_t)len, imageCrc32)) {
+        Serial.println("[BEE-OTA] BEGIN frame failed");
+        Wire.setClock(100000);
+        return false;
+    }
+    delay(50);   // allow Update.begin()/partition erase on the slave
+
+    uint8_t  state; uint32_t recv; uint8_t err;
+    if (!otaReadStatus(address, state, recv, err) || state != OTA_STATE_RECEIVING) {
+        Serial.printf("[BEE-OTA] not RECEIVING after BEGIN (state=0x%02X err=%u)\n",
+                      state, err);
+        Wire.setClock(100000);
+        return false;
+    }
+
+    const size_t CHUNK = OTA_CHUNK_MAX;
+    size_t  offset  = 0;
+    uint8_t retries = 0;
+
+    while (offset < len) {
+        size_t n = (len - offset < CHUNK) ? (len - offset) : CHUNK;
+
+        if (!otaWriteData(address, (uint32_t)offset, image + offset, n)) {
+            if (++retries > 5) { Wire.setClock(100000); return false; }
+            delay(10);
+            continue;   // re-send same offset; slave's seq check rejects dups
+        }
+        if (!otaReadStatus(address, state, recv, err)) {
+            if (++retries > 5) { Wire.setClock(100000); return false; }
+            delay(5);
+            continue;
+        }
+        if (state >= OTA_STATE_ERR_BEGIN) {   // any error state is fatal
+            Serial.printf("[BEE-OTA] slave error 0x%02X (err=%u) at %u\n",
+                          state, err, (unsigned)offset);
+            Wire.setClock(100000);
+            return false;
+        }
+        if (recv != offset + n) {             // slave didn't advance; re-send
+            if (++retries > 5) { Wire.setClock(100000); return false; }
+            continue;
+        }
+
+        offset += n;
+        retries = 0;
+        if ((offset & 0x3FFF) == 0)
+            Serial.printf("[BEE-OTA] %u / %u bytes\n", (unsigned)offset, (unsigned)len);
+    }
+
+    if (!otaWriteBareReg(address, REG_OTA_END)) {
+        Serial.println("[BEE-OTA] END frame failed");
+        Wire.setClock(100000);
+        return false;
+    }
+    delay(100);   // slave verifies CRC + Update.end()
+
+    bool gotStatus = otaReadStatus(address, state, recv, err);
+    Wire.setClock(100000);   // restore regardless of outcome
+
+    if (!gotStatus) {
+        Serial.println("[BEE-OTA] status read after END failed");
+        return false;
+    }
+    if (state == OTA_STATE_DONE) {
+        Serial.println("[BEE-OTA] SUCCESS — BeeCounter rebooting into new firmware");
+        return true;
+    }
+    Serial.printf("[BEE-OTA] FAILED final state=0x%02X err=%u recv=%u\n",
+                  state, err, (unsigned)recv);
+    return false;
+}
+
 }  // namespace beecnt

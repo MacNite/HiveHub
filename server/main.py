@@ -1,5 +1,6 @@
 import hashlib
 import os
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Literal, Any
@@ -149,6 +150,7 @@ class FirmwareReleaseIn(BaseModel):
     version: str
     filename: str
     active: bool = True
+    target: Literal["hivescale", "beecounter"] = "hivescale"
 
 
 class DeviceCommandIn(BaseModel):
@@ -163,6 +165,7 @@ class DeviceCommandIn(BaseModel):
         "reset_wifi",
         "check_ota",
         "ota_update",
+        "update_beecounter",
         "start_provisioning",
         "start_calibration_mode",
         "stop_calibration_mode",
@@ -464,6 +467,11 @@ def init_db():
                     active BOOLEAN NOT NULL DEFAULT true,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
+
+                ALTER TABLE firmware_releases
+                    ADD COLUMN IF NOT EXISTS target TEXT NOT NULL DEFAULT 'hivescale';
+                ALTER TABLE firmware_releases
+                    ADD COLUMN IF NOT EXISTS crc32 BIGINT;
 
                 CREATE TABLE IF NOT EXISTS device_commands (
                     id BIGSERIAL PRIMARY KEY,
@@ -1006,17 +1014,19 @@ def update_device_config(device_id: str, patch: DeviceConfigUpdate):
 
 
 @app.get("/api/v1/devices/{device_id}/firmware", dependencies=[Depends(require_api_key)])
-def check_firmware(device_id: str, version: str = Query("0.0.0")):
+def check_firmware(device_id: str, version: str = Query("0.0.0"),
+                   target: str = Query("hivescale")):
     ensure_device_config(device_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT version, filename FROM firmware_releases
-                WHERE active = true
+                WHERE active = true AND target = %s
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1;
                 """,
+                (target,),
             )
             r = cur.fetchone()
     if not r:
@@ -1033,18 +1043,30 @@ def create_firmware_release(payload: FirmwareReleaseIn):
     path = FIRMWARE_DIR / payload.filename
     if not path.exists():
         raise HTTPException(status_code=400, detail=f"Firmware file '{payload.filename}' not found in firmware directory")
+    # Compute CRC-32 (IEEE 802.3) of the image so the HiveScale can verify the
+    # download before relaying it to a BeeCounter over I2C. zlib.crc32 returns
+    # an unsigned 32-bit value; stored in a BIGINT to stay positive.
+    crc = 0
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            crc = zlib.crc32(chunk, crc)
+    crc &= 0xFFFFFFFF
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO firmware_releases (version, filename, active)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (version) DO UPDATE SET filename = EXCLUDED.filename, active = EXCLUDED.active;
+                INSERT INTO firmware_releases (version, filename, active, target, crc32)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (version) DO UPDATE SET
+                    filename = EXCLUDED.filename,
+                    active   = EXCLUDED.active,
+                    target   = EXCLUDED.target,
+                    crc32    = EXCLUDED.crc32;
                 """,
-                (payload.version, payload.filename, payload.active),
+                (payload.version, payload.filename, payload.active, payload.target, crc),
             )
             conn.commit()
-    return {"status": "ok", "version": payload.version}
+    return {"status": "ok", "version": payload.version, "target": payload.target, "crc32": crc}
 
 
 @app.get("/firmware/{filename}")
@@ -1076,6 +1098,34 @@ def create_command(device_id: str, payload: DeviceCommandIn) -> dict:
 def queue_command(device_id: str, payload: DeviceCommandIn):
     result = create_command(device_id, payload)
     return {"status": result["status"], "id": result["id"]}
+
+
+@app.post("/api/v1/devices/{device_id}/commands/update-beecounter",
+          dependencies=[Depends(require_api_key)])
+def queue_beecounter_update(device_id: str, slot: int = Query(1)):
+    """Queue a command telling the HiveScale to relay the active BeeCounter
+    firmware to the BeeCounter at the given slot (1 -> 0x30, 2 -> 0x31) over
+    I2C. The image URL and its CRC-32 are looked up server-side and embedded in
+    the command payload so the HiveScale can verify the download before relay."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT version, filename, crc32 FROM firmware_releases
+                WHERE active = true AND target = 'beecounter'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1;
+                """,
+            )
+            r = cur.fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="No active beecounter firmware release")
+    version, filename, crc32 = r
+    url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
+    return create_command(device_id, DeviceCommandIn(
+        command_type="update_beecounter",
+        payload={"slot": slot, "url": url, "version": version, "crc32": int(crc32 or 0)},
+    ))
 
 
 @app.get("/api/v1/devices/{device_id}/commands/next", dependencies=[Depends(require_api_key)])
