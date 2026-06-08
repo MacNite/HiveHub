@@ -1,197 +1,214 @@
-# HiveScale AP Mode, Button Handling, and SD Card Download
+---
+sidebar_position: 9
+title: HiveScale Integration
+description: Connect Hive-Pal with HiveScale beehive scales, claim devices, view live weight data, and monitor off-grid telemetry.
+keywords: [hivescale, beehive scale, hive weight, off-grid, cellular, solar, battery, sd card, import, backup]
+---
 
-This document describes how to enter HiveScale AP/setup mode, how the setup button behaves during normal operation and deep sleep, how to perform a factory reset, and how to use the AP-mode web interface to download all SD card data.
+# HiveScale Integration
 
-## Firmware behavior overview
+Hive-Pal can connect to a self-hosted HiveScale backend to show live beehive scale data inside the Hive-Pal interface.
 
-The firmware supports a setup/provisioning access point mode, also called AP mode. AP mode is used to configure WiFi/backend settings and, with the new SD download feature, download all files stored on the SD card.
+HiveScale devices are ESP32-based dual hive scales. They can report weights, hive temperatures, ambient conditions, sensor health, and optional off-grid telemetry such as battery state, solar current, and SIM7080G cellular signal.
 
-Relevant button definitions in `firmware/include/config.h`:
+---
 
-```cpp
-// External button. Wire button between this pin and GND. Uses INPUT_PULLUP.
-// Short press: start WiFi provisioning AP.
-// Long press: reset Preferences and reboot.
-#define SETUP_BUTTON_PIN 27
-static const unsigned long BUTTON_DEBOUNCE_MS = 50;
-static const unsigned long BUTTON_LONG_PRESS_MS = 10000;
-```
+## What you can do
 
-The button, AP/provisioning, and SD-download handlers live in
-`firmware/src/portal.cpp`; deep-sleep entry and the EXT0 button-wake
-configuration live in `firmware/src/storage_power.cpp`; the boot-time AP-entry
-check is in `firmware/src/main.cpp`.
+- Claim a HiveScale device with a pairing code.
+- View the latest weight for scale 1 and scale 2.
+- View hive and ambient temperature readings.
+- Rename scale channels to match your Hive-Pal hive names.
+- View historical charts for weight and temperature.
+- Overlay inspection events on HiveScale charts.
+- Manage device sharing with other Hive-Pal users.
+- Adjust send interval and calibration settings when you have permission.
+- Monitor off-grid status for battery, solar, and cellular-enabled devices.
+- Import an SD card backup downloaded from the scale to recover offline readings.
 
-The setup button is connected to GPIO27 and should pull the pin to GND when pressed. The pin uses `INPUT_PULLUP`, so the button is considered pressed when the input reads `LOW`.
+---
 
-## Entering AP mode
+## Requirements
 
-### When the device is awake
+Your administrator or self-hosting setup must provide:
 
-Press and release the setup button briefly.
+| Requirement | Description |
+|---|---|
+| HiveScale backend | A running HiveScale FastAPI service |
+| HiveScale device | ESP32 scale firmware flashed with a claim code |
+| Hive-Pal backend config | `HIVESCALE_API_BASE_URL` and `HIVESCALE_SERVICE_API_KEY` set |
+| Matching HiveScale service key | HiveScale must use the same key as `HIVEPAL_SERVICE_API_KEY` |
+| Shared JWT secret | HiveScale must trust the same `JWT_SECRET` as Hive-Pal so it can validate forwarded user tokens |
 
-Expected result:
+If HiveScale is not configured, the HiveScale page may show backend configuration errors.
 
-1. The firmware detects a short press.
-2. AP mode starts.
-3. The device creates a WiFi network named similar to:
+---
 
-```text
-HiveScale-Setup-ABCD
-```
+## Claim a device
 
-4. Connect to that WiFi network.
-5. Open the setup page in a browser:
+1. Make sure the physical HiveScale device has already sent at least one measurement to the HiveScale backend.
+2. Open **HiveScale** from the main navigation.
+3. Enter the device claim code.
+4. Optionally enter a display name and names for scale 1 and scale 2.
+5. Submit the form.
 
-```text
-http://192.168.4.1
-```
+After claiming, the device appears in the device selector and starts showing latest measurements.
 
-The exact AP SSID and IP address are also printed to the serial monitor when AP mode starts.
+---
 
-### When the device is in deep sleep
+## Readings and status cards
 
-During deep sleep, the normal firmware loop is not running. That means a normal short press cannot be handled in the same way as when the ESP32 is awake.
+The HiveScale page shows the latest measurement from the selected device.
 
-However, the firmware configures GPIO27 as an EXT0 wake source:
+### Core readings
 
-```cpp
-esp_sleep_enable_ext0_wakeup((gpio_num_t)SETUP_BUTTON_PIN, 0);
-```
+| Card | Source field |
+|---|---|
+| Scale 1 weight | `scale_1_weight_kg` |
+| Scale 2 weight | `scale_2_weight_kg` |
+| Hive 1 temperature | `hive_1_temp_c` |
+| Hive 2 temperature | `hive_2_temp_c` |
+| Ambient temperature | `ambient_temp_c` |
+| Ambient humidity | `ambient_humidity_percent` |
+| Firmware/config status | `firmware_version`, `config_version` |
+| Sensor status | `sd_ok`, `rtc_ok`, `sht_ok` |
 
-This allows the setup button to wake the ESP32 from deep sleep when the button pulls GPIO27 LOW.
+### Off-grid readings
 
-Recommended method:
+Off-grid cards appear when the HiveScale firmware sends the optional fields.
 
-1. Unplug power from the device.
-2. Press and hold the setup button.
-3. Plug power back in while still holding the button.
-4. Keep holding the button for about 1-2 seconds.
-5. Release the button.
-6. Connect to the `HiveScale-Setup-XXXX` WiFi network.
-7. Open:
+| Card | Source fields |
+|---|---|
+| Battery voltage | `battery_voltage_v` or `battery_voltage` |
+| Battery state of charge | `battery_soc_percent` |
+| Battery alert | `battery_alert` |
+| Battery monitor status | `battery_monitor_ok` |
+| Solar/load voltage | `solar_load_voltage_v` |
+| Solar current | `solar_current_ma` |
+| Solar power | `solar_power_mw` |
+| Solar monitor status | `solar_monitor_ok` |
+| Network transport | `network_transport` |
+| Cellular status | `cellular_ok` |
+| Cellular signal quality | `cellular_csq` |
 
-```text
-http://192.168.4.1
-```
+---
 
-This method is more reliable than a very quick press during deep sleep, because the button is already held when the ESP32 boots and checks the setup button state.
+## Charts
 
-## Important: long hold / factory reset behavior
+The chart panel supports preset and custom ranges. Use it to compare weight changes, temperature patterns, battery charge, solar input, and cellular signal over time.
 
-A long hold of the setup button performs a factory reset of Preferences and reboots the device.
+Inspection events from Hive-Pal are shown as markers so you can correlate hive interventions with weight changes.
 
-Current behavior:
+---
 
-- Short press: start AP/setup mode.
-- Long press for 10 seconds: factory reset Preferences and reboot.
+## Scale channel names
 
-Factory reset is triggered by this logic in `handleButton()`:
+Scale 1 and scale 2 can be renamed to match your Hive-Pal hive names. Owners and admins can edit these names. Viewers can see the names but cannot change them.
 
-```cpp
-if (down && buttonWasDown && !longPressHandled && now - buttonDownMs >= BUTTON_LONG_PRESS_MS) {
-  longPressHandled = true;
-  Serial.println("[BUTTON] Long press detected: factory reset Preferences");
-  factoryResetPreferences();
-}
-```
+Recommended naming examples:
 
-## AP-mode SD card download feature
+- `Hive A - left scale`
+- `Hive B - right scale`
+- `Back garden Buckfast`
+- `Apiary 2 Carnica`
 
-The AP-mode web interface  includes a button for downloading all data from the SD card.
+---
 
-On the setup page, a new section is shown:
+## Calibration mode
 
-```text
-SD card data
-[Download all SD data (.tar)]
-```
+Calibration mode temporarily switches the scale from normal battery-saving sleep to fast readings. This is useful when you need immediate feedback while taring or applying a known weight.
 
-Clicking this button downloads the SD card contents as a TAR archive:
+Typical workflow:
 
-```text
-hivescale-sd-data.tar
-```
+1. Start calibration mode.
+2. Remove weight from the platform and tare the target channel.
+3. Place a known weight on the platform.
+4. Apply the calibration value.
+5. Stop calibration mode so the device returns to its normal send interval and deep-sleep behavior.
 
-The firmware endpoint is:
+Calibration controls require owner or admin access.
 
-```text
-GET /sd/download-all
-```
+---
 
-The route is registered in `startProvisioningPortal()`:
+## Import SD card data
 
-```cpp
-setupServer.on("/sd/download-all", HTTP_GET, handleSdDownloadAll);
-```
+Every HiveScale device keeps a backup of its readings on its SD card, even
+when it cannot reach the backend. If your scale has been offline or off-grid
+for a while, you can recover those missing readings by downloading them from
+the device and uploading them into Hive-Pal.
 
-The button is added to the AP-mode HTML page:
+### 1. Download the backup from the scale
 
-```cpp
-html += "<p><a class='button' href='/sd/download-all'>Download all SD data (.tar)</a></p>";
-```
+Put the device into AP (setup) mode and download its SD data:
 
-## Why TAR instead of ZIP?
+1. Press the device's setup button to start AP mode (a `HiveScale-Setup-XXXX`
+   Wi-Fi network appears).
+2. Connect to that network and open `http://192.168.4.1`.
+3. Choose **Download all SD data (.tar)** to save `hivescale-sd-data.tar`.
 
-The download uses TAR instead of ZIP because TAR can be streamed directly from the ESP32 with very little RAM usage.
+See the HiveScale firmware documentation for the full AP-mode procedure,
+including how to enter setup mode while the device is in deep sleep.
 
-This is important because the ESP32 should not try to load the full SD card contents into memory before sending the download. The firmware walks the SD card directory tree and streams each file into the TAR response.
+### 2. Upload it into Hive-Pal
 
-## Extracting the downloaded data
+1. Open **HiveScale** and select the claimed device.
+2. Find the **Import SD card data** card.
+3. Choose the file you downloaded — either the `hivescale-sd-data.tar` archive
+   or an extracted `measurements.ndjson` file.
+4. Select **Upload SD data**.
 
-### macOS / Linux
+Hive-Pal reads the readings out of the file and adds them to the device's
+history. After it finishes you'll see how many new readings were imported and
+how many duplicates were skipped.
 
-```bash
-tar -xf hivescale-sd-data.tar
-```
+### Good to know
 
-### Windows PowerShell
+- **Re-uploading is safe.** Hive-Pal recognises readings it already has, so
+  uploading the same file twice will not create duplicates — it simply reports
+  them as skipped.
+- **Duplicates are normal.** When the device was online, those readings already
+  reached the backend, so only the offline gaps are added.
+- **Owner or admin only.** Viewers can see the card but cannot import.
+- **No need to prune the file.** You can upload the entire backup each time;
+  only genuinely new readings are stored.
 
-```powershell
-tar -xf hivescale-sd-data.tar
-```
+---
 
-Modern Windows includes `tar` by default. If that is not available, 7-Zip can also open `.tar` files.
+## Sharing and roles
 
-## Operational notes
+HiveScale roles are enforced by the HiveScale backend.
 
-- The SD download button is only shown when the SD card is available.
-- Large SD cards or slow connections may take a while to download.
-- Keep the browser open until the download completes.
-- The firmware streams the TAR file directly, so RAM usage stays low.
-- Very long file paths may be skipped because the simple TAR header implementation only supports names up to 99 characters.
-- AP mode currently times out after the configured provisioning timeout if no reset/save action keeps the device active.
+| Role | View readings | Edit config and names | Share device |
+|---|---:|---:|---:|
+| Owner | Yes | Yes | Yes |
+| Admin | Yes | Yes | No |
+| Viewer | Yes | No | No |
 
-## Related code locations
+Owners can share a HiveScale device with another Hive-Pal user by email address. The recipient must already have a Hive-Pal account.
 
-| Purpose | File | Code reference |
-|---|---|---|
-| Setup button pin | `include/config.h` | `SETUP_BUTTON_PIN` (line 93) |
-| Factory reset hold duration | `include/config.h` | `BUTTON_LONG_PRESS_MS` (line 95) |
-| Deep-sleep wake from button | `src/storage_power.cpp` | `configureButtonWake()` |
-| Boot-time AP entry check | `src/main.cpp` | `digitalRead(SETUP_BUTTON_PIN) == LOW \|\| wakeReason == ESP_SLEEP_WAKEUP_EXT0` |
-| Button short/long press handling | `src/portal.cpp` | `handleButton()` |
-| SD TAR streaming helpers | `src/portal.cpp` | `tarSafeName()`, `writeTarHeader()`, `streamTarDirectory()` |
-| SD download HTTP handler | `src/portal.cpp` | `handleSdDownloadAll()` |
-| AP-mode download button | `src/portal.cpp` | `handleSetupRoot()` |
-| SD download route | `src/portal.cpp` | `setupServer.on("/sd/download-all", HTTP_GET, handleSdDownloadAll)` |
-| Factory reset of Preferences | `src/device_prefs.cpp` | `factoryResetPreferences()` |
+---
 
-## Recommended user instructions
+## Troubleshooting
 
-To enter setup mode reliably:
+### I cannot claim the device
 
-1. Unplug the device.
-2. Hold the setup button.
-3. Plug the device back in.
-4. Release the button after 1-2 seconds.
-5. Connect to the `HiveScale-Setup-XXXX` WiFi network.
-6. Open `http://192.168.4.1`.
+The device must send a measurement with the claim code before Hive-Pal can claim it. Check the HiveScale backend logs and the ESP32 serial monitor.
 
-To factory reset:
+### The page shows no measurements
 
-1. Make sure the device is powered and awake.
-2. Hold the setup button for the configured long-press duration.
-3. Release after the device logs or performs the reset.
+Verify that the selected device has a recent `last_seen_at` timestamp and that the HiveScale backend is reachable from the Hive-Pal backend.
 
-Default factory-reset hold time: 10 seconds.
+### Off-grid cards are blank
+
+The firmware may not be built with `ENABLE_INA219_SOLAR`, `ENABLE_MAX17048_BATTERY`, or `ENABLE_SIM7080G`, or the connected HiveScale backend may not be returning those fields.
+
+### SD import says no measurements were found
+
+Make sure you uploaded the HiveScale backup file — the `hivescale-sd-data.tar`
+download or an extracted `measurements.ndjson` — and not another file. An empty
+or truncated download can also cause this. Try downloading the SD data from the
+device again.
+
+### Cellular status is poor
+
+Check antenna position, SIM/APN settings, modem power stability, and whether the device can attach to LTE-M/NB-IoT at the installation site.
