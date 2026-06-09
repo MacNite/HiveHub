@@ -282,9 +282,19 @@ Returns the current config for a device. A default config is created if none exi
   "scale1_factor": -7050.0,
   "scale2_offset": 0,
   "scale2_factor": -7050.0,
-  "config_version": 3
+  "config_version": 3,
+  "tempco_enabled": false,
+  "tempco_source": "ambient",
+  "tempco_ref_temp_c": 20.0,
+  "scale1_tempco_kg_per_c": 0.0,
+  "scale2_tempco_kg_per_c": 0.0
 }
 ```
+
+The `tempco_*` fields drive backend load-cell temperature compensation. They are
+informational for the device (which keeps sending raw weights); the correction is
+applied in the backend on read. See
+[temperature-compensation.md](temperature-compensation.md).
 
 ### `PATCH /api/v1/devices/{device_id}/config`
 
@@ -509,7 +519,30 @@ Returns the same device config schema as the device-facing config endpoint. Any 
 
 ### `PATCH /api/v1/app/devices/{device_id}/config`
 
-Updates config fields. Requires `owner` or `admin`.
+Updates config fields. Requires `owner` or `admin`. Accepts the `tempco_*`
+temperature-compensation fields in addition to the calibration fields.
+
+### `POST /api/v1/app/devices/{device_id}/temp-compensation/fit`
+
+Fits a load-cell temperature coefficient from the device's own history by
+regressing a scale's raw weight against a temperature channel. A plain fit needs
+`viewer`; persisting it (`apply: true`) needs `owner`/`admin`. See
+[temperature-compensation.md](temperature-compensation.md).
+
+```json
+{
+  "scale": 1,
+  "lookback_days": 3,
+  "temp_source": "ambient",
+  "calibration_mode_only": false,
+  "apply": true
+}
+```
+
+Returns the fit (`coeff_kg_per_c`, `ref_temp_c`, `r_squared`, sample count and
+temperature span). When `apply` is true and the fit succeeds, the coefficient,
+reference temperature and source are written to the config and compensation is
+enabled.
 
 ### `GET /api/v1/app/devices/{device_id}/measurements`
 
@@ -521,7 +554,10 @@ Returns measurements for one device.
 | `start_at` | - | - | ISO datetime lower bound |
 | `end_at` | - | - | ISO datetime upper bound |
 
-The response includes off-grid fields when the firmware sends them.
+The response includes off-grid fields when the firmware sends them, plus
+`scale_1_weight_kg_compensated` / `scale_2_weight_kg_compensated` and a
+`tempco_applied` flag. When compensation is disabled the compensated values equal
+the raw weights and `tempco_applied` is `false`.
 
 ### `GET /api/v1/app/devices/{device_id}/measurements/latest`
 

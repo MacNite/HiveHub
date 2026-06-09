@@ -32,6 +32,14 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from insights import compute_insights, summarize
 from sd_import import split_new_and_duplicate
+from tempcomp import (
+    VALID_TEMP_SOURCES,
+    TEMP_SOURCE_FIELD,
+    DEFAULT_REF_TEMP_C,
+    DEFAULT_TEMP_SOURCE,
+    compensate_weight,
+    fit_temp_coefficient,
+)
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 API_KEY = os.environ["API_KEY"]
@@ -323,6 +331,15 @@ class DeviceConfig(BaseModel):
     scale2_offset: int = 0
     scale2_factor: float = -7050.0
     config_version: int = 1
+    # ── Load-cell temperature compensation (applied in the backend on read) ───
+    # See server/tempcomp.py. Coefficients are kg/°C; the correction is
+    # disabled (no-op) until tempco_enabled is set and a non-zero coefficient
+    # exists. The raw weight in `measurements` is never altered.
+    tempco_enabled: bool = False
+    tempco_source: Literal["ambient", "hive_1", "hive_2"] = DEFAULT_TEMP_SOURCE
+    tempco_ref_temp_c: float = DEFAULT_REF_TEMP_C
+    scale1_tempco_kg_per_c: float = 0.0
+    scale2_tempco_kg_per_c: float = 0.0
 
 
 class DeviceConfigUpdate(BaseModel):
@@ -331,6 +348,11 @@ class DeviceConfigUpdate(BaseModel):
     scale1_factor: Optional[float] = None
     scale2_offset: Optional[int] = None
     scale2_factor: Optional[float] = None
+    tempco_enabled: Optional[bool] = None
+    tempco_source: Optional[Literal["ambient", "hive_1", "hive_2"]] = None
+    tempco_ref_temp_c: Optional[float] = None
+    scale1_tempco_kg_per_c: Optional[float] = None
+    scale2_tempco_kg_per_c: Optional[float] = None
 
 
 class FirmwareReleaseIn(BaseModel):
@@ -390,6 +412,27 @@ class AppDeviceConfigUpdate(DeviceConfigUpdate):
 class AppCalibrationModeStartIn(BaseModel):
     interval_seconds: int = Field(default=5, ge=1, le=3600)
     timeout_seconds: int = Field(default=600, ge=1, le=86400)
+
+
+class TempCoefficientFitIn(BaseModel):
+    """Request to fit a load-cell temperature coefficient from stored data.
+
+    The window should cover a period where the physical load was constant (an
+    empty/unworked hive or a fixed reference mass) and the temperature swung
+    enough to expose the drift — e.g. a clear day/night cycle.
+    """
+    scale: Literal[1, 2]
+    lookback_days: int = Field(default=3, ge=1, le=90)
+    start_at: Optional[datetime] = None
+    end_at: Optional[datetime] = None
+    # Which temperature channel to regress against; defaults to the device's
+    # current tempco_source.
+    temp_source: Optional[Literal["ambient", "hive_1", "hive_2"]] = None
+    # Only consider rows captured in calibration mode (stable, known load).
+    calibration_mode_only: bool = False
+    # Persist the fitted coefficient (and ref temp / source) to the device config
+    # and enable compensation. When False, only the fit result is returned.
+    apply: bool = False
 
 
 def require_api_key(x_api_key: str = Header(default="")) -> str:
@@ -687,8 +730,21 @@ def init_db():
                     scale2_offset BIGINT NOT NULL DEFAULT 0,
                     scale2_factor DOUBLE PRECISION NOT NULL DEFAULT -7050.0,
                     config_version INTEGER NOT NULL DEFAULT 1,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    -- Load-cell temperature compensation (see server/tempcomp.py)
+                    tempco_enabled BOOLEAN NOT NULL DEFAULT false,
+                    tempco_source TEXT NOT NULL DEFAULT 'ambient',
+                    tempco_ref_temp_c DOUBLE PRECISION NOT NULL DEFAULT 20.0,
+                    scale1_tempco_kg_per_c DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    scale2_tempco_kg_per_c DOUBLE PRECISION NOT NULL DEFAULT 0.0
                 );
+
+                -- Temperature-compensation columns (idempotent for existing deployments)
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS tempco_enabled BOOLEAN NOT NULL DEFAULT false;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS tempco_source TEXT NOT NULL DEFAULT 'ambient';
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS tempco_ref_temp_c DOUBLE PRECISION NOT NULL DEFAULT 20.0;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS scale1_tempco_kg_per_c DOUBLE PRECISION NOT NULL DEFAULT 0.0;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS scale2_tempco_kg_per_c DOUBLE PRECISION NOT NULL DEFAULT 0.0;
 
                 CREATE TABLE IF NOT EXISTS firmware_releases (
                     id BIGSERIAL PRIMARY KEY,
@@ -1253,6 +1309,12 @@ def measurement_row_to_dict(r):
         "sht_ok": r[16],
         "scale_1_raw": r[17],
         "scale_2_raw": r[18],
+        # Temperature-compensated weights. Default to the raw weight and
+        # tempco_applied=False; attach_temperature_compensation() overrides
+        # these per device when a coefficient is configured and enabled.
+        "scale_1_weight_kg_compensated": r[4],
+        "scale_2_weight_kg_compensated": r[5],
+        "tempco_applied": False,
         "battery_soc_percent": r[19],
         "battery_alert": r[20],
         "battery_monitor_ok": r[21],
@@ -1323,6 +1385,67 @@ def measurement_row_to_dict(r):
     }
 
 
+def load_tempco_configs(device_ids) -> dict:
+    """Fetch the temperature-compensation config for a set of devices.
+
+    Returns ``{device_id: (source, ref_temp_c, scale1_coeff, scale2_coeff)}``
+    for devices that have compensation *enabled* with at least one non-zero
+    coefficient. Devices absent from the map are left uncompensated.
+    """
+    ids = [d for d in {d for d in device_ids} if d]
+    if not ids:
+        return {}
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT device_id, tempco_source, tempco_ref_temp_c,
+                       scale1_tempco_kg_per_c, scale2_tempco_kg_per_c
+                FROM device_configs
+                WHERE device_id = ANY(%s)
+                  AND tempco_enabled
+                  AND (scale1_tempco_kg_per_c <> 0 OR scale2_tempco_kg_per_c <> 0);
+                """,
+                (ids,),
+            )
+            rows = cur.fetchall()
+    return {r[0]: (r[1], r[2], r[3], r[4]) for r in rows}
+
+
+def attach_temperature_compensation(measurements: list[dict]) -> list[dict]:
+    """Fill in the compensated-weight fields on serialized measurement dicts.
+
+    Looks up each device's coefficient once (a single batched query) and applies
+    the first-order correction from server/tempcomp.py. Rows whose device has no
+    enabled coefficient keep the defaults set in measurement_row_to_dict (raw
+    weight, tempco_applied=False).
+    """
+    if not measurements:
+        return measurements
+    cfgs = load_tempco_configs(m["device_id"] for m in measurements)
+    if not cfgs:
+        return measurements
+    for m in measurements:
+        cfg = cfgs.get(m["device_id"])
+        if not cfg:
+            continue
+        source, ref_temp, c1, c2 = cfg
+        temp = m.get(TEMP_SOURCE_FIELD.get(source, "ambient_temp_c"))
+        m["scale_1_weight_kg_compensated"] = compensate_weight(
+            m["scale_1_weight_kg"], temp, ref_temp, c1
+        )
+        m["scale_2_weight_kg_compensated"] = compensate_weight(
+            m["scale_2_weight_kg"], temp, ref_temp, c2
+        )
+        m["tempco_applied"] = True
+    return measurements
+
+
+def serialize_measurements(rows) -> list[dict]:
+    """Map raw DB rows to API dicts and attach temperature compensation."""
+    return attach_temperature_compensation([measurement_row_to_dict(r) for r in rows])
+
+
 @app.get("/api/v1/measurements/latest", dependencies=[Depends(require_api_key)])
 def latest_measurements(limit: int = 50):
     limit = min(max(limit, 1), 500)
@@ -1338,27 +1461,45 @@ def latest_measurements(limit: int = 50):
                 (limit,),
             )
             rows = cur.fetchall()
-    return [measurement_row_to_dict(r) for r in rows]
+    return serialize_measurements(rows)
 
 
-@app.get("/api/v1/devices/{device_id}/config", dependencies=[Depends(require_device_key)])
-def get_device_config(device_id: str):
+# Column list shared by every device_configs read so the device-facing and
+# app-facing config endpoints can never drift apart.
+DEVICE_CONFIG_SELECT_COLUMNS = """
+    device_id, send_interval_seconds, scale1_offset, scale1_factor,
+    scale2_offset, scale2_factor, config_version,
+    tempco_enabled, tempco_source, tempco_ref_temp_c,
+    scale1_tempco_kg_per_c, scale2_tempco_kg_per_c
+"""
+
+
+def device_config_row_to_model(r) -> DeviceConfig:
+    return DeviceConfig(
+        device_id=r[0], send_interval_seconds=r[1], scale1_offset=r[2],
+        scale1_factor=r[3], scale2_offset=r[4], scale2_factor=r[5],
+        config_version=r[6], tempco_enabled=r[7], tempco_source=r[8],
+        tempco_ref_temp_c=r[9], scale1_tempco_kg_per_c=r[10],
+        scale2_tempco_kg_per_c=r[11],
+    )
+
+
+def fetch_device_config(device_id: str) -> DeviceConfig:
     ensure_device_config(device_id)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT device_id, send_interval_seconds, scale1_offset, scale1_factor,
-                       scale2_offset, scale2_factor, config_version
-                FROM device_configs WHERE device_id = %s;
-                """,
+                f"SELECT {DEVICE_CONFIG_SELECT_COLUMNS} "
+                "FROM device_configs WHERE device_id = %s;",
                 (device_id,),
             )
             r = cur.fetchone()
-    return DeviceConfig(
-        device_id=r[0], send_interval_seconds=r[1], scale1_offset=r[2],
-        scale1_factor=r[3], scale2_offset=r[4], scale2_factor=r[5], config_version=r[6]
-    )
+    return device_config_row_to_model(r)
+
+
+@app.get("/api/v1/devices/{device_id}/config", dependencies=[Depends(require_device_key)])
+def get_device_config(device_id: str):
+    return fetch_device_config(device_id)
 
 
 @app.patch("/api/v1/devices/{device_id}/config", dependencies=[Depends(require_device_key)])
@@ -1562,6 +1703,11 @@ def apply_command_result_to_config(device_id: str, result: dict[str, Any]):
         "scale1_factor",
         "scale2_offset",
         "scale2_factor",
+        "tempco_enabled",
+        "tempco_source",
+        "tempco_ref_temp_c",
+        "scale1_tempco_kg_per_c",
+        "scale2_tempco_kg_per_c",
     }
     fields = {k: v for k, v in result.items() if k in allowed and v is not None}
     if not fields:
@@ -1800,22 +1946,7 @@ def remove_device_member(device_id: str, member_user_id: str, user_id: str = Dep
 @app.get("/api/v1/app/devices/{device_id}/config", dependencies=[Depends(require_hivepal_service_key)])
 def get_device_config_from_app(device_id: str, user_id: str = Depends(require_user_id)):
     require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
-    ensure_device_config(device_id)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT device_id, send_interval_seconds, scale1_offset, scale1_factor,
-                       scale2_offset, scale2_factor, config_version
-                FROM device_configs WHERE device_id = %s;
-                """,
-                (device_id,),
-            )
-            r = cur.fetchone()
-    return DeviceConfig(
-        device_id=r[0], send_interval_seconds=r[1], scale1_offset=r[2],
-        scale1_factor=r[3], scale2_offset=r[4], scale2_factor=r[5], config_version=r[6]
-    )
+    return fetch_device_config(device_id)
 
 
 @app.get("/api/v1/app/devices/{device_id}/measurements", dependencies=[Depends(require_hivepal_service_key)])
@@ -1855,7 +1986,7 @@ def list_device_measurements(
             )
             rows = cur.fetchall()
 
-    return [measurement_row_to_dict(r) for r in rows]
+    return serialize_measurements(rows)
 
 
 @app.get("/api/v1/app/devices/{device_id}/measurements/latest", dependencies=[Depends(require_hivepal_service_key)])
@@ -1875,13 +2006,82 @@ def latest_device_measurements(device_id: str, limit: int = 50, user_id: str = D
                 (device_id, limit),
             )
             rows = cur.fetchall()
-    return [measurement_row_to_dict(r) for r in rows]
+    return serialize_measurements(rows)
 
 
 @app.patch("/api/v1/app/devices/{device_id}/config", dependencies=[Depends(require_hivepal_service_key)])
 def update_device_config_from_app(device_id: str, patch: AppDeviceConfigUpdate, user_id: str = Depends(require_user_id)):
     require_device_role(user_id, device_id, ["owner", "admin"])
     return update_device_config(device_id, patch)
+
+
+@app.post(
+    "/api/v1/app/devices/{device_id}/temp-compensation/fit",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def fit_temp_compensation_from_app(
+    device_id: str,
+    body: TempCoefficientFitIn,
+    user_id: str = Depends(require_user_id),
+):
+    """Derive a load-cell temperature coefficient from this device's history.
+
+    Regresses the chosen scale's *raw* weight against a temperature channel over
+    the requested window (see server/tempcomp.fit_temp_coefficient) and returns
+    the fit. With ``apply=true`` the coefficient, reference temperature and
+    temperature source are written to the device config and compensation is
+    enabled — applying ``apply`` requires owner/admin, a plain fit needs only
+    viewer access.
+    """
+    role = ["owner", "admin"] if body.apply else ["owner", "admin", "viewer"]
+    require_device_role(user_id, device_id, role)
+
+    cfg = fetch_device_config(device_id)
+    source = body.temp_source or cfg.tempco_source
+    temp_field = TEMP_SOURCE_FIELD[source]
+    weight_field = "scale_1_weight_kg" if body.scale == 1 else "scale_2_weight_kg"
+
+    end_at = body.end_at or datetime.now(timezone.utc)
+    start_at = body.start_at or (end_at - timedelta(days=body.lookback_days))
+
+    where = ["device_id = %s", "measured_at >= %s", "measured_at <= %s",
+             f"{weight_field} IS NOT NULL", f"{temp_field} IS NOT NULL"]
+    params: list[Any] = [device_id, start_at, end_at]
+    if body.calibration_mode_only:
+        where.append("calibration_mode IS TRUE")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {temp_field}, {weight_field} FROM measurements "
+                f"WHERE {' AND '.join(where)} ORDER BY measured_at ASC;",
+                params,
+            )
+            samples = cur.fetchall()
+
+    fit = fit_temp_coefficient(samples)
+    fit.update(
+        scale=body.scale,
+        temp_source=source,
+        window_start=start_at.isoformat(),
+        window_end=end_at.isoformat(),
+        applied=False,
+    )
+
+    if body.apply and fit["ok"]:
+        coeff_field = (
+            "scale1_tempco_kg_per_c" if body.scale == 1 else "scale2_tempco_kg_per_c"
+        )
+        patch = DeviceConfigUpdate(
+            tempco_enabled=True,
+            tempco_source=source,
+            tempco_ref_temp_c=fit["ref_temp_c"],
+            **{coeff_field: fit["coeff_kg_per_c"]},
+        )
+        update_device_config(device_id, patch)
+        fit["applied"] = True
+
+    return fit
 
 
 @app.post(
