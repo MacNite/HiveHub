@@ -42,7 +42,7 @@ API_KEY=change-this-to-a-long-random-string
 HIVEPAL_SERVICE_API_KEY=change-this-to-another-long-random-string
 
 # Shared secret (HS256) used to verify HivePal's per-user Bearer tokens.
-# Must match HivePal's jwtConstants.secret. Required for HivePal app endpoints.
+# Must match HivePal's JWT_SECRET. Required for HivePal app endpoints.
 HIVEPAL_JWT_SECRET=change-this-to-match-hivepal-jwt-secret
 
 # PostgreSQL password — must match POSTGRES_PASSWORD below

@@ -6,6 +6,8 @@ services:
         condition: service_healthy
     environment:
       API_KEY: '${API_KEY:-Super-Secret-Key}'
+      HIVEPAL_SERVICE_API_KEY: '${HIVEPAL_SERVICE_API_KEY:-}'
+      HIVEPAL_JWT_SECRET: '${HIVEPAL_JWT_SECRET:-}'
       DATABASE_URL: '${DATABASE_URL:-postgresql://hivescale:Strong-Password@hivescale-db:5432/hivescale}'
       TZ: Europe/Berlin
     ports:

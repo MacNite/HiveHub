@@ -80,7 +80,7 @@ services:
 |---|---|
 | `<your-master-admin-key>` | A long random string used as the master/admin key for server-to-server tooling (firmware releases, command queueing). Devices register their own per-device keys automatically and do **not** need this value. |
 | `<your-hivepal-service-key>` | A separate long random string for HivePal integration (can be left as a placeholder if you are not using HivePal) |
-| `<match-hivepal-jwt-secret>` | The same secret as HivePal's `jwtConstants.secret`, used to verify per-user Bearer tokens. Required for HivePal app endpoints; placeholder is fine if not using HivePal. |
+| `<match-hivepal-jwt-secret>` | The same secret as HivePal's `JWT_SECRET`, used to verify per-user Bearer tokens. Required for HivePal app endpoints; placeholder is fine if not using HivePal. |
 | `<db-password>` | A strong password for the PostgreSQL user (must match in both services) |
 | `<truenas-ip-or-hostname>` | The LAN IP or hostname of your TrueNAS box — used to build OTA firmware download URLs |
 | `/mnt/<pool>/hivescale-db` | Full path to the dataset you created in Step 1 |
@@ -93,7 +93,7 @@ services:
 > openssl rand -hex 32
 > ```
 > Note `HIVEPAL_JWT_SECRET` must be set to the **same** value as HivePal's
-> `jwtConstants.secret`, not a fresh random string.
+> `JWT_SECRET`, not a fresh random string.
 
 ---
 

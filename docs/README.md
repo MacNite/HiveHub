@@ -248,7 +248,7 @@ pip install -r requirements.txt
 DATABASE_URL="postgresql://hivescale:password@localhost:5432/hivescale" \
 API_KEY="your-master-admin-key" \
 HIVEPAL_SERVICE_API_KEY="your-hivepal-service-key" \
-HIVEPAL_JWT_SECRET="must-match-hivepal-jwtConstants-secret" \
+HIVEPAL_JWT_SECRET="must-match-hivepal-jwt-secret" \
 PUBLIC_BASE_URL="https://your-domain.example.com" \
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
@@ -260,7 +260,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `API_KEY` | Yes | Master/admin key in `X-API-Key` for server-to-server tooling (firmware-release registration, command queueing, latest-measurements, time). Devices use their own per-device keys, which the backend registers on first contact. |
 | `HIVEPAL_SERVICE_API_KEY` | Yes, for HivePal | Service key used by HivePal in `X-HivePal-Service-Key` |
-| `HIVEPAL_JWT_SECRET` | Yes, for HivePal | Shared secret (HS256) used to verify the per-user `Authorization: Bearer` tokens HivePal sends. Must match HivePal's `jwtConstants.secret`. |
+| `HIVEPAL_JWT_SECRET` | Yes, for HivePal | Shared secret (HS256) used to verify the per-user `Authorization: Bearer` tokens HivePal sends. Must match HivePal's `JWT_SECRET`. |
 | `PUBLIC_BASE_URL` | Recommended | Public base URL used for OTA firmware download links |
 | `FIRMWARE_DIR` | Optional | Firmware binary directory, default `/app/firmware` |
 | `DB_POOL_MIN_SIZE` | Optional | Minimum DB connection pool size, default `1` |
