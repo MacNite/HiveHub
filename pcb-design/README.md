@@ -1,8 +1,9 @@
 # current state of PCB-Design (as of 4th July 2026)
 
 Scale Module: V0.2 is  tested and works (expansion header and beecounter header are untested): on the 2nd sound input terminal the silk screen print is wrong. pinout on this connector is: 3.3v / 3.3v / GND / BCLK / WS / SD
-Scale Module: completely untested but only minor layout-changes and silk screen optimisation
-Power Module: V0.3 is only tested for use with the buck-boost converter. Solar charging, Lipo Connection, USB charging are currently untested.
+Scale Module: V0.3 completely untested but only minor layout-changes and silk screen optimisation
+Power Module: V0.2 The ina219 is not wired correctly. to fix this use a jumper cable. solder the VIN- / VIN+ on the top side of the PDCB. On the CN3791 solder the VIN pin to the top side. Connect the VIN- on the INA219 to the VIN pin on CN3791. Leave VIN+ on INA219 unconected. The solar panel needs to connect to VIN+ on the IN219 and GND somwher on the pcb.
+Power Module: V0.3 currently untested but only change is the INA219/CN3791 issue.
 
 # HiveScale PCB Design — Scale Module V0.2
 
