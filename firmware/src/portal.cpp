@@ -242,8 +242,19 @@ void handleBleScan() {
 
   String html;
   html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
-  html += "<title>BLE scan</title><style>body{font-family:system-ui;margin:24px;max-width:760px}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:6px}code{background:#f4f4f4;padding:2px 4px}</style>";
-  html += "</head><body><h1>Nearby BLE devices</h1>";
+  html += "<title>BLE scan</title>";
+  html += "<style>"
+          ":root{--bg:#f6f7f8;--card:#fff;--fg:#1a1d23;--muted:#667085;--border:#e4e7ec;--accent:#f59e0b;--link:#b46b00}"
+          "*{box-sizing:border-box}"
+          "body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;margin:0;padding:24px;background:var(--bg);color:var(--fg);line-height:1.5}"
+          ".wrap{max-width:760px;margin:0 auto}"
+          "h1{font-size:1.6rem;margin:0 0 8px}a{color:var(--link)}"
+          "table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}"
+          "th,td{text-align:left;border-bottom:1px solid var(--border);padding:8px 10px}th{color:var(--muted);font-weight:600}"
+          "code{background:#eef0f2;border-radius:4px;padding:2px 5px}"
+          "@media(prefers-color-scheme:dark){:root{--bg:#161618;--card:#1f1f23;--fg:#ececf1;--muted:#9aa0aa;--border:#33343a;--link:#f5b54a}code{background:#2a2a30}}"
+          "</style>";
+  html += "</head><body><div class='wrap'><h1>Nearby BLE devices</h1>";
   html += "<p>HolyIot-looking sensors (a parseable 25015 payload) are marked. Copy a MAC, then paste it into a sensor slot on the <a href='/'>setup page</a>.</p>";
 
   if (found.empty()) {
@@ -256,7 +267,7 @@ void handleBleScan() {
     html += "</table>";
     html += "<p><a href='/ble/scan'>Scan again</a></p>";
   }
-  html += "</body></html>";
+  html += "</div></body></html>";
   setupServer.send(200, "text/html", html);
 }
 #endif
@@ -267,10 +278,35 @@ void handleSetupRoot() {
   String html;
   html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
   html += "<title>HiveScale Setup</title>";
-  html += "<style>body{font-family:system-ui;margin:24px;max-width:760px}input{width:100%;padding:10px;margin:6px 0 14px}button,a.button{display:inline-block;padding:12px 16px;margin:4px 0;text-decoration:none;border:1px solid #333;border-radius:4px;background:#f4f4f4;color:#111}fieldset{margin:16px 0;padding:16px}table{border-collapse:collapse;width:100%}th,td{text-align:left;border-bottom:1px solid #ddd;padding:6px}th{width:48%}.meta{color:#666;font-size:.9em}</style>";
-  html += "</head><body><h1>HiveScale Setup</h1>";
-  html += "<p>Firmware: " + String(FIRMWARE_VERSION) + "</p>";
-  html += "<p>Setup portal: <a href='" + provisioningPortalUrl() + "'>" + provisioningPortalUrl() + "</a></p>";
+  // Self-contained inline theme (no external fonts/CSS/JS so it works on the
+  // offline captive portal). Brand accent matches Hive Pal (amber #f59e0b).
+  // This is just a longer style string in flash; it adds no SD/SPIFFS assets.
+  html += "<style>"
+          ":root{--bg:#f6f7f8;--card:#fff;--fg:#1a1d23;--muted:#667085;--border:#e4e7ec;--accent:#f59e0b;--link:#b46b00}"
+          "*{box-sizing:border-box}"
+          "body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;margin:0;padding:24px;background:var(--bg);color:var(--fg);line-height:1.5}"
+          ".wrap{max-width:760px;margin:0 auto}"
+          "h1{font-size:1.8rem;margin:0 0 2px}h3{margin:18px 0 6px;font-size:1rem}"
+          ".sub{color:var(--muted);font-size:.92em;margin:2px 0}"
+          "a{color:var(--link)}"
+          "fieldset{border:1px solid var(--border);background:var(--card);border-radius:12px;margin:18px 0;padding:18px 18px 6px;box-shadow:0 1px 2px rgba(16,24,40,.06)}"
+          "legend{font-weight:600;padding:0 8px;color:var(--accent)}"
+          "label{display:block;font-size:.88em;font-weight:500;margin-top:10px;color:var(--muted)}"
+          "input{width:100%;padding:10px 12px;margin:6px 0 12px;border:1px solid var(--border);border-radius:8px;font-size:1rem;background:#fff;color:var(--fg)}"
+          "input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(245,158,11,.25)}"
+          "button,a.button{display:inline-block;padding:11px 18px;margin:4px 6px 4px 0;font-size:1rem;text-decoration:none;border-radius:8px;border:1px solid var(--border);background:#fff;color:var(--fg);cursor:pointer}"
+          "button:hover,a.button:hover{filter:brightness(.97)}"
+          "button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}"
+          "button.danger{color:#b42318;border-color:#f0c2bc;background:#fff7f6}"
+          "table{border-collapse:collapse;width:100%}"
+          "th,td{text-align:left;border-bottom:1px solid var(--border);padding:8px 6px}"
+          "th{width:48%;font-weight:500;color:var(--muted)}"
+          ".meta{color:var(--muted);font-size:.86em}p{margin:8px 0}"
+          "@media(prefers-color-scheme:dark){:root{--bg:#161618;--card:#1f1f23;--fg:#ececf1;--muted:#9aa0aa;--border:#33343a;--link:#f5b54a}input{background:#26262b}button,a.button{background:#26262b}button.danger{background:#2a1d1d;border-color:#5a2d2a;color:#f7a59c}}"
+          "</style>";
+  html += "</head><body><div class='wrap'><h1>HiveScale Setup</h1>";
+  html += "<p class='sub'>Firmware: " + String(FIRMWARE_VERSION) + "</p>";
+  html += "<p class='sub'>Setup portal: <a href='" + provisioningPortalUrl() + "'>" + provisioningPortalUrl() + "</a></p>";
   appendLastSensorPanel(html);
   html += "<fieldset><legend>SD card data</legend>";
   if (sdOk) {
@@ -307,9 +343,9 @@ void handleSetupRoot() {
     html += "<label>Password</label><input type='password' name='pass" + String(i) + "' placeholder='Blank keeps the current password (only if you do not change the SSID above)'>";
   }
   html += "</fieldset>";
-  html += "<button type='submit'>Save and reboot</button></form>";
-  html += "<form method='POST' action='/reset' onsubmit='return confirm(\"Reset all Preferences?\")'><button type='submit'>Factory reset Preferences</button></form>";
-  html += "</body></html>";
+  html += "<button class='primary' type='submit'>Save and reboot</button></form>";
+  html += "<form method='POST' action='/reset' onsubmit='return confirm(\"Reset all Preferences?\")'><button class='danger' type='submit'>Factory reset Preferences</button></form>";
+  html += "</div></body></html>";
   setupServer.send(200, "text/html", html);
 }
 
