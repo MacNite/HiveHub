@@ -4,6 +4,14 @@
 
 **ESP32-based dual beehive scale system** for monitoring the weight, temperature, humidity, power state, and network state of two beehives. Measurements are sent to a self-hosted FastAPI backend backed by PostgreSQL and can be displayed in [HivePal](<https://github.com/martinhrvn/hive-pal>).
 
+> 🌐 **Website & setup guide:** a small static site lives in [`website/`](website/) — a
+> feature overview, a step-by-step setup guide, and an in-browser
+> [`secrets.h` configurator](website/configurator.html) that builds your firmware
+> config (sensors, BLE/GATT options, power modules) without hand-editing macros.
+> It deploys to GitHub Pages via `.github/workflows/pages.yml`
+> (enable **Settings → Pages → Source: GitHub Actions**), e.g.
+> `https://macnite.github.io/HiveScale/`.
+
 ---
 
 ## Features

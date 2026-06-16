@@ -1,0 +1,185 @@
+/* HiveScale website — shared styles
+   A light, honey-themed, dependency-free stylesheet used by both the landing
+   page (index.html) and the secrets.h configurator (configurator.html). */
+
+:root {
+  --honey: #f2a900;
+  --honey-dark: #c98a00;
+  --comb: #fff8e6;
+  --ink: #1f2421;
+  --ink-soft: #4b524d;
+  --line: #e7ddc4;
+  --card: #ffffff;
+  --bg: #fbf7ee;
+  --good: #2e7d32;
+  --warn: #b26a00;
+  --danger: #b00020;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(31, 36, 33, .06), 0 8px 24px rgba(31, 36, 33, .06);
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.6;
+}
+
+a { color: var(--honey-dark); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.wrap { width: min(1080px, 92vw); margin: 0 auto; }
+
+/* ── Header / nav ─────────────────────────────────────────────── */
+.site-nav {
+  position: sticky; top: 0; z-index: 20;
+  background: rgba(251, 247, 238, .85);
+  backdrop-filter: saturate(180%) blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+.site-nav .wrap {
+  display: flex; align-items: center; gap: 1rem;
+  height: 60px;
+}
+.brand { display: flex; align-items: center; gap: .55rem; font-weight: 800; font-size: 1.15rem; }
+.brand .logo { font-size: 1.4rem; }
+.site-nav nav { margin-left: auto; display: flex; gap: 1.1rem; align-items: center; flex-wrap: wrap; }
+.site-nav nav a { color: var(--ink-soft); font-weight: 600; font-size: .95rem; }
+.site-nav nav a:hover { color: var(--ink); text-decoration: none; }
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: .5rem;
+  padding: .65rem 1.1rem; border-radius: 999px;
+  font-weight: 700; font-size: .95rem; cursor: pointer;
+  border: 1px solid transparent; background: var(--honey); color: #1f2421;
+  transition: transform .05s ease, box-shadow .15s ease, background .15s ease;
+}
+.btn:hover { background: var(--honey-dark); text-decoration: none; box-shadow: var(--shadow); }
+.btn:active { transform: translateY(1px); }
+.btn.ghost { background: transparent; border-color: var(--line); color: var(--ink); }
+.btn.ghost:hover { background: #fff; }
+.btn.small { padding: .4rem .8rem; font-size: .85rem; }
+
+/* ── Hero ─────────────────────────────────────────────────────── */
+.hero { padding: 4rem 0 3rem; }
+.hero h1 { font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.1; margin: 0 0 1rem; }
+.hero p.lead { font-size: 1.2rem; color: var(--ink-soft); max-width: 60ch; margin: 0 0 1.6rem; }
+.hero .cta { display: flex; gap: .8rem; flex-wrap: wrap; }
+.badge {
+  display: inline-block; background: var(--comb); border: 1px solid var(--line);
+  color: var(--warn); padding: .25rem .7rem; border-radius: 999px;
+  font-size: .8rem; font-weight: 700; margin-bottom: 1.1rem;
+}
+
+/* ── Sections ─────────────────────────────────────────────────── */
+section { padding: 3rem 0; border-top: 1px solid var(--line); }
+section h2 { font-size: clamp(1.5rem, 3vw, 2rem); margin: 0 0 .4rem; }
+section .sub { color: var(--ink-soft); margin: 0 0 2rem; max-width: 65ch; }
+
+/* ── Feature grid ─────────────────────────────────────────────── */
+.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 1.2rem; box-shadow: var(--shadow);
+}
+.card .ico { font-size: 1.6rem; }
+.card h3 { margin: .5rem 0 .35rem; font-size: 1.08rem; }
+.card p { margin: 0; color: var(--ink-soft); font-size: .95rem; }
+
+/* ── Steps ────────────────────────────────────────────────────── */
+.steps { display: grid; gap: 1.2rem; counter-reset: step; }
+.step {
+  display: grid; grid-template-columns: 44px 1fr; gap: 1rem; align-items: start;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 1.2rem; box-shadow: var(--shadow);
+}
+.step .n {
+  width: 36px; height: 36px; border-radius: 50%; background: var(--honey);
+  color: #1f2421; font-weight: 800; display: grid; place-items: center;
+}
+.step h3 { margin: .1rem 0 .4rem; }
+.step p { margin: 0 0 .5rem; color: var(--ink-soft); }
+pre {
+  background: #1f2421; color: #f6efdd; padding: 1rem; border-radius: 10px;
+  overflow-x: auto; font-family: var(--mono); font-size: .85rem; margin: .5rem 0 0;
+}
+code:not(pre code) {
+  font-family: var(--mono); background: var(--comb); border: 1px solid var(--line);
+  padding: .1rem .35rem; border-radius: 6px; font-size: .88em;
+}
+
+/* ── Footer ───────────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--line); padding: 2rem 0; color: var(--ink-soft);
+  font-size: .9rem; display: flex; gap: 1rem; justify-content: space-between; flex-wrap: wrap;
+}
+
+/* ── Configurator ─────────────────────────────────────────────── */
+.cfg-layout { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+@media (min-width: 980px) { .cfg-layout { grid-template-columns: 1fr 1fr; align-items: start; } }
+
+fieldset {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.2rem 1.3rem;
+  margin: 0 0 1.2rem; background: var(--card); box-shadow: var(--shadow);
+}
+fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
+.field { margin: .75rem 0; }
+.field label { display: block; font-weight: 600; margin-bottom: .3rem; font-size: .92rem; }
+.field .hint { font-weight: 400; color: var(--ink-soft); font-size: .82rem; }
+.field input[type="text"],
+.field input[type="number"],
+.field input[type="password"],
+.field input[type="url"],
+.field select {
+  width: 100%; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 9px;
+  font-family: var(--sans); font-size: .95rem; background: #fff; color: var(--ink);
+}
+.field input:focus, .field select:focus { outline: 2px solid var(--honey); border-color: var(--honey); }
+
+.row { display: flex; gap: .6rem; }
+.row > * { flex: 1; }
+
+.toggle { display: flex; align-items: center; gap: .6rem; cursor: pointer; user-select: none; }
+.toggle input { width: 18px; height: 18px; accent-color: var(--honey); }
+.toggle .t-title { font-weight: 700; }
+.toggle .t-desc { font-weight: 400; color: var(--ink-soft); font-size: .85rem; display: block; }
+
+.sensor { border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; margin: .7rem 0; background: #fffdf7; }
+.sensor .opts { margin-top: .8rem; padding-top: .8rem; border-top: 1px dashed var(--line); display: none; }
+.sensor.on .opts { display: block; }
+.sensor .tag {
+  float: right; font-size: .72rem; font-weight: 800; padding: .15rem .55rem; border-radius: 999px;
+  background: var(--comb); border: 1px solid var(--line); color: var(--ink-soft);
+}
+.sensor .tag.exp { color: var(--warn); border-color: #e7c98a; background: #fff4dd; }
+.sensor .tag.ble { color: #1565c0; border-color: #bcd6f5; background: #eaf2fd; }
+
+.note { font-size: .85rem; padding: .6rem .8rem; border-radius: 9px; margin-top: .7rem; }
+.note.warn { background: #fff4dd; border: 1px solid #e7c98a; color: var(--warn); }
+.note.info { background: #eaf2fd; border: 1px solid #bcd6f5; color: #1565c0; }
+
+/* Output panel */
+.output { position: sticky; top: 76px; }
+.output .bar { display: flex; gap: .5rem; align-items: center; margin-bottom: .6rem; flex-wrap: wrap; }
+.output .bar h2 { margin: 0; font-size: 1.2rem; flex: 1; }
+.output pre {
+  margin: 0; max-height: 70vh; overflow: auto; font-size: .8rem; line-height: 1.5;
+  border: 1px solid #333;
+}
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+  background: var(--ink); color: #fff; padding: .7rem 1.2rem; border-radius: 999px;
+  font-weight: 700; opacity: 0; pointer-events: none; transition: all .2s ease; z-index: 50;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.muted { color: var(--ink-soft); }
+.mono { font-family: var(--mono); }

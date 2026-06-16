@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>secrets.h configurator — HiveScale</title>
+<meta name="description" content="Build a HiveScale firmware secrets.h in your browser: pick sensors, BLE / GATT options and power modules, then download the file. Nothing leaves your machine." />
+<link rel="stylesheet" href="assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%99%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+
+<header class="site-nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="logo">🐝</span> HiveScale</a>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="index.html#setup">Setup</a>
+      <a href="https://github.com/MacNite/HiveScale">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<section style="border-top:none; padding-bottom:1rem">
+  <div class="wrap">
+    <h2>⚙️ secrets.h configurator</h2>
+    <p class="sub">
+      Pick your device identity, Wi-Fi and the sensors you actually fitted, then download a
+      ready-to-build <code>firmware/include/secrets.h</code>. Everything runs locally in your
+      browser — <strong>no values are uploaded anywhere</strong>.
+    </p>
+  </div>
+</section>
+
+<section style="border-top:none; padding-top:0">
+  <div class="wrap">
+    <div class="cfg-layout">
+
+      <!-- ── LEFT: the form ─────────────────────────────────────── -->
+      <form id="cfg" autocomplete="off">
+
+        <fieldset>
+          <legend>Device identity</legend>
+          <div class="field">
+            <label for="device_id">Device ID <span class="hint">— unique per device</span></label>
+            <input type="text" id="device_id" value="hive-001" />
+          </div>
+          <div class="field">
+            <label for="api_key">API key <span class="hint">— sent in the <code>X-API-Key</code> header</span></label>
+            <div class="row">
+              <input type="text" id="api_key" value="your-api-key-here" />
+              <button type="button" class="btn ghost small" id="gen_key" style="flex:0 0 auto">🎲 Generate</button>
+            </div>
+          </div>
+          <div class="field row">
+            <div>
+              <label for="claim_code">Claim code <span class="hint">— for HivePal pairing</span></label>
+              <input type="text" id="claim_code" value="ABCD-1234" />
+            </div>
+            <div style="flex:0 0 130px">
+              <label for="claim_rev">Claim revision</label>
+              <input type="number" id="claim_rev" value="1" min="1" />
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Backend</legend>
+          <div class="field">
+            <label for="api_base">API base URL <span class="hint">— no trailing slash</span></label>
+            <input type="url" id="api_base" value="https://your-backend-domain.com" />
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Wi-Fi networks <span class="hint" style="font-weight:400">— up to 3, used to seed Preferences</span></legend>
+          <div id="wifi-list"></div>
+          <p class="muted" style="font-size:.85rem; margin:.4rem 0 0">
+            Network 1 is required; 2 and 3 are optional fallbacks.
+          </p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Sensors</legend>
+          <p class="muted" style="margin:.2rem 0 .6rem; font-size:.9rem">
+            Toggle on only what you fitted. Each enabled sensor is compiled into the firmware
+            for this device.
+          </p>
+
+          <!-- DS18B20 -->
+          <div class="sensor" data-sensor="ds18b20">
+            <span class="tag">Wired · I2C/1-Wire</span>
+            <label class="toggle">
+              <input type="checkbox" data-toggle checked />
+              <span><span class="t-title">🌡️ DS18B20 in-hive temperature</span>
+              <span class="t-desc">Two waterproof 1-Wire probes (hive 1 + hive 2) on GPIO 4.</span></span>
+            </label>
+            <div class="opts">
+              <p class="muted" style="font-size:.85rem;margin:0">No extra options. If you rely on a BLE
+                sensor for in-hive temperature instead, turn this off.</p>
+            </div>
+          </div>
+
+          <!-- INMP441 mics -->
+          <div class="sensor" data-sensor="mics">
+            <span class="tag">Wired · I2S</span>
+            <label class="toggle">
+              <input type="checkbox" data-toggle checked />
+              <span><span class="t-title">🔊 INMP441 stereo microphones</span>
+              <span class="t-desc">Two I2S MEMS mics sharing one bus, with per-band FFT.</span></span>
+            </label>
+            <div class="opts">
+              <div class="field row">
+                <div><label>BCLK pin</label><input type="number" data-opt="bclk" value="14" /></div>
+                <div><label>WS pin</label><input type="number" data-opt="ws" value="13" /></div>
+                <div><label>SD pin</label><input type="number" data-opt="sd" value="34" /></div>
+              </div>
+              <div class="field row">
+                <div><label>Sample rate (Hz)</label><input type="number" data-opt="rate" value="16000" /></div>
+                <div><label>Sample frames</label><input type="number" data-opt="frames" value="8000" /></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Accelerometer -->
+          <div class="sensor" data-sensor="accel">
+            <span class="tag">Wired · I2C</span>
+            <label class="toggle">
+              <input type="checkbox" data-toggle />
+              <span><span class="t-title">📳 LIS3DH / LIS2DH12 accelerometers</span>
+              <span class="t-desc">Per-hive comb vibration incl. the ~20 Hz pre-swarm band.</span></span>
+            </label>
+            <div class="opts">
+              <div class="field row">
+                <div><label>Slot 1 address (hive 1)</label>
+                  <select data-opt="addr1"><option value="0x18" selected>0x18 (SDO/SA0 → GND)</option><option value="0x19">0x19 (SDO/SA0 → VCC)</option></select></div>
+                <div><label>Slot 2 address (hive 2)</label>
+                  <select data-opt="addr2"><option value="0x18">0x18 (SDO/SA0 → GND)</option><option value="0x19" selected>0x19 (SDO/SA0 → VCC)</option></select></div>
+              </div>
+              <div class="field row">
+                <div><label>Full-scale range (g)</label>
+                  <select data-opt="range"><option>2</option><option>4</option><option>8</option><option>16</option></select></div>
+                <div><label>Output data rate (Hz)</label>
+                  <select data-opt="odr"><option>100</option><option selected>400</option></select></div>
+                <div><label>Samples / cycle</label><input type="number" data-opt="count" value="256" /></div>
+              </div>
+              <div class="note info">Sets <code>ENABLE_LIS3DH_ACCEL</code> plus the per-device
+                address / range / ODR / sample-count macros the firmware expects.</div>
+            </div>
+          </div>
+
+          <!-- HolyIot BLE -->
+          <div class="sensor" data-sensor="ble">
+            <span class="tag ble">Wireless · BLE beacon</span>
+            <label class="toggle">
+              <input type="checkbox" data-toggle />
+              <span><span class="t-title">📶 HolyIot 25015 BLE sensor</span>
+              <span class="t-desc">In-hive beacon (temp / humidity / pressure / accel), scanned passively each cycle.</span></span>
+            </label>
+            <div class="opts">
+              <div class="field row">
+                <div><label>Scan seconds / cycle</label><input type="number" data-opt="scan" value="6" min="1" /></div>
+                <div><label>Company ID (16-bit)</label><input type="text" data-opt="company" value="0xFFFF" /></div>
+              </div>
+              <label class="toggle" style="margin:.4rem 0">
+                <input type="checkbox" data-opt="active" checked />
+                <span><span class="t-title" style="font-size:.92rem">Active scan</span>
+                <span class="t-desc">Also fetch the device name (better pairing, slightly more power).</span></span>
+              </label>
+              <div class="note info">Pair up to two beacons (slot 1 → hive 1, slot 2 → hive 2) later from
+                the provisioning portal; their MAC addresses persist in Preferences.</div>
+            </div>
+          </div>
+
+          <!-- GATT BLE (not supported yet) -->
+          <div class="sensor" data-sensor="gatt">
+            <span class="tag exp">Wireless · GATT · experimental</span>
+            <label class="toggle">
+              <input type="checkbox" data-toggle />
+              <span><span class="t-title">🔗 GATT BLE sensor (connected)</span>
+              <span class="t-desc">Connect to a sensor's GATT services instead of reading advertisements.</span></span>
+            </label>
+            <div class="opts">
+              <div class="field">
+                <label>Service UUID <span class="hint">— optional, for your own notes</span></label>
+                <input type="text" data-opt="svc" placeholder="0000181a-0000-1000-8000-00805f9b34fb" />
+              </div>
+              <div class="field">
+                <label>Characteristic UUID <span class="hint">— optional</span></label>
+                <input type="text" data-opt="chr" placeholder="00002a6e-0000-1000-8000-00805f9b34fb" />
+              </div>
+              <div class="note warn">⚠ <strong>Not supported by the firmware yet.</strong> Enabling this
+                writes <code>ENABLE_GATT_BLE 1</code> and your UUIDs into <code>secrets.h</code> as a
+                placeholder so your config is ready, but the current firmware ignores it. Track the
+                feature on GitHub before relying on it.</div>
+            </div>
+          </div>
+
+          <!-- INA219 solar -->
+          <div class="sensor" data-sensor="ina219">
+            <span class="tag">Off-grid · I2C</span>
+            <label class="toggle">
+              <input type="checkbox" data-toggle />
+              <span><span class="t-title">🛰️ INA219 solar monitor</span>
+              <span class="t-desc">Solar / load voltage, current and power telemetry.</span></span>
+            </label>
+            <div class="opts">
+              <div class="field" style="max-width:240px">
+                <label>I2C address</label>
+                <select data-opt="addr"><option selected>0x40</option><option>0x41</option><option>0x44</option><option>0x45</option></select>
+              </div>
+            </div>
+          </div>
+
+          <!-- MAX17048 battery -->
+          <div class="sensor" data-sensor="max17048">
+            <span class="tag">Off-grid · I2C</span>
+            <label class="toggle">
+              <input type="checkbox" data-toggle />
+              <span><span class="t-title">🔋 MAX17048 LiPo fuel gauge</span>
+              <span class="t-desc">Battery voltage, state-of-charge and low-battery alert.</span></span>
+            </label>
+            <div class="opts">
+              <div class="field" style="max-width:240px">
+                <label>Low-battery alert (%)</label>
+                <input type="number" data-opt="alert" value="20" min="1" max="99" />
+              </div>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Build flags</legend>
+          <label class="toggle" style="margin:.4rem 0">
+            <input type="checkbox" id="debug_mode" checked />
+            <span><span class="t-title">🐞 Debug mode</span>
+            <span class="t-desc">Extra serial debug logs (<code>DEBUG_MODE</code>).</span></span>
+          </label>
+          <label class="toggle" style="margin:.4rem 0">
+            <input type="checkbox" id="force_reseed" />
+            <span><span class="t-title">♻️ Force reseed <span style="color:var(--danger)">(dangerous)</span></span>
+            <span class="t-desc">Overwrite stored Preferences from secrets.h on every boot.</span></span>
+          </label>
+        </fieldset>
+      </form>
+
+      <!-- ── RIGHT: live output ─────────────────────────────────── -->
+      <div class="output">
+        <div class="bar">
+          <h2>secrets.h</h2>
+          <button type="button" class="btn ghost small" id="copy">📋 Copy</button>
+          <button type="button" class="btn small" id="download">⬇️ Download</button>
+        </div>
+        <pre id="preview" class="mono"></pre>
+        <div class="note info" style="margin-top:.8rem">
+          Save this as <code>firmware/include/secrets.h</code> (it is gitignored — never commit it),
+          then build with <code>pio run --target upload</code>.
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
+    <span>🐝 HiveScale — MIT © 2026 Maximilian Nitschke</span>
+    <span><a href="index.html">Home</a> · <a href="https://github.com/MacNite/HiveScale">GitHub</a></span>
+  </div>
+</footer>
+
+<div class="toast" id="toast"></div>
+<script src="assets/configurator.js"></script>
+</body>
+</html>
