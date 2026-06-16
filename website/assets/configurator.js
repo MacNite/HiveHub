@@ -146,13 +146,19 @@
     }
     p("");
 
-    // HolyIot BLE
-    p("// HolyIot 25015 in-hive BLE sensor (passive advertisement scan).");
+    // In-hive BLE sensor bridge (HolyIot 25015 + HiveInside ESP32-C6).
+    p("// In-hive BLE sensor bridge: passively scans paired sensors each cycle.");
+    p("// Auto-detects the HolyIot 25015 beacon and the HiveInside ESP32-C6 sensor.");
     p(def("ENABLE_HOLYIOT_BLE", enabled("ble") ? "1" : "0"));
     if (enabled("ble")) {
       p(def("HOLYIOT_BLE_SCAN_SECONDS", opt("ble", "scan")));
       p(def("HOLYIOT_BLE_ACTIVE_SCAN", optChecked("ble", "active") ? "1" : "0"));
       p(def("HOLYIOT_COMPANY_ID", opt("ble", "company")));
+      p("// BLE vs wired arbitration: 1 = a paired in-hive BLE sensor disables");
+      p("// the wired sensor that measures the same in-hive quantity (per hive).");
+      p(def("BLE_OVERRIDE_DS18B20", optChecked("ble", "ovr_temp") ? "1" : "0"));
+      p(def("BLE_OVERRIDE_MICS", optChecked("ble", "ovr_mics") ? "1" : "0"));
+      p(def("BLE_OVERRIDE_ACCEL", optChecked("ble", "ovr_accel") ? "1" : "0"));
     }
     p("");
 

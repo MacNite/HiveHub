@@ -34,33 +34,64 @@
 
 namespace blesensor {
 
+// Which kind of in-hive BLE sensor produced an advertisement. Both share the
+// passive scan bridge; the format is auto-detected from the manufacturer data.
+enum class SensorType : uint8_t {
+  None       = 0,
+  HolyIot    = 1,   // HolyIot 25015 beacon: temp/humidity/pressure/raw accel
+  HiveInside = 2,   // HiveInside ESP32-C6: + vibration & acoustic FFT bands
+};
+
+const char* sensorTypeName(SensorType t);
+
 // One per-hive sensor snapshot, captured each upload cycle. Acceleration is in
 // milli-g (mg); *_rms_mg / *_peak_mg are the AC magnitude (gravity removed)
 // across the advertisements seen during the scan window.
 struct Snapshot {
-  bool     present       = false;  // a matching advertisement was received
-  int      rssi_dbm      = 0;      // last advertisement RSSI
-  uint16_t sample_count  = 0;      // advertisements parsed during the scan
+  bool       present       = false;  // a matching advertisement was received
+  SensorType type          = SensorType::None;
+  int        rssi_dbm      = 0;      // last advertisement RSSI
+  uint16_t   sample_count  = 0;      // advertisements parsed during the scan
 
   float    temp_c        = NAN;
   float    humidity_pct  = NAN;
-  float    pressure_hpa  = NAN;
+  float    pressure_hpa  = NAN;      // HolyIot only
 
-  float    accel_x_mg    = NAN;    // last raw sample
+  float    accel_x_mg    = NAN;    // last raw sample (HolyIot)
   float    accel_y_mg    = NAN;
   float    accel_z_mg    = NAN;
-  float    accel_rms_mg  = NAN;    // RMS of |a|-baseline over the samples seen
+  float    accel_rms_mg  = NAN;    // RMS of |a|-baseline (HolyIot) or device RMS
   float    accel_peak_mg = NAN;    // peak |a|-baseline over the samples seen
 
+  // Vibration FFT bands in mg (HiveInside only; the device runs the FFT).
+  float    accel_band_swarm_mg    = NAN;  //   8–30 Hz pre-swarm
+  float    accel_band_fanning_mg  = NAN;  //  30–100 Hz fanning
+  float    accel_band_activity_mg = NAN;  // 100–200 Hz activity
+
+  // Acoustics in dBFS (HiveInside only).
+  bool     mic_present   = false;
+  float    mic_rms_dbfs  = NAN;
+  float    mic_sub_bass_dbfs = NAN;  //   50–150 Hz
+  float    mic_hum_dbfs      = NAN;  //  150–300 Hz
+  float    mic_piping_dbfs   = NAN;  //  300–550 Hz
+  float    mic_stress_dbfs   = NAN;  //  550–1500 Hz
+  float    mic_high_dbfs     = NAN;  // 1500–3000 Hz
+
   int      battery_pct   = -1;     // -1 = not reported
+
+  // Capability helpers used by the wired/BLE arbitration in sensors.cpp.
+  bool providesTemp()  const { return present && !isnan(temp_c); }
+  bool providesAccel() const { return present && !isnan(accel_rms_mg); }
+  bool providesMic()   const { return present && mic_present; }
 };
 
 // One discovered device during a portal pairing scan.
 struct Discovered {
-  String  mac;
-  String  name;
-  int     rssi_dbm = 0;
-  bool    looks_like_holyiot = false;  // carried a parseable HolyIot payload
+  String     mac;
+  String     name;
+  int        rssi_dbm = 0;
+  SensorType type = SensorType::None;  // recognised in-hive sensor format, if any
+  bool       looks_like_holyiot = false;  // kept for back-compat (any known type)
 };
 
 // Run a single passive scan and fill the snapshots for the two paired MACs.

@@ -115,6 +115,8 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | `scale_2_weight_kg` | number | No | Scale 2 weight in kilograms |
 | `hive_1_temp_c` | number | No | Hive 1 internal temperature |
 | `hive_2_temp_c` | number | No | Hive 2 internal temperature |
+| `hive_1_humidity_percent` | number | No | Hive 1 internal relative humidity (from a paired in-hive BLE sensor) |
+| `hive_2_humidity_percent` | number | No | Hive 2 internal relative humidity (from a paired in-hive BLE sensor) |
 | `ambient_temp_c` | number | No | Ambient temperature |
 | `ambient_humidity_percent` | number | No | Ambient relative humidity |
 | `battery_voltage` | number | No | Legacy battery/supply voltage field |

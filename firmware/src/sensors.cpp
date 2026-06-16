@@ -120,15 +120,46 @@ String createMeasurementJson() {
 
   powerUpScales();
 
-  // Wired DS18B20 in-hive probes are now optional. When disabled the hive
-  // temperatures default to NAN and are filled from a paired HolyIot 25015 BLE
-  // sensor further down (see the BLE block below).
+  // ── In-hive BLE sensor scan FIRST ──────────────────────────────────────────
+  // We scan the paired in-hive BLE sensors (HolyIot 25015 and/or HiveInside
+  // ESP32-C6) before the wired sensors so we know which capabilities the BLE
+  // sensor already provides, and can skip the wired sensor that measures the
+  // same in-hive quantity (collision avoidance — see config.h BLE_OVERRIDE_*).
+#if ENABLE_HOLYIOT_BLE
+  blesensor::Snapshot bleSnap1;
+  blesensor::Snapshot bleSnap2;
+  blesensor::scanPairedSensors(bleSensorMac0, bleSensorMac1, bleSnap1, bleSnap2);
+
+  // Per-slot arbitration decisions (hive 1 = slot 1, hive 2 = slot 2).
+  const bool bleTakesTemp1 = BLE_OVERRIDE_DS18B20 && bleSnap1.providesTemp();
+  const bool bleTakesTemp2 = BLE_OVERRIDE_DS18B20 && bleSnap2.providesTemp();
+  const bool bleTakesMic    = BLE_OVERRIDE_MICS &&
+                              (bleSnap1.providesMic() || bleSnap2.providesMic());
+#endif
+
+  // Wired DS18B20 in-hive probes are optional. A probe is skipped for a hive
+  // whose paired BLE sensor already reports in-hive temperature, so each
+  // hive_N_temp_c carries exactly one source.
   float hiveTemp1 = NAN;
   float hiveTemp2 = NAN;
+  // In-hive relative humidity (sourced from a paired in-hive BLE sensor; there
+  // is no wired in-hive RH probe). Distinct from the ambient SHT40 humidity.
+  float hiveHumidity1 = NAN;
+  float hiveHumidity2 = NAN;
 #if ENABLE_DS18B20_HIVE_TEMP
-  ds18b20.requestTemperatures();
-  hiveTemp1 = ds18b20.getTempCByIndex(0);
-  hiveTemp2 = ds18b20.getTempCByIndex(1);
+  bool ds18Skip1 = false, ds18Skip2 = false;
+#if ENABLE_HOLYIOT_BLE
+  ds18Skip1 = bleTakesTemp1;
+  ds18Skip2 = bleTakesTemp2;
+  if (ds18Skip1 || ds18Skip2)
+    Serial.printf("[ARB] BLE supplies in-hive temp (h1=%d h2=%d); skipping wired DS18B20 for those\n",
+                  ds18Skip1, ds18Skip2);
+#endif
+  if (!(ds18Skip1 && ds18Skip2)) {
+    ds18b20.requestTemperatures();
+    if (!ds18Skip1) hiveTemp1 = ds18b20.getTempCByIndex(0);
+    if (!ds18Skip2) hiveTemp2 = ds18b20.getTempCByIndex(1);
+  }
 #endif
   float ambientTemp = NAN;
   float ambientHumidity = NAN;
@@ -186,24 +217,28 @@ String createMeasurementJson() {
   }
 #endif
 #if ENABLE_INMP441_MICS
-  MicMeasurement micResult = readMicSamples();
+  // The wired stereo INMP441 pair is skipped when a paired in-hive BLE sensor
+  // supplies acoustics (its FFT bands are mapped onto mic_left_*/mic_right_*
+  // instead). Avoids capturing — and uploading — two competing sound sources.
+  bool wiredMicUsed = true;
+#if ENABLE_HOLYIOT_BLE
+  if (bleTakesMic) {
+    wiredMicUsed = false;
+    Serial.println("[ARB] BLE supplies in-hive acoustics; skipping wired INMP441 mics");
+  }
+#endif
+  MicMeasurement micResult;
+  if (wiredMicUsed) micResult = readMicSamples();
 #endif
 
 #if ENABLE_HOLYIOT_BLE
-  // Passive BLE bridge for the in-hive HolyIot 25015 sensors. One short scan
-  // fills both slots (slot 1 -> hive 1, slot 2 -> hive 2) from the MACs paired
-  // in the provisioning portal. Temperature, humidity, pressure and a per-cycle
-  // acceleration magnitude come back per slot; a missing/unpaired sensor just
-  // reports present=false. Done before the WiFi upload so the BLE controller is
-  // released first.
-  blesensor::Snapshot bleSnap1;
-  blesensor::Snapshot bleSnap2;
-  blesensor::scanPairedSensors(bleSensorMac0, bleSensorMac1, bleSnap1, bleSnap2);
-
-  // In-hive temperature source: prefer the wired DS18B20 when it produced a
-  // valid reading; otherwise fall back to the BLE sensor's SHT40 temperature.
+  // In-hive temperature source: the wired DS18B20 (when not overridden above)
+  // takes priority; otherwise fall back to the BLE sensor's SHT40 temperature.
   if (isnan(hiveTemp1) && bleSnap1.present && !isnan(bleSnap1.temp_c)) hiveTemp1 = bleSnap1.temp_c;
   if (isnan(hiveTemp2) && bleSnap2.present && !isnan(bleSnap2.temp_c)) hiveTemp2 = bleSnap2.temp_c;
+  // In-hive humidity comes only from the BLE sensor (no wired in-hive RH probe).
+  if (bleSnap1.present && !isnan(bleSnap1.humidity_pct)) hiveHumidity1 = bleSnap1.humidity_pct;
+  if (bleSnap2.present && !isnan(bleSnap2.humidity_pct)) hiveHumidity2 = bleSnap2.humidity_pct;
 #endif
 
 // ---- BeeCounter polling -------------------------------------------------
@@ -242,6 +277,8 @@ String createMeasurementJson() {
   doc["scale_2_weight_kg"] = weight2;
   doc["hive_1_temp_c"] = hiveTemp1;
   doc["hive_2_temp_c"] = hiveTemp2;
+  doc["hive_1_humidity_percent"] = hiveHumidity1;
+  doc["hive_2_humidity_percent"] = hiveHumidity2;
   doc["ambient_temp_c"] = ambientTemp;
   doc["ambient_humidity_percent"] = ambientHumidity;
   doc["network_transport"] = "wifi";
@@ -270,6 +307,10 @@ String createMeasurementJson() {
   doc["battery_alert"] = batteryAlert;
 #endif
 #if ENABLE_INMP441_MICS
+  // Only emit the wired-mic fields when the wired pair was actually read; when a
+  // BLE sensor supplied acoustics, blesensor::writeSnapshotToJson below fills
+  // mic_left_*/mic_right_* instead.
+  if (wiredMicUsed) {
   doc["mic_ok"]                       = micResult.ok;
   doc["mic_sample_rate_hz"]           = (uint32_t)INMP441_SAMPLE_RATE;
   doc["mic_sample_frames"]            = (uint32_t)INMP441_SAMPLE_FRAMES;
@@ -291,6 +332,7 @@ String createMeasurementJson() {
   doc["mic_right_band_piping_dbfs"]   = micResult.right.bands.piping_dbfs;
   doc["mic_right_band_stress_dbfs"]   = micResult.right.bands.stress_dbfs;
   doc["mic_right_band_high_dbfs"]     = micResult.right.bands.high_dbfs;
+  }  // if (wiredMicUsed)
 #endif
 
   beecnt::writeSnapshotToJson(doc, 1, beeSnap1);

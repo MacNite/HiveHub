@@ -255,14 +255,14 @@ void handleBleScan() {
           "@media(prefers-color-scheme:dark){:root{--bg:#161618;--card:#1f1f23;--fg:#ececf1;--muted:#9aa0aa;--border:#33343a;--link:#f5b54a}code{background:#2a2a30}}"
           "</style>";
   html += "</head><body><div class='wrap'><h1>Nearby BLE devices</h1>";
-  html += "<p>HolyIot-looking sensors (a parseable 25015 payload) are marked. Copy a MAC, then paste it into a sensor slot on the <a href='/'>setup page</a>.</p>";
+  html += "<p>Recognised in-hive sensors (a parseable HolyIot 25015 or HiveInside payload) show their type in the last column. Copy a MAC, then paste it into a sensor slot on the <a href='/'>setup page</a>.</p>";
 
   if (found.empty()) {
     html += "<p>No BLE devices were seen during the scan. Make sure the sensor is powered and in range, then <a href='/ble/scan'>scan again</a>.</p>";
   } else {
-    html += "<table><tr><th>MAC</th><th>Name</th><th>RSSI</th><th>HolyIot?</th></tr>";
+    html += "<table><tr><th>MAC</th><th>Name</th><th>RSSI</th><th>Sensor type</th></tr>";
     for (const auto& d : found) {
-      html += "<tr><td><code>" + htmlEscape(d.mac) + "</code></td><td>" + htmlEscape(d.name) + "</td><td>" + String(d.rssi_dbm) + " dBm</td><td>" + (d.looks_like_holyiot ? "yes" : "") + "</td></tr>";
+      html += "<tr><td><code>" + htmlEscape(d.mac) + "</code></td><td>" + htmlEscape(d.name) + "</td><td>" + String(d.rssi_dbm) + " dBm</td><td>" + htmlEscape(blesensor::sensorTypeName(d.type)) + "</td></tr>";
     }
     html += "</table>";
     html += "<p><a href='/ble/scan'>Scan again</a></p>";
@@ -325,8 +325,10 @@ void handleSetupRoot() {
   html += "</fieldset>";
 
 #if ENABLE_HOLYIOT_BLE
-  html += "<fieldset><legend>In-hive BLE sensors (HolyIot 25015)</legend>";
+  html += "<fieldset><legend>In-hive BLE sensors (HolyIot 25015 / HiveInside)</legend>";
   html += "<p>Pair up to two sensors. Slot 1 maps to hive 1, slot 2 to hive 2. ";
+  html += "Both the HolyIot 25015 beacon and the HiveInside ESP32-C6 sensor are supported and auto-detected. ";
+  html += "When a paired sensor reports temperature, vibration or sound, the matching wired sensor for that hive is disabled automatically to avoid duplicate readings. ";
   html += "Enter each sensor's MAC address, or <a href='/ble/scan'>scan for nearby sensors</a> and copy a MAC below.</p>";
   html += "<label>Sensor 1 MAC (hive 1)</label><input name='ble_mac0' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(bleSensorMac0) + "'>";
   html += "<label>Sensor 2 MAC (hive 2)</label><input name='ble_mac1' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(bleSensorMac1) + "'>";

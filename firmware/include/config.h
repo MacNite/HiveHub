@@ -126,6 +126,46 @@
 #endif
 
 // ==============================
+// HIVEINSIDE ESP32-C6 IN-HIVE BLE SENSOR (optional, shares the same bridge)
+// ==============================
+// The HiveInside ESP32-C6 prototype advertises through the SAME passive scan
+// bridge as the HolyIot 25015 (ENABLE_HOLYIOT_BLE turns the bridge on). Its
+// manufacturer-specific payload is auto-detected by a distinct company id plus a
+// magic byte, so the two formats coexist with no extra enable flag. Unlike the
+// HolyIot beacon it also carries vibration AND acoustic FFT bands, which the
+// bridge folds into the existing accel_{slot}_band_* and mic_{left,right}_band_*
+// measurement fields (slot 1 -> mic_left, slot 2 -> mic_right).
+#ifndef HIVEINSIDE_COMPANY_ID
+#define HIVEINSIDE_COMPANY_ID 0x02E5   // Espressif's Bluetooth SIG company id
+#endif
+
+// ==============================
+// BLE vs WIRED SENSOR ARBITRATION (collision avoidance)
+// ==============================
+// When a paired in-hive BLE sensor reports a capability, the wired sensor that
+// measures the SAME in-hive quantity is skipped that cycle, so each upload
+// carries one authoritative value per field instead of duplicate/conflicting
+// readings. Arbitration is per slot: hive 1 follows the slot-1 BLE sensor,
+// hive 2 the slot-2 sensor.
+//
+// The SHT40 is deliberately NOT arbitrated: it is an AMBIENT (outside-hive)
+// temp/humidity sensor, and the BLE in-hive humidity lands in its own
+// ble_{slot}_humidity_percent field — a different measurement that never
+// collides — so the SHT40 always stays on.
+#ifndef BLE_OVERRIDES_WIRED
+#define BLE_OVERRIDES_WIRED 1
+#endif
+#ifndef BLE_OVERRIDE_DS18B20
+#define BLE_OVERRIDE_DS18B20 BLE_OVERRIDES_WIRED   // in-hive temperature
+#endif
+#ifndef BLE_OVERRIDE_MICS
+#define BLE_OVERRIDE_MICS BLE_OVERRIDES_WIRED       // in-hive acoustics (INMP441)
+#endif
+#ifndef BLE_OVERRIDE_ACCEL
+#define BLE_OVERRIDE_ACCEL BLE_OVERRIDES_WIRED      // in-hive vibration (LIS3DH)
+#endif
+
+// ==============================
 // PIN MAP
 // ==============================
 #define HX1_DOUT 16

@@ -220,6 +220,11 @@ class MeasurementIn(BaseModel):
     scale_2_weight_kg: Optional[float] = None
     hive_1_temp_c: Optional[float] = None
     hive_2_temp_c: Optional[float] = None
+    # In-hive relative humidity (currently sourced from a paired in-hive BLE
+    # sensor; mirrors hive_N_temp_c). Distinct from ambient_humidity_percent,
+    # which is the outside-hive SHT40 reading.
+    hive_1_humidity_percent: Optional[float] = None
+    hive_2_humidity_percent: Optional[float] = None
     ambient_temp_c: Optional[float] = None
     ambient_humidity_percent: Optional[float] = None
     battery_voltage: Optional[float] = None
@@ -618,6 +623,8 @@ def init_db():
                     scale_2_weight_kg DOUBLE PRECISION,
                     hive_1_temp_c DOUBLE PRECISION,
                     hive_2_temp_c DOUBLE PRECISION,
+                    hive_1_humidity_percent DOUBLE PRECISION,
+                    hive_2_humidity_percent DOUBLE PRECISION,
                     ambient_temp_c DOUBLE PRECISION,
                     ambient_humidity_percent DOUBLE PRECISION,
                     battery_voltage DOUBLE PRECISION,
@@ -822,6 +829,8 @@ def init_db():
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS ble_1_pressure_hpa        DOUBLE PRECISION;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS ble_2_humidity_percent    DOUBLE PRECISION;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS ble_2_pressure_hpa        DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hive_1_humidity_percent   DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hive_2_humidity_percent   DOUBLE PRECISION;
 
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS claim_code_hash TEXT;
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS api_key_hash TEXT;
@@ -1023,7 +1032,8 @@ def health():
 MEASUREMENT_INSERT_SQL = """
                 INSERT INTO measurements (
                     device_id, measured_at, scale_1_weight_kg, scale_2_weight_kg,
-                    hive_1_temp_c, hive_2_temp_c, ambient_temp_c,
+                    hive_1_temp_c, hive_2_temp_c,
+                    hive_1_humidity_percent, hive_2_humidity_percent, ambient_temp_c,
                     ambient_humidity_percent, battery_voltage, battery_soc_percent,
                     battery_alert, battery_monitor_ok, solar_monitor_ok,
                     solar_bus_voltage_v, solar_shunt_voltage_mv, solar_load_voltage_v,
@@ -1063,6 +1073,7 @@ MEASUREMENT_INSERT_SQL = """
                 VALUES (
                     %(device_id)s, %(measured_at)s, %(scale_1_weight_kg)s,
                     %(scale_2_weight_kg)s, %(hive_1_temp_c)s, %(hive_2_temp_c)s,
+                    %(hive_1_humidity_percent)s, %(hive_2_humidity_percent)s,
                     %(ambient_temp_c)s, %(ambient_humidity_percent)s,
                     %(battery_voltage)s, %(battery_soc_percent)s,
                     %(battery_alert)s, %(battery_monitor_ok)s, %(solar_monitor_ok)s,
@@ -1113,6 +1124,8 @@ def measurement_insert_params(payload: "MeasurementIn", measured_at: datetime) -
         "scale_2_weight_kg": payload.scale_2_weight_kg,
         "hive_1_temp_c": payload.hive_1_temp_c,
         "hive_2_temp_c": payload.hive_2_temp_c,
+        "hive_1_humidity_percent": payload.hive_1_humidity_percent,
+        "hive_2_humidity_percent": payload.hive_2_humidity_percent,
         "ambient_temp_c": payload.ambient_temp_c,
         "ambient_humidity_percent": payload.ambient_humidity_percent,
         "battery_voltage": payload.battery_voltage_v if payload.battery_voltage_v is not None else payload.battery_voltage,
@@ -1413,6 +1426,8 @@ def import_measurements(
 #                              102  ble_1_pressure_hpa
 #                              103  ble_2_humidity_percent
 #                              104  ble_2_pressure_hpa
+#                              105  hive_1_humidity_percent
+#                              106  hive_2_humidity_percent
 # ---------------------------------------------------------------------------
 
 MEASUREMENT_SELECT_COLUMNS = """
@@ -1507,7 +1522,9 @@ MEASUREMENT_SELECT_COLUMNS = """
     COALESCE(ble_1_humidity_percent, NULLIF(raw_json->>'ble_1_humidity_percent', '')::double precision) AS ble_1_humidity_percent,
     COALESCE(ble_1_pressure_hpa,     NULLIF(raw_json->>'ble_1_pressure_hpa',     '')::double precision) AS ble_1_pressure_hpa,
     COALESCE(ble_2_humidity_percent, NULLIF(raw_json->>'ble_2_humidity_percent', '')::double precision) AS ble_2_humidity_percent,
-    COALESCE(ble_2_pressure_hpa,     NULLIF(raw_json->>'ble_2_pressure_hpa',     '')::double precision) AS ble_2_pressure_hpa
+    COALESCE(ble_2_pressure_hpa,     NULLIF(raw_json->>'ble_2_pressure_hpa',     '')::double precision) AS ble_2_pressure_hpa,
+    COALESCE(hive_1_humidity_percent, NULLIF(raw_json->>'hive_1_humidity_percent', '')::double precision) AS hive_1_humidity_percent,
+    COALESCE(hive_2_humidity_percent, NULLIF(raw_json->>'hive_2_humidity_percent', '')::double precision) AS hive_2_humidity_percent
 """
 
 
@@ -1630,6 +1647,9 @@ def measurement_row_to_dict(r):
         "ble_1_pressure_hpa":        r[102],
         "ble_2_humidity_percent":    r[103],
         "ble_2_pressure_hpa":        r[104],
+        # In-hive relative humidity (mirrors hive_N_temp_c; appended last).
+        "hive_1_humidity_percent":   r[105],
+        "hive_2_humidity_percent":   r[106],
     }
 
 
