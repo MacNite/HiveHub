@@ -710,7 +710,7 @@
         "uuid": "0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
       }
     ],
-    "used_designators": "J21",
+    "used_designators": "INA219\\-Solar+1,TP4056\\-2,J21",
     "variants": []
   },
   "sheets": [
