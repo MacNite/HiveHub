@@ -162,6 +162,12 @@ fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
 .sensor .tag.exp { color: var(--warn); border-color: #e7c98a; background: #fff4dd; }
 .sensor .tag.ble { color: #1565c0; border-color: #bcd6f5; background: #eaf2fd; }
 
+/* Wireless sensor rows (dynamically added) */
+.wsensor { border: 1px solid var(--line); border-radius: 10px; padding: .7rem .85rem; margin: .6rem 0; background: #fff; }
+.wsensor .field { margin: .5rem 0; }
+.wsensor [data-wremove] { padding: .4rem .65rem; }
+#add-wireless[disabled] { opacity: .5; cursor: not-allowed; }
+
 .note { font-size: .85rem; padding: .6rem .8rem; border-radius: 9px; margin-top: .7rem; }
 .note.warn { background: #fff4dd; border: 1px solid #e7c98a; color: var(--warn); }
 .note.info { background: #eaf2fd; border: 1px solid #bcd6f5; color: #1565c0; }

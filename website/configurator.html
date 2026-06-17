@@ -149,74 +149,57 @@
             </div>
           </div>
 
-          <!-- In-hive BLE sensor bridge (HolyIot + HiveInside) -->
-          <div class="sensor" data-sensor="ble">
-            <span class="tag ble">Wireless · BLE bridge</span>
-            <label class="toggle">
-              <input type="checkbox" data-toggle />
-              <span><span class="t-title">📶 In-hive BLE sensor (HolyIot 25015 / HiveInside)</span>
-              <span class="t-desc">Passively scans paired in-hive sensors each cycle. The HolyIot 25015 beacon (temp / humidity / pressure / accel) and the HiveInside ESP32-C6 (adds vibration + acoustic FFT bands) are both auto-detected.</span></span>
-            </label>
-            <div class="opts">
-              <div class="field row">
-                <div><label>Scan seconds / cycle</label><input type="number" data-opt="scan" value="6" min="1" /></div>
-                <div><label>HolyIot Company ID (16-bit)</label><input type="text" data-opt="company" value="0xFFFF" /></div>
-              </div>
-              <label class="toggle" style="margin:.4rem 0">
-                <input type="checkbox" data-opt="active" checked />
-                <span><span class="t-title" style="font-size:.92rem">Active scan</span>
-                <span class="t-desc">Also fetch the device name (better pairing, slightly more power).</span></span>
-              </label>
+          <!-- Wireless BLE sensors (dynamic — up to 6: max 2 in-hive, 2 scales, 2 bee counters) -->
+          <div class="sensor on" data-wireless>
+            <span class="tag ble">Wireless · BLE</span>
+            <span class="t-title">📶 Wireless sensors</span>
+            <span class="t-desc">Battery BLE sensors, paired by MAC later from the provisioning portal.
+              Add up to 6 — at most 2 in-hive sensors, 2 scales and 2 bee counters.</span>
 
-              <div class="note info" style="margin:.2rem 0 .5rem">Pair up to two sensors (slot 1 → hive 1,
-                slot 2 → hive 2) later from the provisioning portal; their MAC addresses persist in
-                Preferences. HiveInside vibration bands map onto <code>accel_N_band_*</code> and its
-                acoustic bands onto <code>mic_left/right_band_*</code>.</div>
+            <div class="opts" style="display:block">
+              <p class="muted" id="wireless-empty" style="font-size:.85rem;margin:.2rem 0 0">
+                No wireless sensors yet — add one to scan paired beacons / GATT devices each cycle.</p>
+              <div id="wireless-list"></div>
+              <button type="button" class="btn ghost small" id="add-wireless" style="margin-top:.6rem">➕ Add wireless sensor</button>
+              <p class="muted" id="wireless-full" style="display:none;font-size:.82rem;margin:.5rem 0 0">
+                Maximum of 6 wireless sensors reached (2 per category).</p>
 
-              <p class="muted" style="margin:.6rem 0 .2rem; font-size:.85rem"><strong>Collision avoidance</strong>
-                — when a paired sensor supplies one of these, disable the wired sensor for that hive so each
-                value has a single source:</p>
-              <label class="toggle" style="margin:.3rem 0">
-                <input type="checkbox" data-opt="ovr_temp" checked />
-                <span><span class="t-title" style="font-size:.92rem">Override wired DS18B20 temperature</span>
-                <span class="t-desc">In-hive temp comes from the BLE sensor instead of the 1-Wire probe.</span></span>
-              </label>
-              <label class="toggle" style="margin:.3rem 0">
-                <input type="checkbox" data-opt="ovr_mics" checked />
-                <span><span class="t-title" style="font-size:.92rem">Override wired INMP441 microphones</span>
-                <span class="t-desc">Acoustics come from a HiveInside sensor; the wired stereo mics are skipped.</span></span>
-              </label>
-              <label class="toggle" style="margin:.3rem 0">
-                <input type="checkbox" data-opt="ovr_accel" checked />
-                <span><span class="t-title" style="font-size:.92rem">Override wired accelerometer</span>
-                <span class="t-desc">Vibration comes from the BLE sensor; the wired LIS3DH is skipped.</span></span>
-              </label>
-              <div class="note info">The ambient SHT40 is never overridden — it measures outside-hive
-                climate, a different quantity stored separately, so it does not collide.</div>
-            </div>
-          </div>
+              <!-- Shared in-hive scan + collision-avoidance options (only when an in-hive sensor is present) -->
+              <div id="inhive-global" style="display:none">
+                <div class="note info" style="margin:1rem 0 .5rem">In-hive sensors are scanned passively
+                  each cycle (slot 1 → hive 1, slot 2 → hive 2). HiveInside / HiveHeart vibration bands map
+                  onto <code>accel_N_band_*</code> and their acoustic bands onto <code>mic_left/right_band_*</code>.</div>
+                <div class="field row">
+                  <div><label>Scan seconds / cycle</label><input type="number" id="ble_scan" value="6" min="1" /></div>
+                  <div><label>HolyIot Company ID (16-bit)</label><input type="text" id="ble_company" value="0xFFFF" /></div>
+                </div>
+                <label class="toggle" style="margin:.4rem 0">
+                  <input type="checkbox" id="ble_active" checked />
+                  <span><span class="t-title" style="font-size:.92rem">Active scan</span>
+                  <span class="t-desc">Also fetch the device name (better pairing, slightly more power).</span></span>
+                </label>
 
-          <!-- GATT BLE (not supported yet) -->
-          <div class="sensor" data-sensor="gatt">
-            <span class="tag exp">Wireless · GATT · experimental</span>
-            <label class="toggle">
-              <input type="checkbox" data-toggle />
-              <span><span class="t-title">🔗 GATT BLE sensor (connected)</span>
-              <span class="t-desc">Connect to a sensor's GATT services instead of reading advertisements.</span></span>
-            </label>
-            <div class="opts">
-              <div class="field">
-                <label>Service UUID <span class="hint">— optional, for your own notes</span></label>
-                <input type="text" data-opt="svc" placeholder="0000181a-0000-1000-8000-00805f9b34fb" />
+                <p class="muted" style="margin:.6rem 0 .2rem; font-size:.85rem"><strong>Collision avoidance</strong>
+                  — when a paired in-hive sensor supplies one of these, disable the wired sensor for that hive so each
+                  value has a single source:</p>
+                <label class="toggle" style="margin:.3rem 0">
+                  <input type="checkbox" id="ovr_temp" checked />
+                  <span><span class="t-title" style="font-size:.92rem">Override wired DS18B20 temperature</span>
+                  <span class="t-desc">In-hive temp comes from the BLE sensor instead of the 1-Wire probe.</span></span>
+                </label>
+                <label class="toggle" style="margin:.3rem 0">
+                  <input type="checkbox" id="ovr_mics" checked />
+                  <span><span class="t-title" style="font-size:.92rem">Override wired INMP441 microphones</span>
+                  <span class="t-desc">Acoustics come from a HiveInside / HiveHeart sensor; the wired stereo mics are skipped.</span></span>
+                </label>
+                <label class="toggle" style="margin:.3rem 0">
+                  <input type="checkbox" id="ovr_accel" checked />
+                  <span><span class="t-title" style="font-size:.92rem">Override wired accelerometer</span>
+                  <span class="t-desc">Vibration comes from the BLE sensor; the wired LIS3DH is skipped.</span></span>
+                </label>
+                <div class="note info">The ambient SHT40 is never overridden — it measures outside-hive
+                  climate, a different quantity stored separately, so it does not collide.</div>
               </div>
-              <div class="field">
-                <label>Characteristic UUID <span class="hint">— optional</span></label>
-                <input type="text" data-opt="chr" placeholder="00002a6e-0000-1000-8000-00805f9b34fb" />
-              </div>
-              <div class="note warn">⚠ <strong>Not supported by the firmware yet.</strong> Enabling this
-                writes <code>ENABLE_GATT_BLE 1</code> and your UUIDs into <code>secrets.h</code> as a
-                placeholder so your config is ready, but the current firmware ignores it. Track the
-                feature on GitHub before relying on it.</div>
             </div>
           </div>
 

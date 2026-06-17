@@ -188,6 +188,22 @@
 #endif
 
 // ==============================
+// WIRELESS SENSOR CATALOG (configurator)
+// ==============================
+// The secrets.h configurator can describe up to six wireless BLE sensors across
+// three categories: in-hive (max 2), scale (max 2) and bee counter (max 2). The
+// in-hive bridge (ENABLE_HOLYIOT_BLE above) is the only category the current
+// firmware reads; the two flags below — plus the per-slot WSCALE_* / WBEECNT_*
+// and INHIVE_* TYPE / PROTOCOL / GATT-UUID macros the configurator writes — are
+// captured for a future firmware build and are otherwise unused today.
+#ifndef ENABLE_WIRELESS_SCALE
+#define ENABLE_WIRELESS_SCALE 0
+#endif
+#ifndef ENABLE_WIRELESS_BEECOUNTER
+#define ENABLE_WIRELESS_BEECOUNTER 0
+#endif
+
+// ==============================
 // PIN MAP
 // ==============================
 #define HX1_DOUT 16

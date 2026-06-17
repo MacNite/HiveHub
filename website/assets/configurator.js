@@ -7,6 +7,27 @@
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
   var $$ = function (sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
 
+  // ── Wireless sensor catalog ─────────────────────────────────────────────────
+  // Each entry: human label, category (slotting + limit), transport protocol and
+  // — for GATT devices — the service / characteristic UUIDs to pre-fill. The
+  // `supported` flag drives the "not in firmware yet" warning shown in the UI.
+  var WTYPES = {
+    holyiot:    { label: "HolyIot 25015 (BLE beacon)",                       cat: "inhive",     proto: "beacon", supported: true  },
+    hiveinside: { label: "HiveInside ESP32-C6 (GATT)",                       cat: "inhive",     proto: "gatt",   supported: true,
+                  svc: "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01", chr: "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01" },
+    hiveheart:  { label: "HiveHeart — beehivemonitoring.com (GATT)",         cat: "inhive",     proto: "gatt",   supported: true,
+                  svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
+    hivescale:  { label: "HiveScale — beehivemonitoring.com (GATT)",         cat: "scale",      proto: "gatt",   supported: true,
+                  svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
+    beecounter: { label: "BeeCounter — beehivemonitoring.com (GATT)",        cat: "beecounter", proto: "gatt",   supported: false },
+    ruvitag:    { label: "RuuviTag 4-in-1 (BLE beacon)",                     cat: "inhive",     proto: "beacon", supported: false }
+  };
+  var TYPE_ORDER = ["holyiot", "hiveinside", "hiveheart", "hivescale", "beecounter", "ruvitag"];
+  var CAT_LABEL = { inhive: "In-hive", scale: "Scale", beecounter: "Bee counter" };
+  var CAT_SLOT  = { inhive: "hive", scale: "scale", beecounter: "counter" };
+  var CAT_LIMIT = 2;
+  var MAX_TOTAL = 6;
+
   // ── Build the Wi-Fi rows (network 1 always on, 2 & 3 optional) ──────────────
   var wifiDefs = [
     { i: 1, on: true,  ssid: "your-wifi-ssid-1", pass: "your-wifi-password-1", required: true },
@@ -41,6 +62,122 @@
     cb.addEventListener("change", function () { s.classList.toggle("on", cb.checked); render(); });
   });
 
+  // ── Wireless sensor rows (dynamic add / remove) ─────────────────────────────
+  var wireList = $("#wireless-list");
+  var widSeq = 0;
+
+  function typeOptionsHtml(selected) {
+    return TYPE_ORDER.map(function (k) {
+      return '<option value="' + k + '"' + (k === selected ? " selected" : "") + ">" + WTYPES[k].label + "</option>";
+    }).join("");
+  }
+
+  // Rows currently configured for a category (DOM order), optionally excluding one.
+  function rowsInCat(cat, except) {
+    return $$(".wsensor", wireList).filter(function (r) {
+      if (r === except) return false;
+      return WTYPES[$('[data-wtype]', r).value].cat === cat;
+    });
+  }
+
+  // The first catalog type whose category still has a free slot, or null if full.
+  function firstAvailableType() {
+    for (var i = 0; i < TYPE_ORDER.length; i++) {
+      var k = TYPE_ORDER[i];
+      if (rowsInCat(WTYPES[k].cat).length < CAT_LIMIT) return k;
+    }
+    return null;
+  }
+
+  function addWireless(typeKey) {
+    var key = typeKey || firstAvailableType();
+    if (!key) { toast("⚠ Max 6 wireless sensors (2 per category)"); return; }
+
+    var id = ++widSeq;
+    var row = document.createElement("div");
+    row.className = "wsensor";
+    row.setAttribute("data-wid", id);
+    row.innerHTML =
+      '<div class="row" style="align-items:flex-end">' +
+        '<div class="field" style="margin:0"><label>Sensor type</label>' +
+          '<select data-wtype>' + typeOptionsHtml(key) + '</select></div>' +
+        '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-wremove title="Remove">✕</button></div>' +
+      '</div>' +
+      '<p class="wmeta muted" style="font-size:.82rem;margin:.4rem 0 0"></p>' +
+      '<div class="wgatt" style="display:none">' +
+        '<div class="field"><label>Service UUID</label><input type="text" data-wsvc placeholder="service UUID" /></div>' +
+        '<div class="field"><label>Characteristic UUID</label><input type="text" data-wchr placeholder="characteristic UUID" /></div>' +
+      '</div>' +
+      '<div class="note warn wunsupported" style="display:none">⚠ <strong>Not supported by the firmware yet.</strong> ' +
+        'Its macros are written to <code>secrets.h</code> as a placeholder so your config is ready for a future build.</div>';
+    wireList.appendChild(row);
+
+    var sel = $('[data-wtype]', row);
+    sel.addEventListener("change", function () { onTypeChange(row); });
+    $('[data-wremove]', row).addEventListener("click", function () {
+      row.parentNode.removeChild(row); refreshWireless(); render();
+    });
+    fillUuids(row, key);
+    refreshWireless();
+    render();
+  }
+
+  // Reject a type change that would overflow its category; otherwise re-fill UUIDs.
+  function onTypeChange(row) {
+    var sel = $('[data-wtype]', row);
+    var cat = WTYPES[sel.value].cat;
+    if (rowsInCat(cat, row).length >= CAT_LIMIT) {
+      toast("⚠ Only " + CAT_LIMIT + " " + CAT_LABEL[cat].toLowerCase() + " sensors allowed");
+      // Revert to a type whose category still has room.
+      sel.value = firstAvailableTypeFor(row);
+    }
+    fillUuids(row, sel.value, true);
+    refreshWireless();
+    render();
+  }
+
+  function firstAvailableTypeFor(row) {
+    for (var i = 0; i < TYPE_ORDER.length; i++) {
+      var k = TYPE_ORDER[i];
+      if (rowsInCat(WTYPES[k].cat, row).length < CAT_LIMIT) return k;
+    }
+    return TYPE_ORDER[0];
+  }
+
+  // Pre-fill the GATT UUID inputs from the catalog. `force` (set on an explicit
+  // type change) refreshes them to the new type's defaults; otherwise only empty
+  // fields are filled so a user's manual edits survive.
+  function fillUuids(row, key, force) {
+    var def = WTYPES[key];
+    var svc = $('[data-wsvc]', row), chr = $('[data-wchr]', row);
+    if (def.proto !== "gatt") { svc.value = ""; chr.value = ""; return; }
+    if (force || !svc.value.trim()) svc.value = def.svc || "";
+    if (force || !chr.value.trim()) chr.value = def.chr || "";
+  }
+
+  // Recompute slot labels, warnings and the shared in-hive block visibility.
+  function refreshWireless() {
+    var rows = $$(".wsensor", wireList);
+    var seen = { inhive: 0, scale: 0, beecounter: 0 };
+    var haveInhive = false;
+    rows.forEach(function (r) {
+      var def = WTYPES[$('[data-wtype]', r).value];
+      var slot = ++seen[def.cat];
+      if (def.cat === "inhive") haveInhive = true;
+      $('.wmeta', r).textContent = CAT_LABEL[def.cat] + " · " + CAT_SLOT[def.cat] + " " + slot +
+        "  ·  " + (def.proto === "gatt" ? "GATT" : "BLE beacon");
+      $('.wgatt', r).style.display = def.proto === "gatt" ? "block" : "none";
+      $('.wunsupported', r).style.display = def.supported ? "none" : "block";
+    });
+    $("#wireless-empty").style.display = rows.length ? "none" : "block";
+    $("#inhive-global").style.display = haveInhive ? "block" : "none";
+    var full = rows.length >= MAX_TOTAL || firstAvailableType() === null;
+    $("#add-wireless").disabled = full;
+    $("#wireless-full").style.display = full ? "block" : "none";
+  }
+
+  $("#add-wireless").addEventListener("click", function () { addWireless(); });
+
   // Re-render on any input change.
   $("#cfg").addEventListener("input", render);
 
@@ -59,10 +196,9 @@
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function val(sel) { var el = $(sel); return el ? el.value.trim() : ""; }
   function opt(sensor, name) { var el = $('[data-opt="' + name + '"]', $('.sensor[data-sensor="' + sensor + '"]')); return el ? el.value.trim() : ""; }
-  function optChecked(sensor, name) { var el = $('[data-opt="' + name + '"]', $('.sensor[data-sensor="' + sensor + '"]')); return el ? el.checked : false; }
   function enabled(sensor) { return $('.sensor[data-sensor="' + sensor + '"] [data-toggle]').checked; }
   function esc(s) { return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"'); }
-  function def(name, value) { return "#define " + name.padEnd(24, " ") + " " + value; }
+  function def(name, value) { return "#define " + name.padEnd(26, " ") + " " + value; }
   function defStr(name, value) { return def(name, '"' + esc(value) + '"'); }
 
   // ── The generator ───────────────────────────────────────────────────────────
@@ -146,33 +282,7 @@
     }
     p("");
 
-    // In-hive BLE sensor bridge (HolyIot 25015 + HiveInside ESP32-C6).
-    p("// In-hive BLE sensor bridge: passively scans paired sensors each cycle.");
-    p("// Auto-detects the HolyIot 25015 beacon and the HiveInside ESP32-C6 sensor.");
-    p(def("ENABLE_HOLYIOT_BLE", enabled("ble") ? "1" : "0"));
-    if (enabled("ble")) {
-      p(def("HOLYIOT_BLE_SCAN_SECONDS", opt("ble", "scan")));
-      p(def("HOLYIOT_BLE_ACTIVE_SCAN", optChecked("ble", "active") ? "1" : "0"));
-      p(def("HOLYIOT_COMPANY_ID", opt("ble", "company")));
-      p("// BLE vs wired arbitration: 1 = a paired in-hive BLE sensor disables");
-      p("// the wired sensor that measures the same in-hive quantity (per hive).");
-      p(def("BLE_OVERRIDE_DS18B20", optChecked("ble", "ovr_temp") ? "1" : "0"));
-      p(def("BLE_OVERRIDE_MICS", optChecked("ble", "ovr_mics") ? "1" : "0"));
-      p(def("BLE_OVERRIDE_ACCEL", optChecked("ble", "ovr_accel") ? "1" : "0"));
-    }
-    p("");
-
-    // GATT BLE — experimental, not yet supported by firmware
-    p("// GATT BLE sensor (connected). EXPERIMENTAL — not yet supported by the firmware.");
-    p("// These macros are placeholders so your config is ready for a future build.");
-    p(def("ENABLE_GATT_BLE", enabled("gatt") ? "1" : "0"));
-    if (enabled("gatt")) {
-      var svc = opt("gatt", "svc");
-      var chr = opt("gatt", "chr");
-      if (svc) p(defStr("GATT_SERVICE_UUID", svc));
-      if (chr) p(defStr("GATT_CHAR_UUID", chr));
-    }
-    p("");
+    buildWireless(p);
 
     // INA219 solar
     p("// INA219 solar / load power telemetry (off-grid).");
@@ -200,6 +310,73 @@
     p("");
 
     return L.join("\n");
+  }
+
+  // ── Wireless sensor macros ────────────────────────────────────────────────
+  function buildWireless(p) {
+    var rows = $$(".wsensor", wireList);
+    var byCat = { inhive: [], scale: [], beecounter: [] };
+    rows.forEach(function (r) {
+      var key = $('[data-wtype]', r).value;
+      byCat[WTYPES[key].cat].push({ row: r, key: key, meta: WTYPES[key] });
+    });
+
+    p("// ==============================");
+    p("// WIRELESS SENSORS (BLE)");
+    p("// ==============================");
+    p("// Up to 6 wireless sensors: at most 2 in-hive sensors, 2 scales, 2 bee");
+    p("// counters. Pair each sensor's MAC from the provisioning portal after flashing.");
+    p("// The in-hive BLE bridge is consumed by the current firmware; the wireless");
+    p("// scale and bee-counter macros are written so the device's intended layout is");
+    p("// captured, ready for a future firmware build.");
+    p("");
+
+    // --- In-hive sensors (slot 1 -> hive 1, slot 2 -> hive 2) -----------------
+    var inhive = byCat.inhive;
+    p("// ---- In-hive BLE sensors (slot 1 -> hive 1, slot 2 -> hive 2) ----");
+    p(def("ENABLE_HOLYIOT_BLE", inhive.length ? "1" : "0"));
+    if (inhive.length) {
+      p(def("HOLYIOT_BLE_SCAN_SECONDS", val("#ble_scan") || "6"));
+      p(def("HOLYIOT_BLE_ACTIVE_SCAN", $("#ble_active").checked ? "1" : "0"));
+      p(def("HOLYIOT_COMPANY_ID", val("#ble_company") || "0xFFFF"));
+      var usesGatt = inhive.some(function (s) { return s.meta.proto === "gatt"; });
+      p(def("HIVEINSIDE_USE_GATT", usesGatt ? "1" : "0"));
+      inhive.forEach(function (s, i) { emitSlot(p, "INHIVE_" + (i + 1), s); });
+      p("");
+      p("// In-hive BLE overrides the wired sensor measuring the same quantity (per hive).");
+      p(def("BLE_OVERRIDE_DS18B20", $("#ovr_temp").checked ? "1" : "0"));
+      p(def("BLE_OVERRIDE_MICS", $("#ovr_mics").checked ? "1" : "0"));
+      p(def("BLE_OVERRIDE_ACCEL", $("#ovr_accel").checked ? "1" : "0"));
+    }
+    p("");
+
+    // --- Wireless scales ------------------------------------------------------
+    var scales = byCat.scale;
+    p("// ---- Wireless scales (beehivemonitoring.com HiveScale, GATT) ----");
+    p(def("ENABLE_WIRELESS_SCALE", scales.length ? "1" : "0"));
+    scales.forEach(function (s, i) { emitSlot(p, "WSCALE_" + (i + 1), s); });
+    p("");
+
+    // --- Wireless bee counters ------------------------------------------------
+    var bc = byCat.beecounter;
+    p("// ---- Wireless bee counters (GATT) ----");
+    p(def("ENABLE_WIRELESS_BEECOUNTER", bc.length ? "1" : "0"));
+    bc.forEach(function (s, i) { emitSlot(p, "WBEECNT_" + (i + 1), s); });
+    p("");
+  }
+
+  function emitSlot(p, prefix, s) {
+    var m = s.meta;
+    var tail = m.supported ? "" : "   // placeholder — no firmware support yet";
+    p(defStr(prefix + "_TYPE", s.key) + tail);
+    p(defStr(prefix + "_PROTOCOL", m.proto));
+    if (m.proto === "gatt") {
+      var svcEl = $('[data-wsvc]', s.row), chrEl = $('[data-wchr]', s.row);
+      var svc = (svcEl && svcEl.value.trim()) || m.svc || "";
+      var chr = (chrEl && chrEl.value.trim()) || m.chr || "";
+      if (svc) p(defStr(prefix + "_GATT_SERVICE_UUID", svc));
+      if (chr) p(defStr(prefix + "_GATT_CHAR_UUID", chr));
+    }
   }
 
   function render() { $("#preview").textContent = build(); }
@@ -241,5 +418,6 @@
   }
 
   // Initial paint.
+  refreshWireless();
   render();
 })();

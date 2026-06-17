@@ -124,6 +124,35 @@
 #define HOLYIOT_COMPANY_ID       0xFFFF
 
 // ==============================
+// WIRELESS SENSOR CATALOG (optional)
+// ==============================
+// The secrets.h configurator (website/configurator.html) can describe up to six
+// wireless BLE sensors across three categories — at most 2 in-hive sensors, 2
+// scales and 2 bee counters. In-hive sensors are scanned by the bridge above
+// (ENABLE_HOLYIOT_BLE); the scale and bee-counter macros are placeholders that
+// capture the intended layout for a future firmware build.
+//
+// Supported in-hive types: HolyIot 25015 (beacon), HiveInside ESP32-C6 (beacon
+// or GATT), HiveHeart (GATT, beehivemonitoring.com). Placeholders awaiting
+// firmware support: RuuviTag 4-in-1 (beacon), wireless HiveScale (GATT) and
+// wireless BeeCounter (GATT).
+//
+// Each in-hive slot (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) records the chosen
+// sensor type, its transport and, for GATT devices, the service / characteristic
+// UUIDs. Example (HiveHeart on hive 1, HolyIot beacon on hive 2):
+//#define HIVEINSIDE_USE_GATT          1
+//#define INHIVE_1_TYPE                "hiveheart"
+//#define INHIVE_1_PROTOCOL            "gatt"
+//#define INHIVE_1_GATT_SERVICE_UUID   "0d01c3b8-eff2-44bc-9260-3256eb957268"
+//#define INHIVE_1_GATT_CHAR_UUID      "513849eb-913d-4f80-8c44-3f0685533d6e"
+//#define INHIVE_2_TYPE                "holyiot"
+//#define INHIVE_2_PROTOCOL            "beacon"
+
+// Wireless scale / bee-counter categories (placeholders — not consumed yet).
+#define ENABLE_WIRELESS_SCALE        0
+#define ENABLE_WIRELESS_BEECOUNTER   0
+
+// ==============================
 // OPTIONAL FLAGS
 // ==============================
 
