@@ -1,7 +1,7 @@
 // ble_sensor.cpp — HolyIot 25015 passive BLE bridge (NimBLE scanner + parser).
 #include "ble_sensor.h"
 
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
 
 #include <NimBLEDevice.h>
 #include <math.h>
@@ -583,4 +583,4 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
 
 }  // namespace blesensor
 
-#endif  // ENABLE_HOLYIOT_BLE
+#endif  // ENABLE_BLE_SCAN

@@ -82,9 +82,9 @@ void setup() {
   debugLine();
   Serial.println("Hive Scale ESP32 firmware with provisioning + OTA");
   Serial.printf("Firmware version: %s\n", FIRMWARE_VERSION);
-  Serial.printf("Optional modules: INA219=%d MAX17048=%d INMP441=%d DS18B20=%d HolyIotBLE=%d\n",
+  Serial.printf("Optional modules: INA219=%d MAX17048=%d INMP441=%d DS18B20=%d BleScan=%d\n",
                 ENABLE_INA219_SOLAR, ENABLE_MAX17048_BATTERY, ENABLE_INMP441_MICS,
-                ENABLE_DS18B20_HIVE_TEMP, ENABLE_HOLYIOT_BLE);
+                ENABLE_DS18B20_HIVE_TEMP, ENABLE_BLE_SCAN);
   Serial.printf("Wake reason: %s; RTC boot count: %u\n", wakeReasonName(wakeReason).c_str(), rtcBootCount);
   debugLine();
 

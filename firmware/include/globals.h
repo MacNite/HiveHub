@@ -78,7 +78,7 @@ extern String activeWifiSsid;
 extern String lastMeasurementJson;
 extern unsigned long lastMeasurementUpdatedMs;
 
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
 // Paired HolyIot 25015 BLE sensor MAC addresses, "AA:BB:.." or "" when unpaired.
 // Slot 0 -> hive 1, slot 1 -> hive 2. Set from the provisioning portal.
 extern String bleSensorMac0;

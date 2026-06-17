@@ -110,7 +110,7 @@
 // NOTE: the advertisement byte layout in firmware/src/ble_sensor.cpp is a
 // documented best guess (HolyIot publish no spec). After sniffing one real
 // packet, correct the HOLYIOT_OFF_* / *_SCALE constants there.
-#define ENABLE_HOLYIOT_BLE       1
+#define ENABLE_BLE_SCAN       1
 
 // Seconds to scan for the paired beacons each cycle (they advertise ~0.5–2 s).
 #define HOLYIOT_BLE_SCAN_SECONDS 6
@@ -129,7 +129,7 @@
 // The secrets.h configurator (website/configurator.html) can describe up to six
 // wireless BLE sensors across three categories — at most 2 in-hive sensors, 2
 // scales and 2 bee counters. In-hive sensors are scanned by the bridge above
-// (ENABLE_HOLYIOT_BLE); the scale and bee-counter macros are placeholders that
+// (ENABLE_BLE_SCAN); the scale and bee-counter macros are placeholders that
 // capture the intended layout for a future firmware build.
 //
 // Supported in-hive types: HolyIot 25015 (beacon), HiveInside ESP32-C6 (beacon
