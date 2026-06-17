@@ -460,7 +460,7 @@ class FirmwareReleaseIn(BaseModel):
     version: str
     filename: str
     active: bool = True
-    target: Literal["hivescale", "beecounter"] = "hivescale"
+    target: Literal["hivescale", "beecounter", "hiveinside"] = "hivescale"
 
 
 class DeviceCommandIn(BaseModel):
@@ -474,6 +474,7 @@ class DeviceCommandIn(BaseModel):
         "check_ota",
         "ota_update",
         "update_beecounter",
+        "update_hiveinside",
         "start_provisioning",
         "start_calibration_mode",
         "stop_calibration_mode",
@@ -2017,7 +2018,7 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
 
 # Allowed firmware targets, shared by the JSON registration endpoint and the
 # multipart upload endpoint below.
-FIRMWARE_TARGETS = ("hivescale", "beecounter")
+FIRMWARE_TARGETS = ("hivescale", "beecounter", "hiveinside")
 
 # A conservative filename pattern. Firmware filenames are referenced verbatim in
 # download URLs and joined onto FIRMWARE_DIR, so we reject anything that is not a
@@ -2126,6 +2127,36 @@ def queue_beecounter_update(device_id: str, slot: int = Query(1)):
     url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
     return create_command(device_id, DeviceCommandIn(
         command_type="update_beecounter",
+        payload={"slot": slot, "url": url, "version": version, "crc32": int(crc32 or 0)},
+    ))
+
+
+@app.post("/api/v1/devices/{device_id}/commands/update-hiveinside",
+          dependencies=[Depends(require_api_key)])
+def queue_hiveinside_update(device_id: str, slot: int = Query(1)):
+    """Queue a command telling the HiveScale to relay the active HiveInside
+    firmware to the HiveInside sensor paired in the given slot (1 -> bleSensorMac0,
+    2 -> bleSensorMac1) over BLE GATT. The HiveScale resolves the BLE MAC locally,
+    so only slot + image URL + CRC-32 are sent. The CRC-32 is verified end-to-end
+    on the HiveInside device before it swaps its OTA slot, so a corrupted relay
+    never bricks the sensor."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT version, filename, crc32 FROM firmware_releases
+                WHERE active = true AND target = 'hiveinside'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1;
+                """,
+            )
+            r = cur.fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="No active hiveinside firmware release")
+    version, filename, crc32 = r
+    url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
+    return create_command(device_id, DeviceCommandIn(
+        command_type="update_hiveinside",
         payload={"slot": slot, "url": url, "version": version, "crc32": int(crc32 or 0)},
     ))
 

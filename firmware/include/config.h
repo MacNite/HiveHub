@@ -169,6 +169,35 @@
 #endif
 
 // ==============================
+// HIVEINSIDE FIRMWARE-OVER-BLE (OTA relay)
+// ==============================
+// HiveScale (the only WiFi node) relays a HiveInside firmware image to a paired
+// HiveInside ESP32-C6 over GATT, the same way it relays a BeeCounter image over
+// I2C (see updateBeeCounter / bee_counter_client). The backend queues an
+// `update_hiveinside` command with the image URL + CRC-32; HiveScale STREAMS the
+// HTTPS download straight into the HiveInside OTA characteristics (it never
+// buffers the whole >1 MB image — the WROOM has no PSRAM), and the HiveInside
+// device verifies the end-to-end CRC before swapping its OTA slot.
+//
+// This needs only a GATT *client* connection, so it is independent of
+// HIVEINSIDE_USE_GATT (which selects how normal measurements are read). Set to 0
+// to compile the relay out.
+#ifndef HIVEINSIDE_OTA_ENABLED
+#define HIVEINSIDE_OTA_ENABLED 1
+#endif
+
+// Largest DATA chunk (bytes) written per GATT write. Capped to stay inside the
+// default NimBLE ATT MTU envelope; the relay further clamps this to the value
+// actually negotiated with the device (MTU − 3).
+#ifndef HIVEINSIDE_OTA_CHUNK_MAX
+#define HIVEINSIDE_OTA_CHUNK_MAX 244
+#endif
+
+// True when the GATT-client scaffolding (address-type capture during the scan)
+// must be compiled in: either normal GATT reads or the OTA relay needs it.
+#define HIVEINSIDE_GATT_CLIENT (HIVEINSIDE_USE_GATT || HIVEINSIDE_OTA_ENABLED)
+
+// ==============================
 // BLE vs WIRED SENSOR ARBITRATION (collision avoidance)
 // ==============================
 // When a paired in-hive BLE sensor reports a capability, the wired sensor that

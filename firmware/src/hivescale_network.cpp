@@ -15,6 +15,9 @@
 #include <time.h>
 
 #include "bee_counter_client.h"
+#if ENABLE_BLE_SCAN
+#include "ble_sensor.h"
+#endif
 
 // NTP sync — called once after WiFi connects each wake cycle.
 // Certificate validation requires the device clock to be accurate.
@@ -498,6 +501,104 @@ bool updateBeeCounter(uint8_t address, const String& firmwareUrl, uint32_t expec
   return ok;
 }
 
+#if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
+// Relay a HiveInside firmware image to the paired sensor at `mac` over BLE GATT.
+//
+// Unlike updateBeeCounter (BeeCounter images are tens of KB, so it buffers the
+// whole thing), a HiveInside ESP32-C6 image is >1 MB and will NOT fit in the
+// WROOM's RAM. So this STREAMS: it opens the HTTPS download, opens the BLE OTA
+// session, then pumps the body straight from the socket into the GATT DATA
+// characteristic a chunk at a time. The HiveInside device verifies the
+// end-to-end CRC-32 (passed in BEGIN) before swapping its OTA slot, so a
+// corrupted relay can never brick the sensor — it just aborts and keeps running
+// the old image.
+bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t expectedCrc32) {
+  if (!connectWifi()) return false;
+
+  String url = absoluteUrl(firmwareUrl);
+  Serial.print("[HI-OTA] Downloading HiveInside firmware: ");
+  Serial.println(url);
+
+  WiFiClientSecure client;
+  applyTlsConfig(client);
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (!http.begin(client, url)) {
+    Serial.println("[HI-OTA] http.begin failed");
+    return false;
+  }
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("[HI-OTA] Download failed. HTTP %d\n", code);
+    http.end();
+    return false;
+  }
+
+  int contentLength = http.getSize();
+  if (contentLength <= 0 || contentLength > 4 * 1024 * 1024) {
+    Serial.printf("[HI-OTA] Invalid content length %d\n", contentLength);
+    http.end();
+    return false;
+  }
+
+  // Open the BLE OTA session (locates the device, connects, sends BEGIN). Do
+  // this AFTER we have the Content-Length so the device sizes its OTA slot.
+  if (!blesensor::otaBegin(mac, (uint32_t)contentLength, expectedCrc32)) {
+    Serial.println("[HI-OTA] otaBegin failed");
+    http.end();
+    return false;
+  }
+
+  // Pump the HTTPS body straight into the GATT DATA characteristic. The relay
+  // buffer is tiny (one MTU-sized chunk is written per otaWrite call internally);
+  // 1 KB here just amortises socket reads.
+  static const size_t RELAY_BUF = 1024;
+  uint8_t buf[RELAY_BUF];
+  WiFiClient* stream = http.getStreamPtr();
+  int read = 0;
+  unsigned long lastData = millis();
+  bool relayOk = true;
+  while (read < contentLength && (http.connected() || stream->available())) {
+    size_t avail = stream->available();
+    if (avail) {
+      int r = stream->readBytes(buf, min(min(avail, RELAY_BUF), (size_t)(contentLength - read)));
+      if (r > 0) {
+        if (!blesensor::otaWrite(buf, (size_t)r)) {
+          Serial.printf("[HI-OTA] relay write failed at %d/%d\n", read, contentLength);
+          relayOk = false;
+          break;
+        }
+        read += r;
+        lastData = millis();
+        if ((read % (32 * 1024)) < (size_t)r) {
+          Serial.printf("[HI-OTA] relayed %d/%d bytes\n", read, contentLength);
+        }
+      }
+    } else if (millis() - lastData > 15000) {
+      Serial.println("[HI-OTA] download stalled");
+      relayOk = false;
+      break;
+    } else {
+      delay(1);
+    }
+  }
+  http.end();
+
+  bool ok = false;
+  if (relayOk && read == contentLength) {
+    ok = blesensor::otaFinish();
+  } else {
+    Serial.printf("[HI-OTA] incomplete relay %d/%d — aborting\n", read, contentLength);
+    blesensor::otaAbort();
+  }
+  blesensor::otaCleanup();
+
+  Serial.printf("[HI-OTA] result: %s\n", ok ? "OK" : "FAIL");
+  return ok;
+}
+#endif  // ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
+
 void checkForOtaUpdate() {
   if (!connectNetwork()) {
     Serial.println("[OTA] Skipping: network unavailable");
@@ -592,7 +693,28 @@ void checkCommands() {
       // Optionally report a second, final result here via a follow-up endpoint
       // if you want the backend to record success/failure after the fact.
     }
-  } else if (type == "start_provisioning") {
+  }
+#if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
+  else if (type == "update_hiveinside") {
+    // payload: { "slot": 1|2, "url": "/firmware/hiveinside-x.y.bin", "crc32": <uint32> }
+    // The MAC is resolved locally from the paired BLE sensor for that slot, so
+    // the backend never needs to know the device address.
+    int slot = payload["slot"] | 1;
+    String mac = (slot == 2) ? bleSensorMac1 : bleSensorMac0;
+    String fwUrl = payload["url"] | "";
+    uint32_t crc = (uint32_t)(payload["crc32"] | 0);
+    if (fwUrl.length() == 0) {
+      postCommandResult(commandId, false, "update_hiveinside missing url");
+    } else if (mac.length() == 0) {
+      postCommandResult(commandId, false, String("No HiveInside paired in slot ") + slot);
+    } else {
+      postCommandResult(commandId, true, "HiveInside OTA started");
+      bool ok = updateHiveInside(mac, fwUrl, crc);
+      Serial.printf("[HI-OTA] update result: %s\n", ok ? "OK" : "FAIL");
+    }
+  }
+#endif
+  else if (type == "start_provisioning") {
     // This only makes sense while someone is physically near the device.
     postCommandResult(commandId, true, "Provisioning AP started");
     startProvisioningPortal();

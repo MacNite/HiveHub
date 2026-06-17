@@ -116,6 +116,26 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap);
 // or "" when it is not a valid 6-byte MAC. Shared by the portal and matcher.
 String normalizeMac(const String& raw);
 
+#if HIVEINSIDE_OTA_ENABLED
+// ── HiveInside firmware-over-BLE relay (streaming GATT-client session) ──────
+// Bring up the BLE stack, locate `mac`, connect to its OTA service and send the
+// BEGIN frame (image size + end-to-end CRC-32). Returns false (and cleans up) on
+// any failure. On success the session stays open for otaWrite()/otaFinish().
+bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32);
+// Relay one buffer of firmware bytes, in order. Splits across as many GATT
+// writes as the negotiated MTU needs; each write is flow-controlled by the
+// device's ATT response. Returns false on the first failed write.
+bool otaWrite(const uint8_t* data, size_t len);
+// Send END and wait for the device to confirm DONE (CRC verified, slot swapped).
+// Returns true only on a confirmed DONE.
+bool otaFinish();
+// Best-effort cancel of an in-progress transfer (device keeps its old image).
+void otaAbort();
+// Disconnect and tear the BLE stack down. Always call this to end a session,
+// success or failure.
+void otaCleanup();
+#endif
+
 }  // namespace blesensor
 
 #endif  // ENABLE_BLE_SCAN

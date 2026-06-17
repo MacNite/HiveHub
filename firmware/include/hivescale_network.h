@@ -28,6 +28,11 @@ bool uploadCachedLines();
 void fetchRemoteConfig();
 bool performFirmwareUpdate(const String& firmwareUrl);
 bool updateBeeCounter(uint8_t address, const String& firmwareUrl, uint32_t expectedCrc32 = 0);
+// Stream a HiveInside firmware image from `firmwareUrl` to the paired HiveInside
+// sensor at `mac` over BLE GATT. The image is never fully buffered; bytes are
+// relayed straight from the HTTPS download into the device's OTA service, which
+// verifies `expectedCrc32` end-to-end before swapping its OTA slot.
+bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t expectedCrc32 = 0);
 void checkForOtaUpdate();
 void postCommandResult(int commandId, bool success, const String& message);
 void checkCommands();
