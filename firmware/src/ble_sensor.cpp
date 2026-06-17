@@ -189,7 +189,11 @@ String normalizeMac(const String& raw) {
 // ── per-slot accumulator shared with the scan callback ─────────────────────
 struct Accumulator {
   String  mac;                 // normalized target MAC ("" = slot unused)
-  bool    present = false;
+  bool    present = false;     // advertising data parsed successfully
+  bool    found_by_mac = false; // device seen during scan (adv data optional)
+#if HIVEINSIDE_USE_GATT
+  uint8_t ble_addr_type = BLE_ADDR_PUBLIC; // address type for GATT connection
+#endif
   SensorType type = SensorType::None;
   int     rssi_dbm = 0;
   int     battery_pct = -1;
@@ -236,6 +240,18 @@ class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
       return;
     }
 
+#if HIVEINSIDE_USE_GATT
+    // Capture address type for any paired MAC even when manufacturer data is
+    // absent. GATT-mode HiveInside does not embed the measurement blob, so p.ok
+    // is false, but we need the address type for the subsequent connection.
+    for (int s = 0; s < 2; s++) {
+      if (g_slot[s].mac.length() > 0 && g_slot[s].mac == mac) {
+        g_slot[s].found_by_mac = true;
+        g_slot[s].ble_addr_type = (uint8_t)dev->getAddress().getType();
+      }
+    }
+#endif
+
     if (!p.ok) return;
     for (int s = 0; s < 2; s++) {
       if (g_slot[s].mac.length() == 0 || g_slot[s].mac != mac) continue;
@@ -268,6 +284,86 @@ class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
   }
 };
 }  // namespace
+
+#if HIVEINSIDE_USE_GATT
+// HiveInside GATT service / characteristic UUIDs — must match ble_link.cpp.
+static const char* HIVEINSIDE_GATT_SVC = "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01";
+static const char* HIVEINSIDE_GATT_CHR = "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01";
+
+// Connect to a HiveInside GATT server, read the JSON measurement characteristic,
+// and populate `out`. Returns true on success. Must be called while the NimBLE
+// stack is initialised (between NimBLEDevice::init and ::deinit). Disconnects
+// and frees the client handle before returning regardless of outcome.
+static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
+  NimBLEClient* client = NimBLEDevice::createClient();
+  client->setConnectTimeout(HIVEINSIDE_GATT_CONNECT_TIMEOUT_S);
+
+  Serial.printf("[BLE] GATT connecting to %s ...\n", addr.toString().c_str());
+  if (!client->connect(addr)) {
+    NimBLEDevice::deleteClient(client);
+    Serial.println("[BLE] GATT connect failed");
+    return false;
+  }
+
+  int rssi = client->getRssi();
+  bool ok = false;
+
+  NimBLERemoteService* svc = client->getService(HIVEINSIDE_GATT_SVC);
+  if (!svc) {
+    Serial.println("[BLE] GATT: HiveInside service not found");
+  } else {
+    NimBLERemoteCharacteristic* chr = svc->getCharacteristic(HIVEINSIDE_GATT_CHR);
+    if (!chr || !chr->canRead()) {
+      Serial.println("[BLE] GATT: measurement characteristic unavailable");
+    } else {
+      std::string val = chr->readValue();
+      if (val.empty()) {
+        Serial.println("[BLE] GATT: empty characteristic value");
+      } else {
+        JsonDocument doc;
+        if (deserializeJson(doc, val) != DeserializationError::Ok) {
+          Serial.println("[BLE] GATT: JSON parse error");
+        } else {
+          out.present      = true;
+          out.type         = SensorType::HiveInside;
+          out.rssi_dbm     = rssi;
+          out.sample_count = 1;
+          out.temp_c       = doc["temp_c"]           | NAN;
+          out.humidity_pct = doc["humidity_percent"]  | NAN;
+          int bpct         = doc["battery_percent"]   | -1;
+          out.battery_pct  = bpct;
+
+          if (doc["accel_ok"] | false) {
+            out.accel_rms_mg          = doc["accel_rms_mg"]           | NAN;
+            out.accel_peak_mg         = doc["accel_peak_mg"]          | NAN;
+            out.accel_band_swarm_mg   = doc["accel_band_swarm_mg"]    | NAN;
+            out.accel_band_fanning_mg = doc["accel_band_fanning_mg"]  | NAN;
+            out.accel_band_activity_mg= doc["accel_band_activity_mg"] | NAN;
+          }
+          out.mic_present = doc["mic_ok"] | false;
+          if (out.mic_present) {
+            out.mic_rms_dbfs      = doc["mic_rms_dbfs"]           | NAN;
+            out.mic_sub_bass_dbfs = doc["mic_band_sub_bass_dbfs"]  | NAN;
+            out.mic_hum_dbfs      = doc["mic_band_hum_dbfs"]       | NAN;
+            out.mic_piping_dbfs   = doc["mic_band_piping_dbfs"]    | NAN;
+            out.mic_stress_dbfs   = doc["mic_band_stress_dbfs"]    | NAN;
+            out.mic_high_dbfs     = doc["mic_band_high_dbfs"]      | NAN;
+          }
+          Serial.printf("[BLE] GATT read OK: temp=%.1f°C hum=%.1f%% accel=%d mic=%d RSSI=%d\n",
+                        out.temp_c, out.humidity_pct,
+                        (int)(bool)(doc["accel_ok"] | false),
+                        (int)out.mic_present, rssi);
+          ok = true;
+        }
+      }
+    }
+  }
+
+  client->disconnect();
+  NimBLEDevice::deleteClient(client);
+  return ok;
+}
+#endif  // HIVEINSIDE_USE_GATT
 
 // Reduce the accumulated |a| samples to a per-cycle AC RMS/peak (gravity removed).
 static void finalizeAccel(const Accumulator& a, Snapshot& s) {
@@ -353,7 +449,7 @@ void scanPairedSensors(const String& mac0, const String& mac1,
   String m0 = normalizeMac(mac0);
   String m1 = normalizeMac(mac1);
   if (m0.length() == 0 && m1.length() == 0) {
-    Serial.println("[BLE] No HolyIot sensors paired; skipping scan");
+    Serial.println("[BLE] No in-hive sensors paired; skipping scan");
     return;
   }
 
@@ -369,10 +465,33 @@ void scanPairedSensors(const String& mac0, const String& mac1,
   ScanCallbacks cb;
   NimBLEScan* scan = startScan(cb, HOLYIOT_BLE_SCAN_SECONDS);
   scan->clearResults();
-  NimBLEDevice::deinit(true);  // free the controller before the WiFi upload
 
+#if HIVEINSIDE_USE_GATT
+  // Post-scan GATT phase — NimBLE stack is still alive here; deinit follows.
+  // Devices with advertising data (HolyIot, advertising-mode HiveInside) are
+  // copied directly. Devices found only by MAC match (GATT-mode HiveInside, no
+  // manufacturer blob) get a GATT connection attempt instead.
+  for (int s = 0; s < 2; s++) {
+    Snapshot& dest = (s == 0) ? slot1 : slot2;
+    if (g_slot[s].mac.length() == 0 || !g_slot[s].found_by_mac) continue;
+    if (g_slot[s].present) {
+      // Advertising data parsed successfully — use it, no GATT needed.
+      copyToSnapshot(g_slot[s], dest);
+      continue;
+    }
+    // No advertising data: try GATT (expected for BLE_MODE_GATT HiveInside).
+    NimBLEAddress addr(g_slot[s].mac.c_str(), g_slot[s].ble_addr_type);
+    Serial.printf("[BLE] GATT: connecting to slot%d (%s)\n", s + 1, g_slot[s].mac.c_str());
+    if (!gattReadHiveInside(addr, dest)) {
+      Serial.printf("[BLE] GATT slot%d: no data this cycle\n", s + 1);
+    }
+  }
+#else
   copyToSnapshot(g_slot[0], slot1);
   copyToSnapshot(g_slot[1], slot2);
+#endif
+
+  NimBLEDevice::deinit(true);  // free the controller before the WiFi upload
 
   Serial.printf("[BLE] slot1 present=%d (%u adv) | slot2 present=%d (%u adv)\n",
                 slot1.present, slot1.sample_count, slot2.present, slot2.sample_count);

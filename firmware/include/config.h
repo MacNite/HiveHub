@@ -140,6 +140,28 @@
 #endif
 
 // ==============================
+// HIVEINSIDE GATT CLIENT (optional, requires HiveInside BLE_MODE=BLE_MODE_GATT)
+// ==============================
+// When enabled, HiveScale connects to a paired HiveInside sensor as a GATT
+// central *after* the passive scan locates it by MAC address. It reads the full
+// JSON measurement characteristic (every FFT band, RMS, peak, mic bands) and
+// then disconnects. Only devices found by MAC without recognisable advertising
+// data trigger a connection attempt, so HolyIot and advertising-mode HiveInside
+// sensors are unaffected. Set to 0 to use passive advertising scan exclusively.
+//
+// Both HiveScale (this flag) and HiveInside (BLE_MODE_GATT) must be compiled
+// with matching modes; pairing itself (MAC address) is unchanged.
+#ifndef HIVEINSIDE_USE_GATT
+#define HIVEINSIDE_USE_GATT 0
+#endif
+
+// Timeout for each GATT connection attempt in seconds (NimBLE unit).
+// The BLE stack gives up and the slot stays not-present after this window.
+#ifndef HIVEINSIDE_GATT_CONNECT_TIMEOUT_S
+#define HIVEINSIDE_GATT_CONNECT_TIMEOUT_S 5
+#endif
+
+// ==============================
 // BLE vs WIRED SENSOR ARBITRATION (collision avoidance)
 // ==============================
 // When a paired in-hive BLE sensor reports a capability, the wired sensor that
