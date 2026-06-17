@@ -103,9 +103,11 @@ bool readNotification(const String& mac, uint8_t* outBuf, size_t cap, size_t& ou
     }
   }
 
-  // These sensors push one notification then drop the link themselves, so the
-  // connection is often already gone by now. Only terminate if still connected,
-  // otherwise ble_gap_terminate() logs a benign "rc=30" failure.
+  // These sensors push one notification then drop the link themselves.
+  // A short yield lets the NimBLE host task process the peer's disconnect
+  // event so isConnected() reflects the true state before we call terminate
+  // (avoids a TOCTOU race that logs a spurious "ble_gap_terminate rc=30").
+  delay(100);
   if (client->isConnected()) client->disconnect();
   NimBLEDevice::deleteClient(client);
   return ok;
