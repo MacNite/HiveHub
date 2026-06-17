@@ -73,28 +73,30 @@ void seedPrefsFromSecretsIfNeeded() {
 
     prefs.putUInt("wifi_count", wifiCount);
 
-    // Optional: seed paired beehivemonitoring.com GATT MACs from secrets.h so a
-    // device can ship pre-paired without visiting the provisioning portal. Any
-    // of these may be omitted; a blank/absent value leaves that slot unpaired
-    // (pair it later from the portal instead).
-    #if ENABLE_BEEHIVE_GATT
-      #ifdef INHIVE_1_MAC
-        prefs.putString("heart_mac0", INHIVE_1_MAC);
-      #endif
-      #ifdef INHIVE_2_MAC
-        prefs.putString("heart_mac1", INHIVE_2_MAC);
-      #endif
-      #ifdef WSCALE_1_MAC
-        prefs.putString("scale_mac0", WSCALE_1_MAC);
-      #endif
-      #ifdef WSCALE_2_MAC
-        prefs.putString("scale_mac1", WSCALE_2_MAC);
-      #endif
-    #endif
-
     prefs.putBool("seeded", true);
     prefs.putBool("provisioned", true);
   }
+
+  // Seed paired beehivemonitoring.com GATT MACs from secrets.h so a device can
+  // ship pre-paired without visiting the provisioning portal. This runs on every
+  // boot (NOT gated behind the `seeded` flag above) so that devices already
+  // seeded by an older firmware — which predates these keys — still pick up the
+  // MACs after an upgrade. We only write a key when it is ABSENT, so any pairing
+  // (or deliberate un-pairing) done later from the portal is always preserved.
+  #if ENABLE_BEEHIVE_GATT
+    #ifdef INHIVE_1_MAC
+      if (!prefs.isKey("heart_mac0")) prefs.putString("heart_mac0", INHIVE_1_MAC);
+    #endif
+    #ifdef INHIVE_2_MAC
+      if (!prefs.isKey("heart_mac1")) prefs.putString("heart_mac1", INHIVE_2_MAC);
+    #endif
+    #ifdef WSCALE_1_MAC
+      if (!prefs.isKey("scale_mac0")) prefs.putString("scale_mac0", WSCALE_1_MAC);
+    #endif
+    #ifdef WSCALE_2_MAC
+      if (!prefs.isKey("scale_mac1")) prefs.putString("scale_mac1", WSCALE_2_MAC);
+    #endif
+  #endif
 
   #ifdef CLAIM_CODE
     uint32_t storedClaimRevision = prefs.getUInt("claim_rev", 0);
