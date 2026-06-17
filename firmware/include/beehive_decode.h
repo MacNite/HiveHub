@@ -71,7 +71,7 @@ inline bool decodeHeart(const uint8_t* p, size_t len, HeartReading& out) {
   // Battery: the longer (FFT-bearing) payload uses a different scale.
   float battery_v;
   if (len > 11)
-    battery_v = (2000.0f + p[4] * 1500.0f / 255.0f) / 1000.0f;
+    battery_v = 2.0f + ((float)p[4] / 128.0f);
   else
     battery_v = (2500.0f + p[4] * 1000.0f / 255.0f) / 1000.0f;
 
@@ -116,7 +116,7 @@ inline bool decodeScale(const uint8_t* p, size_t len, ScaleReading& out) {
   // a HiveScale frame.
   if (p == nullptr || len < 14 || len > 32) return false;
 
-  float battery_v    = (2500.0f + p[4] * 2000.0f / 255.0f) / 1000.0f;
+  float battery_v    = 2.5f + ((float)p[4] / 128.0f);
   float humidity_pct = p[5] * 100.0f / 255.0f;
 
   uint32_t tRaw = (uint32_t)p[6] | ((uint32_t)(p[7] & 0x0F) << 8);
