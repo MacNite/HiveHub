@@ -63,17 +63,22 @@ dropdown:
 |---|---|---|---|
 | HolyIot 25015 | BLE beacon | in-hive | ✅ supported |
 | HiveInside ESP32-C6 | GATT | in-hive | ✅ supported |
-| HiveHeart *(beehivemonitoring.com)* | GATT | in-hive | ✅ mapped (UUIDs pre-filled) |
-| HiveScale *(beehivemonitoring.com)* | GATT | scale | ⚠ placeholder |
+| HiveHeart *(beehivemonitoring.com)* | GATT | in-hive | ✅ supported (GATT decode) |
+| HiveScale *(beehivemonitoring.com)* | GATT | scale | ✅ supported (GATT decode) |
 | BeeCounter *(beehivemonitoring.com)* | GATT | bee counter | ⚠ placeholder |
 | RuuviTag 4-in-1 | BLE beacon | in-hive | ⚠ placeholder |
 
 GATT devices have their service / characteristic UUIDs pre-filled (editable).
+For HiveHeart / HiveScale you can also paste the device MAC to pre-pair via
+`secrets.h`, or leave it blank and pair it later in the provisioning portal.
 The three **collision-avoidance** overrides (`BLE_OVERRIDE_DS18B20` /
 `_MICS` / `_ACCEL`) appear once an in-hive sensor is added, so a paired sensor
 can replace the matching wired sensor per hive.
 
+HiveHeart and HiveScale are decoded by the firmware (see
+[`docs/beehivemonitoring-gatt.md`](../docs/beehivemonitoring-gatt.md)).
+
 > **Placeholder types are not yet supported by the firmware.** The tool still
 > lets you select them and writes their macros to `secrets.h` so a future build
-> can pick them up; this is called out clearly in the UI. The wireless scale and
-> bee-counter categories are likewise captured for a future build.
+> can pick them up; this is called out clearly in the UI. The wireless
+> bee-counter category is likewise captured for a future build.

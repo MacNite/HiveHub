@@ -204,6 +204,36 @@
 #endif
 
 // ==============================
+// BEEHIVEMONITORING.COM GATT SENSORS (HiveHeart / HiveScale)
+// ==============================
+// HiveHeart (in-hive) and HiveScale (weight) are read over GATT: the firmware
+// connects to a paired MAC, subscribes to one notify characteristic, takes the
+// pushed notification and disconnects (see firmware/src/beehive_gatt.cpp). Both
+// products share the same service + characteristic UUID; only the payload (and
+// the configured slot type) differ. Enable per device in secrets.h, pair the
+// MACs in the provisioning portal (or seed INHIVE_n_MAC / WSCALE_n_MAC here).
+#ifndef ENABLE_BEEHIVE_GATT
+#define ENABLE_BEEHIVE_GATT 0
+#endif
+
+#ifndef BEEHIVE_GATT_SERVICE_UUID
+#define BEEHIVE_GATT_SERVICE_UUID "0d01c3b8-eff2-44bc-9260-3256eb957268"
+#endif
+#ifndef BEEHIVE_GATT_CHAR_UUID
+#define BEEHIVE_GATT_CHAR_UUID    "513849eb-913d-4f80-8c44-3f0685533d6e"
+#endif
+
+// Seconds to wait for the GATT connection, and then for the one notification.
+// These devices can be slow to accept a connection (~12 s seen in captures), so
+// keep the connect window generous.
+#ifndef BEEHIVE_GATT_CONNECT_TIMEOUT_S
+#define BEEHIVE_GATT_CONNECT_TIMEOUT_S 20
+#endif
+#ifndef BEEHIVE_GATT_NOTIFY_TIMEOUT_S
+#define BEEHIVE_GATT_NOTIFY_TIMEOUT_S 5
+#endif
+
+// ==============================
 // PIN MAP
 // ==============================
 #define HX1_DOUT 16

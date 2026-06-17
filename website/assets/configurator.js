@@ -15,9 +15,9 @@
     holyiot:    { label: "HolyIot 25015 (BLE beacon)",                       cat: "inhive",     proto: "beacon", supported: true  },
     hiveinside: { label: "HiveInside ESP32-C6 (GATT)",                       cat: "inhive",     proto: "gatt",   supported: true,
                   svc: "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01", chr: "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01" },
-    hiveheart:  { label: "HiveHeart — beehivemonitoring.com (GATT)",         cat: "inhive",     proto: "gatt",   supported: true,
+    hiveheart:  { label: "HiveHeart — beehivemonitoring.com (GATT)",         cat: "inhive",     proto: "gatt",   supported: true, bhgatt: true,
                   svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
-    hivescale:  { label: "HiveScale — beehivemonitoring.com (GATT)",         cat: "scale",      proto: "gatt",   supported: true,
+    hivescale:  { label: "HiveScale — beehivemonitoring.com (GATT)",         cat: "scale",      proto: "gatt",   supported: true, bhgatt: true,
                   svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
     beecounter: { label: "BeeCounter — beehivemonitoring.com (GATT)",        cat: "beecounter", proto: "gatt",   supported: false },
     ruvitag:    { label: "RuuviTag 4-in-1 (BLE beacon)",                     cat: "inhive",     proto: "beacon", supported: false }
@@ -108,6 +108,10 @@
         '<div class="field"><label>Service UUID</label><input type="text" data-wsvc placeholder="service UUID" /></div>' +
         '<div class="field"><label>Characteristic UUID</label><input type="text" data-wchr placeholder="characteristic UUID" /></div>' +
       '</div>' +
+      '<div class="wmac" style="display:none">' +
+        '<div class="field"><label>MAC address <span class="hint">— optional; leave blank to pair in the device portal</span></label>' +
+          '<input type="text" data-wmac placeholder="AA:BB:CC:DD:EE:FF" /></div>' +
+      '</div>' +
       '<div class="note warn wunsupported" style="display:none">⚠ <strong>Not supported by the firmware yet.</strong> ' +
         'Its macros are written to <code>secrets.h</code> as a placeholder so your config is ready for a future build.</div>';
     wireList.appendChild(row);
@@ -167,6 +171,7 @@
       $('.wmeta', r).textContent = CAT_LABEL[def.cat] + " · " + CAT_SLOT[def.cat] + " " + slot +
         "  ·  " + (def.proto === "gatt" ? "GATT" : "BLE beacon");
       $('.wgatt', r).style.display = def.proto === "gatt" ? "block" : "none";
+      $('.wmac', r).style.display = def.bhgatt ? "block" : "none";
       $('.wunsupported', r).style.display = def.supported ? "none" : "block";
     });
     $("#wireless-empty").style.display = rows.length ? "none" : "block";
@@ -326,10 +331,21 @@
     p("// ==============================");
     p("// Up to 6 wireless sensors: at most 2 in-hive sensors, 2 scales, 2 bee");
     p("// counters. Pair each sensor's MAC from the provisioning portal after flashing.");
-    p("// The in-hive BLE bridge is consumed by the current firmware; the wireless");
-    p("// scale and bee-counter macros are written so the device's intended layout is");
-    p("// captured, ready for a future firmware build.");
+    p("// The in-hive BLE bridge and the beehivemonitoring.com GATT sensors (HiveHeart");
+    p("// / HiveScale) are consumed by the firmware; the bee-counter macros are written");
+    p("// so the device's intended layout is captured, ready for a future build.");
     p("");
+
+    // beehivemonitoring.com GATT (HiveHeart / HiveScale) master switch + shared UUIDs.
+    var bh = rows.filter(function (r) { return WTYPES[$('[data-wtype]', r).value].bhgatt; });
+    if (bh.length) {
+      var first = WTYPES[$('[data-wtype]', bh[0]).value];
+      p("// ---- beehivemonitoring.com GATT (HiveHeart / HiveScale) ----");
+      p(def("ENABLE_BEEHIVE_GATT", "1"));
+      p(defStr("BEEHIVE_GATT_SERVICE_UUID", first.svc));
+      p(defStr("BEEHIVE_GATT_CHAR_UUID", first.chr));
+      p("");
+    }
 
     // --- In-hive sensors (slot 1 -> hive 1, slot 2 -> hive 2) -----------------
     var inhive = byCat.inhive;
@@ -339,7 +355,7 @@
       p(def("HOLYIOT_BLE_SCAN_SECONDS", val("#ble_scan") || "6"));
       p(def("HOLYIOT_BLE_ACTIVE_SCAN", $("#ble_active").checked ? "1" : "0"));
       p(def("HOLYIOT_COMPANY_ID", val("#ble_company") || "0xFFFF"));
-      var usesGatt = inhive.some(function (s) { return s.meta.proto === "gatt"; });
+      var usesGatt = inhive.some(function (s) { return s.key === "hiveinside" && s.meta.proto === "gatt"; });
       p(def("HIVEINSIDE_USE_GATT", usesGatt ? "1" : "0"));
       inhive.forEach(function (s, i) { emitSlot(p, "INHIVE_" + (i + 1), s); });
       p("");
@@ -376,6 +392,12 @@
       var chr = (chrEl && chrEl.value.trim()) || m.chr || "";
       if (svc) p(defStr(prefix + "_GATT_SERVICE_UUID", svc));
       if (chr) p(defStr(prefix + "_GATT_CHAR_UUID", chr));
+    }
+    // Optional MAC seeding for beehivemonitoring.com devices (blank = pair in portal).
+    if (m.bhgatt) {
+      var macEl = $('[data-wmac]', s.row);
+      var mac = macEl && macEl.value.trim();
+      if (mac) p(defStr(prefix + "_MAC", mac));
     }
   }
 

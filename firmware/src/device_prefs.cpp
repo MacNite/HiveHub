@@ -72,6 +72,26 @@ void seedPrefsFromSecretsIfNeeded() {
     #endif
 
     prefs.putUInt("wifi_count", wifiCount);
+
+    // Optional: seed paired beehivemonitoring.com GATT MACs from secrets.h so a
+    // device can ship pre-paired without visiting the provisioning portal. Any
+    // of these may be omitted; a blank/absent value leaves that slot unpaired
+    // (pair it later from the portal instead).
+    #if ENABLE_BEEHIVE_GATT
+      #ifdef INHIVE_1_MAC
+        prefs.putString("heart_mac0", INHIVE_1_MAC);
+      #endif
+      #ifdef INHIVE_2_MAC
+        prefs.putString("heart_mac1", INHIVE_2_MAC);
+      #endif
+      #ifdef WSCALE_1_MAC
+        prefs.putString("scale_mac0", WSCALE_1_MAC);
+      #endif
+      #ifdef WSCALE_2_MAC
+        prefs.putString("scale_mac1", WSCALE_2_MAC);
+      #endif
+    #endif
+
     prefs.putBool("seeded", true);
     prefs.putBool("provisioned", true);
   }
@@ -113,6 +133,13 @@ void loadConfigFromPrefs() {
 #if ENABLE_HOLYIOT_BLE
   bleSensorMac0 = prefs.getString("ble_mac0", "");
   bleSensorMac1 = prefs.getString("ble_mac1", "");
+#endif
+
+#if ENABLE_BEEHIVE_GATT
+  heartMac0 = prefs.getString("heart_mac0", "");
+  heartMac1 = prefs.getString("heart_mac1", "");
+  scaleMac0 = prefs.getString("scale_mac0", "");
+  scaleMac1 = prefs.getString("scale_mac1", "");
 #endif
 
   prefs.end();

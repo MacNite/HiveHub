@@ -12,6 +12,10 @@
 #include "ble_sensor.h"
 #endif
 
+#if ENABLE_BEEHIVE_GATT
+#include "beehive_gatt.h"
+#endif
+
 // ---- small JSON-to-display helpers (used only by the last-sensor panel) ---
 static String jsonStringOrNA(JsonDocument& doc, const char* key);
 static String jsonNumberOrNA(JsonDocument& doc, const char* key, uint8_t decimals, const char* unit);
@@ -335,6 +339,23 @@ void handleSetupRoot() {
   html += "</fieldset>";
 #endif
 
+#if ENABLE_BEEHIVE_GATT
+  html += "<fieldset><legend>beehivemonitoring.com sensors (HiveHeart / HiveScale)</legend>";
+  html += "<p>Pair by MAC address. HiveScale connects to each device, reads one GATT notification and disconnects. ";
+  html += "HiveHeart slot 1/2 map to hive 1/2; the wireless scales are independent. Leave a slot blank if you do not use it.";
+#if ENABLE_HOLYIOT_BLE
+  html += " You can <a href='/ble/scan'>scan for nearby sensors</a> and copy a MAC below.";
+#else
+  html += " Read each device's MAC with a phone BLE scanner (e.g. nRF Connect) and paste it below.";
+#endif
+  html += "</p>";
+  html += "<label>HiveHeart 1 MAC (hive 1)</label><input name='heart_mac0' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(heartMac0) + "'>";
+  html += "<label>HiveHeart 2 MAC (hive 2)</label><input name='heart_mac1' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(heartMac1) + "'>";
+  html += "<label>HiveScale 1 MAC</label><input name='scale_mac0' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(scaleMac0) + "'>";
+  html += "<label>HiveScale 2 MAC</label><input name='scale_mac1' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(scaleMac1) + "'>";
+  html += "</fieldset>";
+#endif
+
   html += "<fieldset><legend>WiFi networks</legend>";
   for (int i = 0; i < MAX_WIFI_NETWORKS; i++) {
     prefs.begin("hivescale", true);
@@ -376,6 +397,19 @@ void handleSetupSave() {
   prefs.putString("ble_mac1", bleMac1);
   bleSensorMac0 = bleMac0;
   bleSensorMac1 = bleMac1;
+#endif
+
+#if ENABLE_BEEHIVE_GATT
+  // Persist the paired HiveHeart / HiveScale MACs. An empty field clears that
+  // slot; invalid entries normalise to "" so they can never match a device.
+  heartMac0 = bhgatt::normalizeMac(setupServer.arg("heart_mac0"));
+  heartMac1 = bhgatt::normalizeMac(setupServer.arg("heart_mac1"));
+  scaleMac0 = bhgatt::normalizeMac(setupServer.arg("scale_mac0"));
+  scaleMac1 = bhgatt::normalizeMac(setupServer.arg("scale_mac1"));
+  prefs.putString("heart_mac0", heartMac0);
+  prefs.putString("heart_mac1", heartMac1);
+  prefs.putString("scale_mac0", scaleMac0);
+  prefs.putString("scale_mac1", scaleMac1);
 #endif
 
   int savedCount = 0;

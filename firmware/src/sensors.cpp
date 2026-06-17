@@ -19,6 +19,10 @@
 #include "ble_sensor.h"
 #endif
 
+#if ENABLE_BEEHIVE_GATT
+#include "beehive_gatt.h"
+#endif
+
 void initializeTime(bool wokeFromDeepSleep) {
   if (rtcHasValidTime()) {
     timeSource = "rtc";
@@ -137,6 +141,14 @@ String createMeasurementJson() {
                               (bleSnap1.providesMic() || bleSnap2.providesMic());
 #endif
 
+  // ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) ─────────────
+  // Connect-read-disconnect over GATT. Done here, before WiFi, so a present
+  // HiveHeart can also supply the in-hive temperature/humidity for its hive.
+#if ENABLE_BEEHIVE_GATT
+  bhgatt::CycleResult bh;
+  bhgatt::runCycle(bh);
+#endif
+
   // Wired DS18B20 in-hive probes are optional. A probe is skipped for a hive
   // whose paired BLE sensor already reports in-hive temperature, so each
   // hive_N_temp_c carries exactly one source.
@@ -241,6 +253,15 @@ String createMeasurementJson() {
   if (bleSnap2.present && !isnan(bleSnap2.humidity_pct)) hiveHumidity2 = bleSnap2.humidity_pct;
 #endif
 
+#if ENABLE_BEEHIVE_GATT
+  // A paired HiveHeart supplies in-hive temperature/humidity for its hive when
+  // no higher-priority source (wired DS18B20 / HolyIot) already filled it.
+  if (isnan(hiveTemp1) && bh.heart[0].present) hiveTemp1 = bh.heart[0].temp_c;
+  if (isnan(hiveTemp2) && bh.heart[1].present) hiveTemp2 = bh.heart[1].temp_c;
+  if (isnan(hiveHumidity1) && bh.heart[0].present) hiveHumidity1 = bh.heart[0].humidity_pct;
+  if (isnan(hiveHumidity2) && bh.heart[1].present) hiveHumidity2 = bh.heart[1].humidity_pct;
+#endif
+
 // ---- BeeCounter polling -------------------------------------------------
   // Poll both possible BeeCounters on the shared I2C bus. Each slot is
   // independent — a missing counter just reports "ok=false". Reading both
@@ -341,6 +362,10 @@ String createMeasurementJson() {
 #if ENABLE_HOLYIOT_BLE
   blesensor::writeSnapshotToJson(doc, 1, bleSnap1);
   blesensor::writeSnapshotToJson(doc, 2, bleSnap2);
+#endif
+
+#if ENABLE_BEEHIVE_GATT
+  bhgatt::writeToJson(doc, bh);
 #endif
 
   String output;

@@ -364,6 +364,36 @@ class MeasurementIn(BaseModel):
     ble_2_battery_percent:  Optional[int]   = None
     ble_2_rssi_dbm:         Optional[int]   = None
 
+    # ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) ───────────
+    # HiveHeart is an in-hive sensor read over GATT: its temperature/humidity are
+    # delivered via hive_N_temp_c / hive_N_humidity_percent (above); the acoustic
+    # frequency/energy/peak and battery voltage are promoted to columns; the raw
+    # FFT bins stay in raw_json. HiveScale is a wireless weight scale with its own
+    # weight/raw-weight plus on-board temp/humidity/pressure/battery.
+    hiveheart_1_frequency_hz: Optional[float] = None
+    hiveheart_1_energy:       Optional[int]   = None
+    hiveheart_1_peak:         Optional[int]   = None
+    hiveheart_1_battery_v:    Optional[float] = None
+    hiveheart_1_fft:          Optional[list[int]] = Field(default=None, max_length=16)
+    hiveheart_2_frequency_hz: Optional[float] = None
+    hiveheart_2_energy:       Optional[int]   = None
+    hiveheart_2_peak:         Optional[int]   = None
+    hiveheart_2_battery_v:    Optional[float] = None
+    hiveheart_2_fft:          Optional[list[int]] = Field(default=None, max_length=16)
+
+    hivescale_1_weight_kg:        Optional[float] = None
+    hivescale_1_raw_weight:       Optional[int]   = None
+    hivescale_1_temp_c:           Optional[float] = None
+    hivescale_1_humidity_percent: Optional[float] = None
+    hivescale_1_pressure_hpa:     Optional[float] = None
+    hivescale_1_battery_v:        Optional[float] = None
+    hivescale_2_weight_kg:        Optional[float] = None
+    hivescale_2_raw_weight:       Optional[int]   = None
+    hivescale_2_temp_c:           Optional[float] = None
+    hivescale_2_humidity_percent: Optional[float] = None
+    hivescale_2_pressure_hpa:     Optional[float] = None
+    hivescale_2_battery_v:        Optional[float] = None
+
     # ── Per-gate forensic arrays (one value per entrance gate) ───────────────
     # Sent only inside the measurement body and kept in raw_json (never promoted
     # to columns). Declared explicitly so extra="ignore" does not drop them, and
@@ -832,6 +862,28 @@ def init_db():
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hive_1_humidity_percent   DOUBLE PRECISION;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hive_2_humidity_percent   DOUBLE PRECISION;
 
+                -- beehivemonitoring.com GATT sensors (HiveHeart / HiveScale), idempotent
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hiveheart_1_frequency_hz     DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hiveheart_1_energy           INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hiveheart_1_peak             INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hiveheart_1_battery_v        DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hiveheart_2_frequency_hz     DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hiveheart_2_energy           INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hiveheart_2_peak             INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hiveheart_2_battery_v        DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_1_weight_kg        DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_1_raw_weight       BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_1_temp_c           DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_1_humidity_percent DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_1_pressure_hpa     DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_1_battery_v        DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_2_weight_kg        DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_2_raw_weight       BIGINT;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_2_temp_c           DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_2_humidity_percent DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_2_pressure_hpa     DOUBLE PRECISION;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_2_battery_v        DOUBLE PRECISION;
+
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS claim_code_hash TEXT;
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS api_key_hash TEXT;
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
@@ -1068,6 +1120,12 @@ MEASUREMENT_INSERT_SQL = """
                     accel_2_band_swarm_mg, accel_2_band_fanning_mg, accel_2_band_activity_mg,
                     ble_1_humidity_percent, ble_1_pressure_hpa,
                     ble_2_humidity_percent, ble_2_pressure_hpa,
+                    hiveheart_1_frequency_hz, hiveheart_1_energy, hiveheart_1_peak, hiveheart_1_battery_v,
+                    hiveheart_2_frequency_hz, hiveheart_2_energy, hiveheart_2_peak, hiveheart_2_battery_v,
+                    hivescale_1_weight_kg, hivescale_1_raw_weight, hivescale_1_temp_c,
+                    hivescale_1_humidity_percent, hivescale_1_pressure_hpa, hivescale_1_battery_v,
+                    hivescale_2_weight_kg, hivescale_2_raw_weight, hivescale_2_temp_c,
+                    hivescale_2_humidity_percent, hivescale_2_pressure_hpa, hivescale_2_battery_v,
                     raw_json
                 )
                 VALUES (
@@ -1111,6 +1169,12 @@ MEASUREMENT_INSERT_SQL = """
                     %(accel_2_band_swarm_mg)s, %(accel_2_band_fanning_mg)s, %(accel_2_band_activity_mg)s,
                     %(ble_1_humidity_percent)s, %(ble_1_pressure_hpa)s,
                     %(ble_2_humidity_percent)s, %(ble_2_pressure_hpa)s,
+                    %(hiveheart_1_frequency_hz)s, %(hiveheart_1_energy)s, %(hiveheart_1_peak)s, %(hiveheart_1_battery_v)s,
+                    %(hiveheart_2_frequency_hz)s, %(hiveheart_2_energy)s, %(hiveheart_2_peak)s, %(hiveheart_2_battery_v)s,
+                    %(hivescale_1_weight_kg)s, %(hivescale_1_raw_weight)s, %(hivescale_1_temp_c)s,
+                    %(hivescale_1_humidity_percent)s, %(hivescale_1_pressure_hpa)s, %(hivescale_1_battery_v)s,
+                    %(hivescale_2_weight_kg)s, %(hivescale_2_raw_weight)s, %(hivescale_2_temp_c)s,
+                    %(hivescale_2_humidity_percent)s, %(hivescale_2_pressure_hpa)s, %(hivescale_2_battery_v)s,
                     %(raw_json)s
                 )"""
 
@@ -1223,6 +1287,26 @@ def measurement_insert_params(payload: "MeasurementIn", measured_at: datetime) -
         "ble_1_pressure_hpa":       payload.ble_1_pressure_hpa,
         "ble_2_humidity_percent":   payload.ble_2_humidity_percent,
         "ble_2_pressure_hpa":       payload.ble_2_pressure_hpa,
+        "hiveheart_1_frequency_hz":     payload.hiveheart_1_frequency_hz,
+        "hiveheart_1_energy":           payload.hiveheart_1_energy,
+        "hiveheart_1_peak":             payload.hiveheart_1_peak,
+        "hiveheart_1_battery_v":        payload.hiveheart_1_battery_v,
+        "hiveheart_2_frequency_hz":     payload.hiveheart_2_frequency_hz,
+        "hiveheart_2_energy":           payload.hiveheart_2_energy,
+        "hiveheart_2_peak":             payload.hiveheart_2_peak,
+        "hiveheart_2_battery_v":        payload.hiveheart_2_battery_v,
+        "hivescale_1_weight_kg":        payload.hivescale_1_weight_kg,
+        "hivescale_1_raw_weight":       payload.hivescale_1_raw_weight,
+        "hivescale_1_temp_c":           payload.hivescale_1_temp_c,
+        "hivescale_1_humidity_percent": payload.hivescale_1_humidity_percent,
+        "hivescale_1_pressure_hpa":     payload.hivescale_1_pressure_hpa,
+        "hivescale_1_battery_v":        payload.hivescale_1_battery_v,
+        "hivescale_2_weight_kg":        payload.hivescale_2_weight_kg,
+        "hivescale_2_raw_weight":       payload.hivescale_2_raw_weight,
+        "hivescale_2_temp_c":           payload.hivescale_2_temp_c,
+        "hivescale_2_humidity_percent": payload.hivescale_2_humidity_percent,
+        "hivescale_2_pressure_hpa":     payload.hivescale_2_pressure_hpa,
+        "hivescale_2_battery_v":        payload.hivescale_2_battery_v,
         "raw_json": psycopg.types.json.Jsonb(payload.model_dump(mode="json", exclude={"claim_code"})),
     }
 
@@ -1524,7 +1608,27 @@ MEASUREMENT_SELECT_COLUMNS = """
     COALESCE(ble_2_humidity_percent, NULLIF(raw_json->>'ble_2_humidity_percent', '')::double precision) AS ble_2_humidity_percent,
     COALESCE(ble_2_pressure_hpa,     NULLIF(raw_json->>'ble_2_pressure_hpa',     '')::double precision) AS ble_2_pressure_hpa,
     COALESCE(hive_1_humidity_percent, NULLIF(raw_json->>'hive_1_humidity_percent', '')::double precision) AS hive_1_humidity_percent,
-    COALESCE(hive_2_humidity_percent, NULLIF(raw_json->>'hive_2_humidity_percent', '')::double precision) AS hive_2_humidity_percent
+    COALESCE(hive_2_humidity_percent, NULLIF(raw_json->>'hive_2_humidity_percent', '')::double precision) AS hive_2_humidity_percent,
+    COALESCE(hiveheart_1_frequency_hz,     NULLIF(raw_json->>'hiveheart_1_frequency_hz',     '')::double precision) AS hiveheart_1_frequency_hz,
+    COALESCE(hiveheart_1_energy,           NULLIF(raw_json->>'hiveheart_1_energy',           '')::integer)          AS hiveheart_1_energy,
+    COALESCE(hiveheart_1_peak,             NULLIF(raw_json->>'hiveheart_1_peak',             '')::integer)          AS hiveheart_1_peak,
+    COALESCE(hiveheart_1_battery_v,        NULLIF(raw_json->>'hiveheart_1_battery_v',        '')::double precision) AS hiveheart_1_battery_v,
+    COALESCE(hiveheart_2_frequency_hz,     NULLIF(raw_json->>'hiveheart_2_frequency_hz',     '')::double precision) AS hiveheart_2_frequency_hz,
+    COALESCE(hiveheart_2_energy,           NULLIF(raw_json->>'hiveheart_2_energy',           '')::integer)          AS hiveheart_2_energy,
+    COALESCE(hiveheart_2_peak,             NULLIF(raw_json->>'hiveheart_2_peak',             '')::integer)          AS hiveheart_2_peak,
+    COALESCE(hiveheart_2_battery_v,        NULLIF(raw_json->>'hiveheart_2_battery_v',        '')::double precision) AS hiveheart_2_battery_v,
+    COALESCE(hivescale_1_weight_kg,        NULLIF(raw_json->>'hivescale_1_weight_kg',        '')::double precision) AS hivescale_1_weight_kg,
+    COALESCE(hivescale_1_raw_weight,       NULLIF(raw_json->>'hivescale_1_raw_weight',       '')::bigint)           AS hivescale_1_raw_weight,
+    COALESCE(hivescale_1_temp_c,           NULLIF(raw_json->>'hivescale_1_temp_c',           '')::double precision) AS hivescale_1_temp_c,
+    COALESCE(hivescale_1_humidity_percent, NULLIF(raw_json->>'hivescale_1_humidity_percent', '')::double precision) AS hivescale_1_humidity_percent,
+    COALESCE(hivescale_1_pressure_hpa,     NULLIF(raw_json->>'hivescale_1_pressure_hpa',     '')::double precision) AS hivescale_1_pressure_hpa,
+    COALESCE(hivescale_1_battery_v,        NULLIF(raw_json->>'hivescale_1_battery_v',        '')::double precision) AS hivescale_1_battery_v,
+    COALESCE(hivescale_2_weight_kg,        NULLIF(raw_json->>'hivescale_2_weight_kg',        '')::double precision) AS hivescale_2_weight_kg,
+    COALESCE(hivescale_2_raw_weight,       NULLIF(raw_json->>'hivescale_2_raw_weight',       '')::bigint)           AS hivescale_2_raw_weight,
+    COALESCE(hivescale_2_temp_c,           NULLIF(raw_json->>'hivescale_2_temp_c',           '')::double precision) AS hivescale_2_temp_c,
+    COALESCE(hivescale_2_humidity_percent, NULLIF(raw_json->>'hivescale_2_humidity_percent', '')::double precision) AS hivescale_2_humidity_percent,
+    COALESCE(hivescale_2_pressure_hpa,     NULLIF(raw_json->>'hivescale_2_pressure_hpa',     '')::double precision) AS hivescale_2_pressure_hpa,
+    COALESCE(hivescale_2_battery_v,        NULLIF(raw_json->>'hivescale_2_battery_v',        '')::double precision) AS hivescale_2_battery_v
 """
 
 
@@ -1650,6 +1754,27 @@ def measurement_row_to_dict(r):
         # In-hive relative humidity (mirrors hive_N_temp_c; appended last).
         "hive_1_humidity_percent":   r[105],
         "hive_2_humidity_percent":   r[106],
+        # beehivemonitoring.com GATT sensors (HiveHeart / HiveScale)
+        "hiveheart_1_frequency_hz":     r[107],
+        "hiveheart_1_energy":           r[108],
+        "hiveheart_1_peak":             r[109],
+        "hiveheart_1_battery_v":        r[110],
+        "hiveheart_2_frequency_hz":     r[111],
+        "hiveheart_2_energy":           r[112],
+        "hiveheart_2_peak":             r[113],
+        "hiveheart_2_battery_v":        r[114],
+        "hivescale_1_weight_kg":        r[115],
+        "hivescale_1_raw_weight":       r[116],
+        "hivescale_1_temp_c":           r[117],
+        "hivescale_1_humidity_percent": r[118],
+        "hivescale_1_pressure_hpa":     r[119],
+        "hivescale_1_battery_v":        r[120],
+        "hivescale_2_weight_kg":        r[121],
+        "hivescale_2_raw_weight":       r[122],
+        "hivescale_2_temp_c":           r[123],
+        "hivescale_2_humidity_percent": r[124],
+        "hivescale_2_pressure_hpa":     r[125],
+        "hivescale_2_battery_v":        r[126],
     }
 
 

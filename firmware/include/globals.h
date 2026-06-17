@@ -85,6 +85,16 @@ extern String bleSensorMac0;
 extern String bleSensorMac1;
 #endif
 
+#if ENABLE_BEEHIVE_GATT
+// Paired beehivemonitoring.com GATT device MACs ("" when unpaired). HiveHeart
+// slot 0 -> hive 1, slot 1 -> hive 2; HiveScale slot 0/1 are the wireless
+// scales. Seeded from secrets.h and/or set in the provisioning portal.
+extern String heartMac0;
+extern String heartMac1;
+extern String scaleMac0;
+extern String scaleMac1;
+#endif
+
 // ---- Scale calibration ----------------------------------------------------
 extern long scale1Offset;
 extern long scale2Offset;
