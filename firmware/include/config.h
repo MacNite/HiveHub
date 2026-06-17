@@ -151,8 +151,15 @@
 //
 // Both HiveScale (this flag) and HiveInside (BLE_MODE_GATT) must be compiled
 // with matching modes; pairing itself (MAC address) is unchanged.
+//
+// Defaults to 1: current HiveInside firmware is GATT-ONLY (its broadcast/beacon
+// advertising mode was removed), so it never emits the manufacturer-data blob
+// parseHiveInside() expects. Without the GATT client a paired HiveInside is
+// found by MAC during the scan but yields no measurement, so HiveScale uploads
+// nothing for it. HolyIot beacons are unaffected — they carry advertising data,
+// so the post-scan GATT step is skipped for them.
 #ifndef HIVEINSIDE_USE_GATT
-#define HIVEINSIDE_USE_GATT 0
+#define HIVEINSIDE_USE_GATT 1
 #endif
 
 // Timeout for each GATT connection attempt in seconds (NimBLE unit).

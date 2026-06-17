@@ -452,8 +452,14 @@ static NimBLEScan* startScan(ScanCallbacks& cb, uint32_t seconds) {
   scan->setActiveScan(HOLYIOT_BLE_ACTIVE_SCAN ? true : false);
   scan->setInterval(100);
   scan->setWindow(99);
-  // NimBLE 2.x start() takes a duration in milliseconds (1.x used seconds).
-  scan->start(seconds * 1000, false);
+  // NimBLE 2.x start() takes a duration in milliseconds (1.x used seconds) BUT,
+  // unlike 1.x, start() is asynchronous: it kicks off discovery and returns
+  // immediately, leaving onResult() to fire on the host task. The callers used
+  // to clearResults()/deinit() right after start(), which tore the controller
+  // down before a single advertisement could arrive — so no paired sensor was
+  // ever matched and the portal scan came up empty. getResults() runs the same
+  // scan but BLOCKS for the full duration, so the callbacks have their window.
+  scan->getResults(seconds * 1000, false);
   return scan;
 }
 
