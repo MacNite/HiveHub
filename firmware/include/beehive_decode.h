@@ -13,7 +13,7 @@
 //
 // Bytes 0..3 are a header/timestamp ("Time" in HiveGateway); the sensor fields
 // start at byte 4. This header is deliberately free of Arduino / NimBLE deps so
-// it can be unit-tested on the host (see tests/test_beehive_decode.cpp).
+// it can be unit-tested on the host (see test-data/test_beehive_decode.cpp).
 #pragma once
 
 #include <stdint.h>
@@ -51,25 +51,50 @@ inline int signExtend(uint32_t v, unsigned bits) {
   return (int)((v ^ mask) - mask);
 }
 
+// Inclusive range check used to reject physically implausible decodes. Device
+// type is inferred from the configured slot, so a wrong MAC/type assignment can
+// otherwise decode plausible-looking but meaningless data; these guards make
+// such a misconfiguration fail loudly instead of silently storing junk.
+inline bool inRange(float v, float lo, float hi) {
+  return v >= lo && v <= hi;
+}
+
 // Decode a HiveHeart notification. Returns false (and leaves `out.present`
-// false) when the payload is too short for the mandatory fields (bytes 4..11).
+// false) when the payload is too short for the mandatory fields (bytes 4..11),
+// implausibly long, or when a decoded field falls outside a physically sane
+// range (which most often means this payload is not actually a HiveHeart).
 inline bool decodeHeart(const uint8_t* p, size_t len, HeartReading& out) {
-  if (p == nullptr || len < 12) return false;
+  // 12 mandatory bytes; the FFT-bearing variant is 20. Anything well beyond
+  // that is not a HiveHeart frame.
+  if (p == nullptr || len < 12 || len > 32) return false;
 
   // Battery: the longer (FFT-bearing) payload uses a different scale.
+  float battery_v;
   if (len > 11)
-    out.battery_v = (2000.0f + p[4] * 1500.0f / 255.0f) / 1000.0f;
+    battery_v = (2000.0f + p[4] * 1500.0f / 255.0f) / 1000.0f;
   else
-    out.battery_v = (2500.0f + p[4] * 1000.0f / 255.0f) / 1000.0f;
+    battery_v = (2500.0f + p[4] * 1000.0f / 255.0f) / 1000.0f;
 
-  out.humidity_pct = p[5] * 100.0f / 255.0f;
+  float humidity_pct = p[5] * 100.0f / 255.0f;
 
   uint32_t tRaw = (uint32_t)p[6] | ((uint32_t)(p[7] & 0x0F) << 8);
-  out.temp_c = signExtend(tRaw, 12) / 10.0f;
+  float temp_c = signExtend(tRaw, 12) / 10.0f;
 
   uint32_t fRaw = (uint32_t)(p[7] >> 4) | ((uint32_t)p[8] << 4) | ((uint32_t)(p[9] & 0x03) << 12);
-  out.frequency_hz = fRaw / 10.0f;
+  float frequency_hz = fRaw / 10.0f;
 
+  // Reject physically implausible values before committing to `out`.
+  if (!inRange(battery_v, 2.0f, 4.5f) ||
+      !inRange(humidity_pct, 0.0f, 100.0f) ||
+      !inRange(temp_c, -40.0f, 85.0f) ||
+      !inRange(frequency_hz, 0.0f, 2000.0f)) {
+    return false;
+  }
+
+  out.battery_v    = battery_v;
+  out.humidity_pct = humidity_pct;
+  out.temp_c       = temp_c;
+  out.frequency_hz = frequency_hz;
   out.energy = ((uint32_t)p[9] >> 2) | ((uint32_t)p[10] << 6);
   out.peak   = p[11];
 
@@ -83,21 +108,40 @@ inline bool decodeHeart(const uint8_t* p, size_t len, HeartReading& out) {
 }
 
 // Decode a HiveScale notification. Returns false when the payload is too short
-// for the mandatory fields (bytes 4..13).
+// for the mandatory fields (bytes 4..13), implausibly long, or when a decoded
+// field falls outside a physically sane range (most often meaning this payload
+// is not actually a HiveScale).
 inline bool decodeScale(const uint8_t* p, size_t len, ScaleReading& out) {
-  if (p == nullptr || len < 14) return false;
+  // 14 mandatory bytes; real captures are 15. Anything well beyond that is not
+  // a HiveScale frame.
+  if (p == nullptr || len < 14 || len > 32) return false;
 
-  out.battery_v    = (2500.0f + p[4] * 2000.0f / 255.0f) / 1000.0f;
-  out.humidity_pct = p[5] * 100.0f / 255.0f;
+  float battery_v    = (2500.0f + p[4] * 2000.0f / 255.0f) / 1000.0f;
+  float humidity_pct = p[5] * 100.0f / 255.0f;
 
   uint32_t tRaw = (uint32_t)p[6] | ((uint32_t)(p[7] & 0x0F) << 8);
-  out.temp_c = signExtend(tRaw, 12) / 10.0f;
+  float temp_c = signExtend(tRaw, 12) / 10.0f;
 
   uint32_t pRaw = (uint32_t)(p[7] >> 4) | ((uint32_t)p[8] << 4);
-  out.pressure_hpa = (10000 + signExtend(pRaw, 12)) / 10.0f;
+  float pressure_hpa = (10000 + signExtend(pRaw, 12)) / 10.0f;
 
   int16_t w = (int16_t)((uint16_t)p[9] | ((uint16_t)p[10] << 8));
-  out.weight_kg = w / 100.0f;
+  float weight_kg = w / 100.0f;
+
+  // Reject physically implausible values before committing to `out`.
+  if (!inRange(battery_v, 2.0f, 4.5f) ||
+      !inRange(humidity_pct, 0.0f, 100.0f) ||
+      !inRange(temp_c, -40.0f, 85.0f) ||
+      !inRange(pressure_hpa, 300.0f, 1100.0f) ||
+      !inRange(weight_kg, -50.0f, 500.0f)) {
+    return false;
+  }
+
+  out.battery_v    = battery_v;
+  out.humidity_pct = humidity_pct;
+  out.temp_c       = temp_c;
+  out.pressure_hpa = pressure_hpa;
+  out.weight_kg    = weight_kg;
 
   uint32_t rwRaw = (uint32_t)p[11] | ((uint32_t)p[12] << 8) | ((uint32_t)p[13] << 16);
   out.raw_weight = signExtend(rwRaw, 24);

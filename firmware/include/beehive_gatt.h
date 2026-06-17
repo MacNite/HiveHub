@@ -40,8 +40,10 @@ struct CycleResult {
 void runCycle(CycleResult& out);
 
 // Write the decoded readings into the measurement JSON. Heart temperature and
-// humidity are NOT written here (sensors.cpp owns hive_{slot}_temp_c /
-// hive_{slot}_humidity_percent so it can arbitrate sources); everything else is.
+// humidity are written here on their own hiveheart_{slot}_temp_c /
+// hiveheart_{slot}_humidity_percent fields so the GATT reading stays visible;
+// sensors.cpp separately arbitrates the canonical hive_{slot}_temp_c /
+// hive_{slot}_humidity_percent across all in-hive sources.
 void writeToJson(JsonDocument& doc, const CycleResult& r);
 
 // Normalise a MAC string to "AA:BB:CC:DD:EE:FF" (uppercase, colon-separated) or

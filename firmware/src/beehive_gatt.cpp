@@ -12,19 +12,27 @@ namespace bhgatt {
 namespace {
 
 // One notification's worth of payload, captured by the subscribe callback.
+// The callback runs on the NimBLE host task while runCycle() polls from the
+// main loop, so every access to the shared buffer is guarded by a spinlock to
+// give the reader a consistent snapshot (and a memory barrier) rather than
+// relying on `volatile` alone.
 struct NotifyCapture {
-  volatile bool   got = false;
-  uint8_t         buf[64];
-  size_t          len = 0;
+  bool     got = false;
+  uint8_t  buf[64];
+  size_t   len = 0;
 };
 NotifyCapture g_capture;
+portMUX_TYPE  g_captureMux = portMUX_INITIALIZER_UNLOCKED;
 
 void onNotify(NimBLERemoteCharacteristic* /*chr*/, uint8_t* data, size_t len, bool /*isNotify*/) {
-  if (g_capture.got) return;  // keep only the first notification of the cycle
-  size_t n = len > sizeof(g_capture.buf) ? sizeof(g_capture.buf) : len;
-  for (size_t i = 0; i < n; i++) g_capture.buf[i] = data[i];
-  g_capture.len = n;
-  g_capture.got = true;
+  portENTER_CRITICAL(&g_captureMux);
+  if (!g_capture.got) {  // keep only the first notification of the cycle
+    size_t n = len > sizeof(g_capture.buf) ? sizeof(g_capture.buf) : len;
+    for (size_t i = 0; i < n; i++) g_capture.buf[i] = data[i];
+    g_capture.len = n;
+    g_capture.got = true;
+  }
+  portEXIT_CRITICAL(&g_captureMux);
 }
 
 // Connect to `mac`, subscribe to the configured notify characteristic, and wait
@@ -33,17 +41,30 @@ void onNotify(NimBLERemoteCharacteristic* /*chr*/, uint8_t* data, size_t len, bo
 bool readNotification(const String& mac, uint8_t* outBuf, size_t cap, size_t& outLen, int& rssi) {
   if (mac.length() == 0) return false;
 
+  portENTER_CRITICAL(&g_captureMux);
   g_capture.got = false;
   g_capture.len = 0;
+  portEXIT_CRITICAL(&g_captureMux);
 
-  NimBLEAddress addr(std::string(mac.c_str()), BLE_ADDR_PUBLIC);
   NimBLEClient* client = NimBLEDevice::createClient();
   client->setConnectTimeout(BEEHIVE_GATT_CONNECT_TIMEOUT_S);
 
-  Serial.printf("[BHGATT] connecting to %s ...\n", mac.c_str());
-  if (!client->connect(addr)) {
+  // beehivemonitoring devices may advertise with a public OR a random/static
+  // address. We don't pre-scan the beehive path, so try public first and fall
+  // back to random rather than failing outright on the address type alone.
+  const uint8_t addrTypes[2] = { BLE_ADDR_PUBLIC, BLE_ADDR_RANDOM };
+  bool connected = false;
+  for (int t = 0; t < 2 && !connected; t++) {
+    NimBLEAddress addr(std::string(mac.c_str()), addrTypes[t]);
+    Serial.printf("[BHGATT] connecting to %s (addr type %u) ...\n", mac.c_str(), addrTypes[t]);
+    if (client->connect(addr)) {
+      connected = true;
+    } else {
+      Serial.printf("[BHGATT] connect failed (addr type %u)\n", addrTypes[t]);
+    }
+  }
+  if (!connected) {
     NimBLEDevice::deleteClient(client);
-    Serial.println("[BHGATT] connect failed");
     return false;
   }
   rssi = client->getRssi();
@@ -60,10 +81,19 @@ bool readNotification(const String& mac, uint8_t* outBuf, size_t cap, size_t& ou
       Serial.println("[BHGATT] subscribe failed");
     } else {
       uint32_t deadline = millis() + (uint32_t)BEEHIVE_GATT_NOTIFY_TIMEOUT_S * 1000UL;
-      while (!g_capture.got && (int32_t)(deadline - millis()) > 0) delay(20);
-      if (g_capture.got) {
+      bool got = false;
+      while (!got && (int32_t)(deadline - millis()) > 0) {
+        portENTER_CRITICAL(&g_captureMux);
+        got = g_capture.got;
+        portEXIT_CRITICAL(&g_captureMux);
+        if (!got) delay(20);
+      }
+      if (got) {
+        // Copy the captured payload out under the lock for a consistent snapshot.
+        portENTER_CRITICAL(&g_captureMux);
         outLen = g_capture.len > cap ? cap : g_capture.len;
         for (size_t i = 0; i < outLen; i++) outBuf[i] = g_capture.buf[i];
+        portEXIT_CRITICAL(&g_captureMux);
         ok = true;
       } else {
         Serial.println("[BHGATT] no notification within timeout");
@@ -142,6 +172,12 @@ void writeToJson(JsonDocument& doc, const CycleResult& r) {
     if (!h.present) continue;
     uint8_t s = i + 1;
     String pfx = String("hiveheart_") + s + "_";
+    // temp/humidity are also fed into hive_N_* by sensors.cpp, but only when no
+    // higher-priority wired/HolyIot source already filled those. Publishing the
+    // raw HiveHeart values here as well keeps the GATT reading independently
+    // visible (and verifiable) regardless of source precedence.
+    doc[pfx + "temp_c"]           = h.temp_c;
+    doc[pfx + "humidity_percent"] = h.humidity_pct;
     doc[pfx + "frequency_hz"] = h.frequency_hz;
     doc[pfx + "energy"]       = h.energy;
     doc[pfx + "peak"]         = h.peak;

@@ -154,6 +154,21 @@ void appendLastSensorPanel(String& html) {
   addMeasurementRow(html, "Ambient humidity", jsonNumberOrNA(doc, "ambient_humidity_percent", 1, "%"));
   addMeasurementRow(html, "Scale 1 raw", jsonNumberOrNA(doc, "scale_1_raw", 0, ""));
   addMeasurementRow(html, "Scale 2 raw", jsonNumberOrNA(doc, "scale_2_raw", 0, ""));
+
+  // Wireless beehivemonitoring.com GATT sensors are reported on their own
+  // hivescale_N_* / hiveheart_N_* fields (not the wired scale_N_* / hive_N_*
+  // rows above), so surface them here when a paired device produced a reading.
+  if (!doc["hivescale_1_weight_kg"].isNull() || !doc["hivescale_2_weight_kg"].isNull()) {
+    addMeasurementRow(html, "HiveScale 1 weight", jsonNumberOrNA(doc, "hivescale_1_weight_kg", 2, "kg"));
+    addMeasurementRow(html, "HiveScale 2 weight", jsonNumberOrNA(doc, "hivescale_2_weight_kg", 2, "kg"));
+  }
+  if (!doc["hiveheart_1_temp_c"].isNull() || !doc["hiveheart_2_temp_c"].isNull()) {
+    addMeasurementRow(html, "HiveHeart 1 temperature", jsonNumberOrNA(doc, "hiveheart_1_temp_c", 2, "C"));
+    addMeasurementRow(html, "HiveHeart 1 humidity", jsonNumberOrNA(doc, "hiveheart_1_humidity_percent", 1, "%"));
+    addMeasurementRow(html, "HiveHeart 2 temperature", jsonNumberOrNA(doc, "hiveheart_2_temp_c", 2, "C"));
+    addMeasurementRow(html, "HiveHeart 2 humidity", jsonNumberOrNA(doc, "hiveheart_2_humidity_percent", 1, "%"));
+  }
+
   addMeasurementRow(html, "WiFi RSSI", jsonNumberOrNA(doc, "rssi_dbm", 0, "dBm"));
   addMeasurementRow(html, "SD card OK", jsonBoolOrNA(doc, "sd_ok"));
   addMeasurementRow(html, "RTC OK", jsonBoolOrNA(doc, "rtc_ok"));

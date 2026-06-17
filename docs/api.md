@@ -204,8 +204,11 @@ milli-g (mg). For `N` in `1`, `2`:
 
 See [accelerometer.md](accelerometer.md) for the rationale and wiring.
 
-The full payload is also stored as JSONB in `raw_json`. Unknown fields are
-accepted (the model allows extras) and preserved in `raw_json`.
+The full payload is also stored as JSONB in `raw_json`. The request model uses
+`extra="ignore"`, so **only fields declared on `MeasurementIn` are stored** —
+any field the model does not know about is silently dropped, not preserved in
+`raw_json`. When adding a new telemetry field (e.g. a new GATT field), declare
+it on `MeasurementIn` or it will be discarded on ingest.
 
 > `network_transport`, `cellular_ok`, and `cellular_csq` are accepted and stored
 > for the future Power Module. The current ESP32 firmware is Wi-Fi only and

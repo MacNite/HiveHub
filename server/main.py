@@ -365,21 +365,28 @@ class MeasurementIn(BaseModel):
     ble_2_rssi_dbm:         Optional[int]   = None
 
     # ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) ───────────
-    # HiveHeart is an in-hive sensor read over GATT: its temperature/humidity are
-    # delivered via hive_N_temp_c / hive_N_humidity_percent (above); the acoustic
-    # frequency/energy/peak and battery voltage are promoted to columns; the raw
-    # FFT bins stay in raw_json. HiveScale is a wireless weight scale with its own
+    # HiveHeart is an in-hive sensor read over GATT: its temperature/humidity feed
+    # hive_N_temp_c / hive_N_humidity_percent (above) only when no higher-priority
+    # wired/HolyIot source filled those, so the firmware ALSO reports the raw
+    # HiveHeart readings on hiveheart_N_temp_c / hiveheart_N_humidity_percent to
+    # keep them independently visible. The acoustic frequency/energy/peak and
+    # battery voltage plus those temp/humidity values stay in raw_json; the raw
+    # FFT bins do too. HiveScale is a wireless weight scale with its own
     # weight/raw-weight plus on-board temp/humidity/pressure/battery.
-    hiveheart_1_frequency_hz: Optional[float] = None
-    hiveheart_1_energy:       Optional[int]   = None
-    hiveheart_1_peak:         Optional[int]   = None
-    hiveheart_1_battery_v:    Optional[float] = None
-    hiveheart_1_fft:          Optional[list[int]] = Field(default=None, max_length=16)
-    hiveheart_2_frequency_hz: Optional[float] = None
-    hiveheart_2_energy:       Optional[int]   = None
-    hiveheart_2_peak:         Optional[int]   = None
-    hiveheart_2_battery_v:    Optional[float] = None
-    hiveheart_2_fft:          Optional[list[int]] = Field(default=None, max_length=16)
+    hiveheart_1_frequency_hz:     Optional[float] = None
+    hiveheart_1_energy:           Optional[int]   = None
+    hiveheart_1_peak:             Optional[int]   = None
+    hiveheart_1_battery_v:        Optional[float] = None
+    hiveheart_1_temp_c:           Optional[float] = None
+    hiveheart_1_humidity_percent: Optional[float] = None
+    hiveheart_1_fft:              Optional[list[int]] = Field(default=None, max_length=16)
+    hiveheart_2_frequency_hz:     Optional[float] = None
+    hiveheart_2_energy:           Optional[int]   = None
+    hiveheart_2_peak:             Optional[int]   = None
+    hiveheart_2_battery_v:        Optional[float] = None
+    hiveheart_2_temp_c:           Optional[float] = None
+    hiveheart_2_humidity_percent: Optional[float] = None
+    hiveheart_2_fft:              Optional[list[int]] = Field(default=None, max_length=16)
 
     hivescale_1_weight_kg:        Optional[float] = None
     hivescale_1_raw_weight:       Optional[int]   = None
@@ -1613,10 +1620,14 @@ MEASUREMENT_SELECT_COLUMNS = """
     COALESCE(hiveheart_1_energy,           NULLIF(raw_json->>'hiveheart_1_energy',           '')::integer)          AS hiveheart_1_energy,
     COALESCE(hiveheart_1_peak,             NULLIF(raw_json->>'hiveheart_1_peak',             '')::integer)          AS hiveheart_1_peak,
     COALESCE(hiveheart_1_battery_v,        NULLIF(raw_json->>'hiveheart_1_battery_v',        '')::double precision) AS hiveheart_1_battery_v,
+    NULLIF(raw_json->>'hiveheart_1_temp_c',           '')::double precision AS hiveheart_1_temp_c,
+    NULLIF(raw_json->>'hiveheart_1_humidity_percent', '')::double precision AS hiveheart_1_humidity_percent,
     COALESCE(hiveheart_2_frequency_hz,     NULLIF(raw_json->>'hiveheart_2_frequency_hz',     '')::double precision) AS hiveheart_2_frequency_hz,
     COALESCE(hiveheart_2_energy,           NULLIF(raw_json->>'hiveheart_2_energy',           '')::integer)          AS hiveheart_2_energy,
     COALESCE(hiveheart_2_peak,             NULLIF(raw_json->>'hiveheart_2_peak',             '')::integer)          AS hiveheart_2_peak,
     COALESCE(hiveheart_2_battery_v,        NULLIF(raw_json->>'hiveheart_2_battery_v',        '')::double precision) AS hiveheart_2_battery_v,
+    NULLIF(raw_json->>'hiveheart_2_temp_c',           '')::double precision AS hiveheart_2_temp_c,
+    NULLIF(raw_json->>'hiveheart_2_humidity_percent', '')::double precision AS hiveheart_2_humidity_percent,
     COALESCE(hivescale_1_weight_kg,        NULLIF(raw_json->>'hivescale_1_weight_kg',        '')::double precision) AS hivescale_1_weight_kg,
     COALESCE(hivescale_1_raw_weight,       NULLIF(raw_json->>'hivescale_1_raw_weight',       '')::bigint)           AS hivescale_1_raw_weight,
     COALESCE(hivescale_1_temp_c,           NULLIF(raw_json->>'hivescale_1_temp_c',           '')::double precision) AS hivescale_1_temp_c,

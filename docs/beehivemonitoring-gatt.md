@@ -40,10 +40,10 @@ HiveHeart slot 1/2 map to hive 1/2 and supply `hive_N_temp_c` /
 
 Bytes 0–3 are a header/timestamp; sensor fields start at byte 4. Decoders live
 in `firmware/include/beehive_decode.h` and are unit-tested against real captures
-in `tests/test_beehive_decode.cpp`:
+in `test-data/test_beehive_decode.cpp`:
 
 ```
-g++ -std=c++17 -I firmware/include tests/test_beehive_decode.cpp -o /tmp/t && /tmp/t
+g++ -std=c++17 -I firmware/include test-data/test_beehive_decode.cpp -o /tmp/t && /tmp/t
 ```
 
 **HiveHeart** (validated: V=2.81 H=52.5% T=24.3°C f=66.9 Hz)

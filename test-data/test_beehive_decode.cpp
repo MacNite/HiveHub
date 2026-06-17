@@ -2,7 +2,7 @@
 // HiveHeart / HiveScale notification decoders. Builds with plain g++ (no
 // Arduino / NimBLE), so it runs in CI and on a dev box:
 //
-//   g++ -std=c++17 -I firmware/include firmware/test/test_beehive_decode.cpp -o /tmp/t && /tmp/t
+//   g++ -std=c++17 -I firmware/include test-data/test_beehive_decode.cpp -o /tmp/t && /tmp/t
 //
 // The two payloads are the real captures used to validate the byte layout.
 #include "beehive_decode.h"

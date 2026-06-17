@@ -3,6 +3,7 @@
 #include "globals.h"
 #include "config.h"
 #include "secrets.h"
+#include "beehive_gatt.h"
 
 String prefString(const char* key, const char* fallback) {
   prefs.begin("hivescale", true);
@@ -84,17 +85,27 @@ void seedPrefsFromSecretsIfNeeded() {
   // MACs after an upgrade. We only write a key when it is ABSENT, so any pairing
   // (or deliberate un-pairing) done later from the portal is always preserved.
   #if ENABLE_BEEHIVE_GATT
+    // Normalize seeded MACs to the canonical uppercase colon-separated form
+    // (same as portal-entered MACs) so the GATT connect path gets a parseable
+    // address regardless of how the configurator emitted them. If normalization
+    // fails (malformed value) we fall back to the raw string rather than
+    // silently dropping a configured pairing.
+    auto seedMac = [&](const char* key, const char* raw) {
+      if (prefs.isKey(key)) return;
+      String norm = bhgatt::normalizeMac(String(raw));
+      prefs.putString(key, norm.length() ? norm : String(raw));
+    };
     #ifdef INHIVE_1_MAC
-      if (!prefs.isKey("heart_mac0")) prefs.putString("heart_mac0", INHIVE_1_MAC);
+      seedMac("heart_mac0", INHIVE_1_MAC);
     #endif
     #ifdef INHIVE_2_MAC
-      if (!prefs.isKey("heart_mac1")) prefs.putString("heart_mac1", INHIVE_2_MAC);
+      seedMac("heart_mac1", INHIVE_2_MAC);
     #endif
     #ifdef WSCALE_1_MAC
-      if (!prefs.isKey("scale_mac0")) prefs.putString("scale_mac0", WSCALE_1_MAC);
+      seedMac("scale_mac0", WSCALE_1_MAC);
     #endif
     #ifdef WSCALE_2_MAC
-      if (!prefs.isKey("scale_mac1")) prefs.putString("scale_mac1", WSCALE_2_MAC);
+      seedMac("scale_mac1", WSCALE_2_MAC);
     #endif
   #endif
 
