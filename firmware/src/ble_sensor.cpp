@@ -370,7 +370,9 @@ static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
     }
   }
 
-  client->disconnect();
+  // Only terminate if still connected; a peer that already dropped the link
+  // would otherwise make ble_gap_terminate() log a benign failure.
+  if (client->isConnected()) client->disconnect();
   NimBLEDevice::deleteClient(client);
   return ok;
 }

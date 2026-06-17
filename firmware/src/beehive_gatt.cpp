@@ -103,7 +103,10 @@ bool readNotification(const String& mac, uint8_t* outBuf, size_t cap, size_t& ou
     }
   }
 
-  client->disconnect();
+  // These sensors push one notification then drop the link themselves, so the
+  // connection is often already gone by now. Only terminate if still connected,
+  // otherwise ble_gap_terminate() logs a benign "rc=30" failure.
+  if (client->isConnected()) client->disconnect();
   NimBLEDevice::deleteClient(client);
   return ok;
 }
