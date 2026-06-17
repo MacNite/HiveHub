@@ -47,7 +47,8 @@ bool readNotification(const String& mac, uint8_t* outBuf, size_t cap, size_t& ou
   portEXIT_CRITICAL(&g_captureMux);
 
   NimBLEClient* client = NimBLEDevice::createClient();
-  client->setConnectTimeout(BEEHIVE_GATT_CONNECT_TIMEOUT_S);
+  // NimBLE 2.x setConnectTimeout() is in milliseconds (1.x used seconds).
+  client->setConnectTimeout((uint32_t)BEEHIVE_GATT_CONNECT_TIMEOUT_S * 1000UL);
 
   // beehivemonitoring devices may advertise with a public OR a random/static
   // address. We don't pre-scan the beehive path, so try public first and fall

@@ -213,13 +213,23 @@ namespace {
 Accumulator g_slot[2];
 std::vector<Discovered>* g_discover = nullptr;  // non-null during discover()
 
-class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks {
-  void onResult(NimBLEAdvertisedDevice* dev) override {
+class ScanCallbacks : public NimBLEScanCallbacks {
+  void onResult(const NimBLEAdvertisedDevice* dev) override {
     String mac = String(dev->getAddress().toString().c_str());
     mac = normalizeMac(mac);
 
-    std::string md = dev->haveManufacturerData() ? dev->getManufacturerData() : std::string();
-    Parsed p = parsePayload(reinterpret_cast<const uint8_t*>(md.data()), md.size());
+    // NimBLE 2.x changed the manufacturer-data getter to return a
+    // std::vector<uint8_t> (1.x returned std::string). Using `auto` plus
+    // .data()/.size() keeps this working with either return type; parsePayload
+    // tolerates a null/empty buffer.
+    const uint8_t* mdata = nullptr;
+    size_t mlen = 0;
+    auto md = dev->getManufacturerData();
+    if (dev->haveManufacturerData()) {
+      mdata = reinterpret_cast<const uint8_t*>(md.data());
+      mlen = md.size();
+    }
+    Parsed p = parsePayload(mdata, mlen);
 
     if (g_discover != nullptr) {
       String name = dev->haveName() ? String(dev->getName().c_str()) : String("");
@@ -296,7 +306,8 @@ static const char* HIVEINSIDE_GATT_CHR = "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01";
 // and frees the client handle before returning regardless of outcome.
 static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
   NimBLEClient* client = NimBLEDevice::createClient();
-  client->setConnectTimeout(HIVEINSIDE_GATT_CONNECT_TIMEOUT_S);
+  // NimBLE 2.x setConnectTimeout() is in milliseconds (1.x used seconds).
+  client->setConnectTimeout((uint32_t)HIVEINSIDE_GATT_CONNECT_TIMEOUT_S * 1000UL);
 
   Serial.printf("[BLE] GATT connecting to %s ...\n", addr.toString().c_str());
   if (!client->connect(addr)) {
@@ -432,12 +443,15 @@ const char* sensorTypeName(SensorType t) {
 static NimBLEScan* startScan(ScanCallbacks& cb, uint32_t seconds) {
   NimBLEDevice::init("");
   NimBLEScan* scan = NimBLEDevice::getScan();
-  scan->setAdvertisedDeviceCallbacks(&cb, /*wantDuplicates=*/true);
+  // NimBLE 2.x: setAdvertisedDeviceCallbacks() -> setScanCallbacks(); the second
+  // arg (wantDuplicates=true) reports every advertisement to onResult, which is
+  // what the per-cycle AC RMS/peak accumulation needs.
+  scan->setScanCallbacks(&cb, /*wantDuplicates=*/true);
   scan->setActiveScan(HOLYIOT_BLE_ACTIVE_SCAN ? true : false);
-  scan->setDuplicateFilter(false);  // we want every advertisement, for AC RMS
   scan->setInterval(100);
   scan->setWindow(99);
-  scan->start(seconds, false);
+  // NimBLE 2.x start() takes a duration in milliseconds (1.x used seconds).
+  scan->start(seconds * 1000, false);
   return scan;
 }
 
