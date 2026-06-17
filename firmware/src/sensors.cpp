@@ -15,7 +15,7 @@
 #include "mics.h"
 #endif
 
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
 #include "ble_sensor.h"
 #endif
 
@@ -129,7 +129,7 @@ String createMeasurementJson() {
   // ESP32-C6) before the wired sensors so we know which capabilities the BLE
   // sensor already provides, and can skip the wired sensor that measures the
   // same in-hive quantity (collision avoidance — see config.h BLE_OVERRIDE_*).
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
   blesensor::Snapshot bleSnap1;
   blesensor::Snapshot bleSnap2;
   blesensor::scanPairedSensors(bleSensorMac0, bleSensorMac1, bleSnap1, bleSnap2);
@@ -160,7 +160,7 @@ String createMeasurementJson() {
   float hiveHumidity2 = NAN;
 #if ENABLE_DS18B20_HIVE_TEMP
   bool ds18Skip1 = false, ds18Skip2 = false;
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
   ds18Skip1 = bleTakesTemp1;
   ds18Skip2 = bleTakesTemp2;
   if (ds18Skip1 || ds18Skip2)
@@ -233,7 +233,7 @@ String createMeasurementJson() {
   // supplies acoustics (its FFT bands are mapped onto mic_left_*/mic_right_*
   // instead). Avoids capturing — and uploading — two competing sound sources.
   bool wiredMicUsed = true;
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
   if (bleTakesMic) {
     wiredMicUsed = false;
     Serial.println("[ARB] BLE supplies in-hive acoustics; skipping wired INMP441 mics");
@@ -243,7 +243,7 @@ String createMeasurementJson() {
   if (wiredMicUsed) micResult = readMicSamples();
 #endif
 
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
   // In-hive temperature source: the wired DS18B20 (when not overridden above)
   // takes priority; otherwise fall back to the BLE sensor's SHT40 temperature.
   if (isnan(hiveTemp1) && bleSnap1.present && !isnan(bleSnap1.temp_c)) hiveTemp1 = bleSnap1.temp_c;
@@ -359,7 +359,7 @@ String createMeasurementJson() {
   beecnt::writeSnapshotToJson(doc, 1, beeSnap1);
   beecnt::writeSnapshotToJson(doc, 2, beeSnap2);
 
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
   blesensor::writeSnapshotToJson(doc, 1, bleSnap1);
   blesensor::writeSnapshotToJson(doc, 2, bleSnap2);
 #endif

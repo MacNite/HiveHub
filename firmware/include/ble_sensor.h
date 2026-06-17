@@ -21,13 +21,13 @@
 // samples, no FFT bands are produced — the server runs a low-rate pre-swarm
 // detector on the per-cycle acceleration magnitude instead.
 //
-// The whole feature is compiled out unless ENABLE_HOLYIOT_BLE is set.
+// The whole feature is compiled out unless ENABLE_BLE_SCAN is set.
 #pragma once
 
 #include <Arduino.h>
 #include "config.h"
 
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
 
 #include <ArduinoJson.h>
 #include <vector>
@@ -118,4 +118,4 @@ String normalizeMac(const String& raw);
 
 }  // namespace blesensor
 
-#endif  // ENABLE_HOLYIOT_BLE
+#endif  // ENABLE_BLE_SCAN

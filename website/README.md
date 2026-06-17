@@ -49,7 +49,7 @@ The configurator mirrors the firmware feature flags found in
 | DS18B20 in-hive temperature | `ENABLE_DS18B20_HIVE_TEMP` |
 | INMP441 microphones | `ENABLE_INMP441_MICS`, pins, sample rate/frames |
 | LIS3DH / LIS2DH12 accelerometers | `ENABLE_LIS3DH_ACCEL`, addresses, range, ODR, sample count |
-| Wireless sensors *(up to 6)* | `ENABLE_HOLYIOT_BLE`, scan seconds, active scan, company id, `HIVEINSIDE_USE_GATT`, `BLE_OVERRIDE_*`, per-slot `INHIVE_*` / `WSCALE_*` / `WBEECNT_*` type, protocol and GATT UUIDs |
+| Wireless sensors *(up to 6)* | `ENABLE_BLE_SCAN`, scan seconds, active scan, company id, `HIVEINSIDE_USE_GATT`, `BLE_OVERRIDE_*`, per-slot `INHIVE_*` / `WSCALE_*` / `WBEECNT_*` type, protocol and GATT UUIDs |
 | INA219 solar monitor | `ENABLE_INA219_SOLAR`, I2C address |
 | MAX17048 LiPo fuel gauge | `ENABLE_MAX17048_BATTERY`, alert percent |
 

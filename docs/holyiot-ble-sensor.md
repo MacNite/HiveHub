@@ -21,7 +21,7 @@ It replaces the previous wired LIS3DH/LIS2DH12 accelerometer
 
 ## Enabling and pairing
 
-1. **Firmware flag.** Set `ENABLE_HOLYIOT_BLE 1` in `secrets.h` (see
+1. **Firmware flag.** Set `ENABLE_BLE_SCAN 1` in `secrets.h` (see
    `secrets.example.h` for all options). The wired in-hive microphone
    (`ENABLE_INMP441_MICS`) and DS18B20 probes (`ENABLE_DS18B20_HIVE_TEMP`) are
    independent optional features — turn them off if a build relies on the BLE

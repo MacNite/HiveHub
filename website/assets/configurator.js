@@ -350,7 +350,7 @@
     // --- In-hive sensors (slot 1 -> hive 1, slot 2 -> hive 2) -----------------
     var inhive = byCat.inhive;
     p("// ---- In-hive BLE sensors (slot 1 -> hive 1, slot 2 -> hive 2) ----");
-    p(def("ENABLE_HOLYIOT_BLE", inhive.length ? "1" : "0"));
+    p(def("ENABLE_BLE_SCAN", inhive.length ? "1" : "0"));
     if (inhive.length) {
       p(def("HOLYIOT_BLE_SCAN_SECONDS", val("#ble_scan") || "6"));
       p(def("HOLYIOT_BLE_ACTIVE_SCAN", $("#ble_active").checked ? "1" : "0"));

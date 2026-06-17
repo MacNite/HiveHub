@@ -22,7 +22,7 @@ void appendLastSensorPanel(String& html);
 
 // ---- HTTP route handlers --------------------------------------------------
 void handleSdDownloadAll();
-#if ENABLE_HOLYIOT_BLE
+#if ENABLE_BLE_SCAN
 void handleBleScan();
 #endif
 void handleSetupRoot();

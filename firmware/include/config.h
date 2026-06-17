@@ -101,8 +101,8 @@
 // firmware/src/ble_sensor.cpp (HOLYIOT_OFF_* constants) are an editable
 // best-effort layout; after sniffing one real packet (nRF Connect etc.) adjust
 // those constants — no other code needs to change.
-#ifndef ENABLE_HOLYIOT_BLE
-#define ENABLE_HOLYIOT_BLE 0
+#ifndef ENABLE_BLE_SCAN
+#define ENABLE_BLE_SCAN 1
 #endif
 
 // How many seconds to scan for the paired beacons each cycle. The 25015
@@ -129,7 +129,7 @@
 // HIVEINSIDE ESP32-C6 IN-HIVE BLE SENSOR (optional, shares the same bridge)
 // ==============================
 // The HiveInside ESP32-C6 prototype advertises through the SAME passive scan
-// bridge as the HolyIot 25015 (ENABLE_HOLYIOT_BLE turns the bridge on). Its
+// bridge as the HolyIot 25015 (ENABLE_BLE_SCAN turns the bridge on). Its
 // manufacturer-specific payload is auto-detected by a distinct company id plus a
 // magic byte, so the two formats coexist with no extra enable flag. Unlike the
 // HolyIot beacon it also carries vibration AND acoustic FFT bands, which the
@@ -192,7 +192,7 @@
 // ==============================
 // The secrets.h configurator can describe up to six wireless BLE sensors across
 // three categories: in-hive (max 2), scale (max 2) and bee counter (max 2). The
-// in-hive bridge (ENABLE_HOLYIOT_BLE above) is the only category the current
+// in-hive bridge (ENABLE_BLE_SCAN above) is the only category the current
 // firmware reads; the two flags below — plus the per-slot WSCALE_* / WBEECNT_*
 // and INHIVE_* TYPE / PROTOCOL / GATT-UUID macros the configurator writes — are
 // captured for a future firmware build and are otherwise unused today.
