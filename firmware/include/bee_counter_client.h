@@ -101,7 +101,7 @@ bool pollSlot(uint8_t address, Snapshot& out);
 // under a per-slot key prefix (e.g. "bee_counter_1_").
 void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap);
 
-// CRC-32 (IEEE 802.3, poly 0xEDB88420) over a buffer, finalized. Matches the
+// CRC-32 (IEEE 802.3, poly 0xEDB88320) over a buffer, finalized. Matches the
 // BeeCounter and the backend (zlib.crc32). Exposed so the relay/download
 // layer can compute or verify an image checksum.
 uint32_t crc32_buf(const uint8_t* data, size_t len);
