@@ -9,37 +9,39 @@
 namespace blesensor {
 
 // ───────────────────────────────────────────────────────────────────────────
-// Advertisement layout — DOCUMENTED BEST GUESS, edit after a real packet capture
-// ───────────────────────────────────────────────────────────────────────────
-// HolyIot do not publish the 25015 advertisement format. The manufacturer-
-// specific AD structure (AD type 0xFF) is assumed to be:
+// HolyIot 25015 (HY-25015) advertisement format — CONFIRMED by real packet
+// captures (nRF Connect + Chinese companion app, June 2026).
 //
-//   off 0..1  : company id (little-endian)          == HOLYIOT_COMPANY_ID
-//   off 2     : frame / payload type                  (ignored)
-//   off 3     : battery percent (uint8, 0..100)
-//   off 4..5  : temperature   int16 LE, units 0.01 °C
-//   off 6..7  : humidity       uint16 LE, units 0.01 %RH
-//   off 8..9  : pressure       uint16 LE, units 0.1 hPa  (260–1260 hPa)
-//   off 10..11: accel X        int16 LE, milli-g
-//   off 12..13: accel Y        int16 LE, milli-g
-//   off 14..15: accel Z        int16 LE, milli-g
+// The device broadcasts four simultaneous slots (each ~500 ms interval).
+// All share company ID 0xFFFF in the manufacturer-specific AD (type 0xFF).
+// Slot type is identified by the frame-type byte at d[2] (first byte after
+// the 2-byte company ID in the manufacturer data payload):
 //
-// To correct the layout after sniffing one packet (e.g. nRF Connect), change
-// only the constants below — nothing else in the codebase depends on them.
-static constexpr size_t HOLYIOT_MIN_LEN     = 16;
-static constexpr size_t HOLYIOT_OFF_COMPANY = 0;
-static constexpr size_t HOLYIOT_OFF_BATTERY = 3;
-static constexpr size_t HOLYIOT_OFF_TEMP    = 4;   // int16 LE, /100 -> °C
-static constexpr size_t HOLYIOT_OFF_HUMID   = 6;   // uint16 LE, /100 -> %RH
-static constexpr size_t HOLYIOT_OFF_PRESS   = 8;   // uint16 LE, /10  -> hPa
-static constexpr size_t HOLYIOT_OFF_ACCEL_X = 10;  // int16 LE, mg
-static constexpr size_t HOLYIOT_OFF_ACCEL_Y = 12;
-static constexpr size_t HOLYIOT_OFF_ACCEL_Z = 14;
+//   d[0..1]  company id LE                    == HOLYIOT_COMPANY_ID (0xFFFF)
+//   d[2]     frame type  0x0A=T&H  0x0B=Accel  0x0C=Baro  (0x02=iBeacon→skip)
+//
+//   T&H   (0x0A, 7+ B):  d[3..4] temp  int16  BE /10 → °C
+//                         d[5..6] humid uint16 BE /10 → %RH
+//   Accel (0x0B, 9+ B):  d[3..4] X int16 BE mg
+//                         d[5..6] Y int16 BE mg
+//                         d[7..8] Z int16 BE mg
+//   Baro  (0x0C, 6+ B):  d[3..5] pressure uint24 BE Pa; ×0.01 → hPa
+//
+//   Battery: Service Data UUID 0x180A, 9 bytes:
+//     [frame_type][MAC 6 B][TX power][battery %]  → last byte is battery %.
+//
+// To correct any field after a firmware update, edit only the constants below.
+static constexpr size_t  HOLYIOT_MIN_LEN     = 6;    // shortest valid frame (Baro)
+static constexpr size_t  HOLYIOT_OFF_COMPANY = 0;
+static constexpr size_t  HOLYIOT_OFF_FRAME   = 2;    // frame-type byte offset
+static constexpr uint8_t HOLYIOT_FRAME_TH    = 0x0A; // temperature + humidity slot
+static constexpr uint8_t HOLYIOT_FRAME_ACCEL = 0x0B; // accelerometer slot
+static constexpr uint8_t HOLYIOT_FRAME_BARO  = 0x0C; // barometer slot
 
-static constexpr float TEMP_SCALE  = 0.01f;
-static constexpr float HUMID_SCALE = 0.01f;
-static constexpr float PRESS_SCALE = 0.1f;
-static constexpr float GRAVITY_MG  = 1000.0f;  // ~1 g at rest, removed for AC
+static constexpr float TEMP_SCALE     = 0.1f;   // int16 /10  → °C
+static constexpr float HUMID_SCALE    = 0.1f;   // uint16 /10 → %RH
+static constexpr float PRESS_PA_SCALE = 0.01f;  // uint24 Pa × 0.01 → hPa
+static constexpr float GRAVITY_MG     = 1000.0f; // ~1 g at rest, removed for AC
 
 // ───────────────────────────────────────────────────────────────────────────
 // HiveInside ESP32-C6 manufacturer-data layout (scan-response blob)
@@ -90,12 +92,21 @@ static constexpr size_t HI_OFF_MIC_STRESS = 24;
 static constexpr size_t HI_OFF_MIC_HIGH   = 25;
 static constexpr float HI_ACCEL_SCALE = 0.1f;   // 0.1 mg per LSB
 
-// ── little-endian field readers ────────────────────────────────────────────
+// ── field readers — little-endian (company ID) and big-endian (sensor data) ─
 static int16_t  rd_i16(const uint8_t* p, size_t off) {
   return (int16_t)((uint16_t)p[off] | ((uint16_t)p[off + 1] << 8));
 }
 static uint16_t rd_u16(const uint8_t* p, size_t off) {
   return (uint16_t)((uint16_t)p[off] | ((uint16_t)p[off + 1] << 8));
+}
+static int16_t  rd_i16_be(const uint8_t* p, size_t off) {
+  return (int16_t)(((uint16_t)p[off] << 8) | (uint16_t)p[off + 1]);
+}
+static uint16_t rd_u16_be(const uint8_t* p, size_t off) {
+  return (uint16_t)(((uint16_t)p[off] << 8) | (uint16_t)p[off + 1]);
+}
+static uint32_t rd_u24_be(const uint8_t* p, size_t off) {
+  return ((uint32_t)p[off] << 16) | ((uint32_t)p[off + 1] << 8) | (uint32_t)p[off + 2];
 }
 
 // Parsed scalar fields from one advertisement payload.
@@ -114,21 +125,39 @@ struct Parsed {
         mic_stress_dbfs = NAN, mic_high_dbfs = NAN;
 };
 
-// HolyIot 25015: temp/humidity/pressure + raw 3-axis acceleration.
+// HolyIot 25015: dispatches on frame-type byte; each slot carries a subset of
+// sensor fields (the others stay NAN). Battery comes separately from service data.
 static Parsed parseHolyIot(const uint8_t* d, size_t len) {
   Parsed out;
   if (d == nullptr || len < HOLYIOT_MIN_LEN) return out;
   if (rd_u16(d, HOLYIOT_OFF_COMPANY) != (uint16_t)HOLYIOT_COMPANY_ID) return out;
 
-  out.type         = SensorType::HolyIot;
-  out.battery_pct  = d[HOLYIOT_OFF_BATTERY];
-  out.temp_c       = rd_i16(d, HOLYIOT_OFF_TEMP)  * TEMP_SCALE;
-  out.humidity_pct = rd_u16(d, HOLYIOT_OFF_HUMID) * HUMID_SCALE;
-  out.pressure_hpa = rd_u16(d, HOLYIOT_OFF_PRESS) * PRESS_SCALE;
-  out.ax           = rd_i16(d, HOLYIOT_OFF_ACCEL_X);
-  out.ay           = rd_i16(d, HOLYIOT_OFF_ACCEL_Y);
-  out.az           = rd_i16(d, HOLYIOT_OFF_ACCEL_Z);
-  out.ok = true;
+  switch (d[HOLYIOT_OFF_FRAME]) {
+    case HOLYIOT_FRAME_TH:
+      if (len < 7) return out;
+      out.type         = SensorType::HolyIot;
+      out.temp_c       = rd_i16_be(d, 3) * TEMP_SCALE;
+      out.humidity_pct = rd_u16_be(d, 5) * HUMID_SCALE;
+      out.ok = true;
+      break;
+    case HOLYIOT_FRAME_ACCEL:
+      if (len < 9) return out;
+      out.type = SensorType::HolyIot;
+      out.ax   = rd_i16_be(d, 3);
+      out.ay   = rd_i16_be(d, 5);
+      out.az   = rd_i16_be(d, 7);
+      out.ok = true;
+      break;
+    case HOLYIOT_FRAME_BARO:
+      if (len < 6) return out;
+      out.type         = SensorType::HolyIot;
+      out.pressure_hpa = rd_u24_be(d, 3) * PRESS_PA_SCALE;
+      out.ok = true;
+      break;
+    default:
+      // Unknown or iBeacon frame type (0x02) — not a sensor frame, ignore.
+      break;
+  }
   return out;
 }
 
@@ -270,11 +299,11 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       a.present = true;
       a.type = p.type;
       a.rssi_dbm = dev->getRSSI();
-      a.battery_pct = p.battery_pct;
-      a.temp_c = p.temp_c;
-      a.humidity_pct = p.humidity_pct;
-      a.pressure_hpa = p.pressure_hpa;
       if (p.type == SensorType::HiveInside) {
+        // HiveInside: single manufacturer blob carries everything including battery.
+        a.battery_pct = p.battery_pct;
+        a.temp_c = p.temp_c;
+        a.humidity_pct = p.humidity_pct;
         // Device already ran the FFT — copy its finished values, no magnitudes.
         a.accel_rms_mg          = p.accel_rms_mg;
         a.accel_band_swarm_mg   = p.accel_band_swarm_mg;
@@ -288,8 +317,20 @@ class ScanCallbacks : public NimBLEScanCallbacks {
         a.mic_stress_dbfs = p.mic_stress_dbfs;
         a.mic_high_dbfs   = p.mic_high_dbfs;
       } else {
-        a.ax = p.ax; a.ay = p.ay; a.az = p.az;
-        a.magnitudes.push_back(sqrtf(p.ax * p.ax + p.ay * p.ay + p.az * p.az));
+        // HolyIot: each slot carries a different sensor subset — merge, don't
+        // overwrite. Battery lives in service data (UUID 0x180A), last byte.
+        if (dev->haveServiceData()) {
+          auto sd = dev->getServiceData();
+          if (sd.size() == 9)
+            a.battery_pct = (uint8_t)sd[8];
+        }
+        if (!isnan(p.temp_c))       a.temp_c       = p.temp_c;
+        if (!isnan(p.humidity_pct)) a.humidity_pct = p.humidity_pct;
+        if (!isnan(p.pressure_hpa)) a.pressure_hpa = p.pressure_hpa;
+        if (!isnan(p.ax)) {
+          a.ax = p.ax; a.ay = p.ay; a.az = p.az;
+          a.magnitudes.push_back(sqrtf(p.ax * p.ax + p.ay * p.ay + p.az * p.az));
+        }
       }
     }
   }
