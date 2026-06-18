@@ -47,27 +47,26 @@ DS18B20 disabled, `hive_{1,2}_temp_c` comes from the paired sensor's SHT40.
 
 ---
 
-## ⚠️ Advertisement format is a best guess
+## Advertisement format — confirmed June 2026
 
-HolyIot do **not** publish the 25015 advertisement byte layout. The parser in
-`firmware/src/ble_sensor.cpp` uses a **documented best-effort layout**:
+The 25015 (HY-25015, P6-B Pro, firmware V1.0.0) broadcasts **four simultaneous
+advertisement slots**, each cycling at ~500 ms. All use company ID `0xFFFF` in
+the manufacturer-specific AD (type `0xFF`). The slot type is identified by the
+**frame-type byte** at offset 2 (first byte after the 2-byte company ID):
 
-```
-manufacturer-specific data (AD type 0xFF):
-  off 0..1  company id (LE)            == HOLYIOT_COMPANY_ID (default 0xFFFF)
-  off 2     frame/type                 (ignored)
-  off 3     battery percent (uint8)
-  off 4..5  temperature  int16 LE      /100  -> °C
-  off 6..7  humidity     uint16 LE     /100  -> %RH
-  off 8..9  pressure     uint16 LE     /10   -> hPa
-  off 10..11 accel X     int16 LE            -> mg
-  off 12..13 accel Y     int16 LE            -> mg
-  off 14..15 accel Z     int16 LE            -> mg
-```
+| Frame | Type byte | Payload (offsets within manufacturer data) |
+|---|---|---|
+| T&H | `0x0A` | d[3..4] temp int16 BE /10 → °C; d[5..6] humidity uint16 BE /10 → %RH |
+| Accel | `0x0B` | d[3..4] X int16 BE mg; d[5..6] Y int16 BE mg; d[7..8] Z int16 BE mg |
+| Baro | `0x0C` | d[3..5] pressure uint24 BE Pa; ×0.01 → hPa |
+| iBeacon | `0x02` | Static Major/Minor proximity identifiers — **no sensor data** |
 
-After sniffing one real packet (e.g. nRF Connect), correct the `HOLYIOT_OFF_*` /
-`*_SCALE` / `HOLYIOT_COMPANY_ID` constants — nothing else needs to change. Until
-the layout is confirmed, treat the decoded values as provisional.
+Battery percentage comes from the **Service Data** (UUID `0x180A`, 9 bytes):
+`[frame_type][MAC 6 B][TX power][battery %]` — last byte.
+
+The firmware decoder (`firmware/src/ble_sensor.cpp`) merges all three sensor
+frames into a single snapshot per scan cycle. All confirmed against real packet
+captures (nRF Connect) with simultaneous live readings from the companion app.
 
 ---
 
