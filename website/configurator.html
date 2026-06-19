@@ -167,8 +167,10 @@
               <!-- Shared in-hive scan + collision-avoidance options (only when an in-hive sensor is present) -->
               <div id="inhive-global" style="display:none">
                 <div class="note info" style="margin:1rem 0 .5rem">In-hive sensors are scanned passively
-                  each cycle (slot 1 → hive 1, slot 2 → hive 2). HiveInside / HiveHeart vibration bands map
-                  onto <code>accel_N_band_*</code> and their acoustic bands onto <code>mic_left/right_band_*</code>.</div>
+                  each cycle. Use each sensor's <strong>Maps to</strong> dropdown to assign it to hive 1 or
+                  hive 2 — so you can, e.g., leave hive 1 on its wired probe and add a wireless sensor for hive 2
+                  only. HiveInside / HiveHeart vibration bands map onto <code>accel_N_band_*</code> and their
+                  acoustic bands onto <code>mic_left/right_band_*</code>.</div>
                 <div class="field row">
                   <div><label>Scan seconds / cycle</label><input type="number" id="ble_scan" value="6" min="1" /></div>
                   <div><label>HolyIot Company ID (16-bit)</label><input type="text" id="ble_company" value="0xFFFF" /></div>

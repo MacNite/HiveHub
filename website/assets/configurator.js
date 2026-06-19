@@ -25,6 +25,13 @@
   var TYPE_ORDER = ["holyiot", "hiveinside", "hiveheart", "hivescale", "beecounter", "ruvitag"];
   var CAT_LABEL = { inhive: "In-hive", scale: "Scale", beecounter: "Bee counter" };
   var CAT_SLOT  = { inhive: "hive", scale: "scale", beecounter: "counter" };
+  // Per-category slot labels shown in the "Maps to" dropdown. The index + 1 is
+  // the slot number emitted into the macro name (INHIVE_1, WSCALE_2, …).
+  var CAT_SLOT_LABEL = {
+    inhive:     ["Hive 1", "Hive 2"],
+    scale:      ["Scale 1", "Scale 2"],
+    beecounter: ["Counter 1", "Counter 2"]
+  };
   var CAT_LIMIT = 2;
   var MAX_TOTAL = 6;
 
@@ -80,6 +87,42 @@
     });
   }
 
+  // Slot numbers already taken by other rows in a category (DOM order ignored).
+  function slotsTaken(cat, except) {
+    var taken = {};
+    $$(".wsensor", wireList).forEach(function (r) {
+      if (r === except) return;
+      if (WTYPES[$('[data-wtype]', r).value].cat !== cat) return;
+      var sel = $('[data-wslot]', r);
+      if (sel) taken[parseInt(sel.value, 10)] = true;
+    });
+    return taken;
+  }
+
+  // First free slot (1-based) in a category, or the last slot if all are taken.
+  function firstFreeSlot(cat, except) {
+    var taken = slotsTaken(cat, except);
+    for (var n = 1; n <= CAT_LIMIT; n++) if (!taken[n]) return n;
+    return CAT_LIMIT;
+  }
+
+  function slotOptionsHtml(cat, selected) {
+    return CAT_SLOT_LABEL[cat].map(function (lab, i) {
+      var n = i + 1;
+      return '<option value="' + n + '"' + (n === selected ? " selected" : "") + ">" + lab + "</option>";
+    }).join("");
+  }
+
+  // (Re)build a row's "Maps to" dropdown for its current category, keeping the
+  // desired slot when given and free, otherwise picking the first free slot.
+  function rebuildSlots(row, desired) {
+    var cat = WTYPES[$('[data-wtype]', row).value].cat;
+    var sel = $('[data-wslot]', row);
+    var want = desired || firstFreeSlot(cat, row);
+    if (slotsTaken(cat, row)[want]) want = firstFreeSlot(cat, row);
+    sel.innerHTML = slotOptionsHtml(cat, want);
+  }
+
   // The first catalog type whose category still has a free slot, or null if full.
   function firstAvailableType() {
     for (var i = 0; i < TYPE_ORDER.length; i++) {
@@ -101,6 +144,8 @@
       '<div class="row" style="align-items:flex-end">' +
         '<div class="field" style="margin:0"><label>Sensor type</label>' +
           '<select data-wtype>' + typeOptionsHtml(key) + '</select></div>' +
+        '<div class="field" style="margin:0;flex:0 0 130px"><label>Maps to</label>' +
+          '<select data-wslot></select></div>' +
         '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-wremove title="Remove">✕</button></div>' +
       '</div>' +
       '<p class="wmeta muted" style="font-size:.82rem;margin:.4rem 0 0"></p>' +
@@ -118,6 +163,8 @@
 
     var sel = $('[data-wtype]', row);
     sel.addEventListener("change", function () { onTypeChange(row); });
+    rebuildSlots(row);
+    $('[data-wslot]', row).addEventListener("change", function () { onSlotChange(row); });
     $('[data-wremove]', row).addEventListener("click", function () {
       row.parentNode.removeChild(row); refreshWireless(); render();
     });
@@ -135,7 +182,21 @@
       // Revert to a type whose category still has room.
       sel.value = firstAvailableTypeFor(row);
     }
+    // The category may have changed — rebuild the "Maps to" dropdown for it.
+    rebuildSlots(row);
     fillUuids(row, sel.value, true);
+    refreshWireless();
+    render();
+  }
+
+  // Reject a slot choice already taken by another row in the same category.
+  function onSlotChange(row) {
+    var cat = WTYPES[$('[data-wtype]', row).value].cat;
+    var sel = $('[data-wslot]', row);
+    if (slotsTaken(cat, row)[parseInt(sel.value, 10)]) {
+      toast("⚠ That " + CAT_LABEL[cat].toLowerCase() + " slot is already taken");
+      sel.value = firstFreeSlot(cat, row);
+    }
     refreshWireless();
     render();
   }
@@ -162,11 +223,10 @@
   // Recompute slot labels, warnings and the shared in-hive block visibility.
   function refreshWireless() {
     var rows = $$(".wsensor", wireList);
-    var seen = { inhive: 0, scale: 0, beecounter: 0 };
     var haveInhive = false;
     rows.forEach(function (r) {
       var def = WTYPES[$('[data-wtype]', r).value];
-      var slot = ++seen[def.cat];
+      var slot = parseInt($('[data-wslot]', r).value, 10);
       if (def.cat === "inhive") haveInhive = true;
       $('.wmeta', r).textContent = CAT_LABEL[def.cat] + " · " + CAT_SLOT[def.cat] + " " + slot +
         "  ·  " + (def.proto === "gatt" ? "GATT" : "BLE beacon");
@@ -323,7 +383,12 @@
     var byCat = { inhive: [], scale: [], beecounter: [] };
     rows.forEach(function (r) {
       var key = $('[data-wtype]', r).value;
-      byCat[WTYPES[key].cat].push({ row: r, key: key, meta: WTYPES[key] });
+      var slot = parseInt($('[data-wslot]', r).value, 10);
+      byCat[WTYPES[key].cat].push({ row: r, key: key, meta: WTYPES[key], slot: slot });
+    });
+    // Emit in slot order so INHIVE_1/2, WSCALE_1/2 … read top-to-bottom.
+    Object.keys(byCat).forEach(function (c) {
+      byCat[c].sort(function (a, b) { return a.slot - b.slot; });
     });
 
     p("// ==============================");
@@ -347,9 +412,9 @@
       p("");
     }
 
-    // --- In-hive sensors (slot 1 -> hive 1, slot 2 -> hive 2) -----------------
+    // --- In-hive sensors (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) -------------
     var inhive = byCat.inhive;
-    p("// ---- In-hive BLE sensors (slot 1 -> hive 1, slot 2 -> hive 2) ----");
+    p("// ---- In-hive BLE sensors (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) ----");
     p(def("ENABLE_BLE_SCAN", inhive.length ? "1" : "0"));
     if (inhive.length) {
       p(def("HOLYIOT_BLE_SCAN_SECONDS", val("#ble_scan") || "6"));
@@ -357,7 +422,7 @@
       p(def("HOLYIOT_COMPANY_ID", val("#ble_company") || "0xFFFF"));
       var usesGatt = inhive.some(function (s) { return s.key === "hiveinside" && s.meta.proto === "gatt"; });
       p(def("HIVEINSIDE_USE_GATT", usesGatt ? "1" : "0"));
-      inhive.forEach(function (s, i) { emitSlot(p, "INHIVE_" + (i + 1), s); });
+      inhive.forEach(function (s) { emitSlot(p, "INHIVE_" + s.slot, s); });
       p("");
       p("// In-hive BLE overrides the wired sensor measuring the same quantity (per hive).");
       p(def("BLE_OVERRIDE_DS18B20", $("#ovr_temp").checked ? "1" : "0"));
@@ -370,14 +435,14 @@
     var scales = byCat.scale;
     p("// ---- Wireless scales (beehivemonitoring.com HiveScale, GATT) ----");
     p(def("ENABLE_WIRELESS_SCALE", scales.length ? "1" : "0"));
-    scales.forEach(function (s, i) { emitSlot(p, "WSCALE_" + (i + 1), s); });
+    scales.forEach(function (s) { emitSlot(p, "WSCALE_" + s.slot, s); });
     p("");
 
     // --- Wireless bee counters ------------------------------------------------
     var bc = byCat.beecounter;
     p("// ---- Wireless bee counters (GATT) ----");
     p(def("ENABLE_WIRELESS_BEECOUNTER", bc.length ? "1" : "0"));
-    bc.forEach(function (s, i) { emitSlot(p, "WBEECNT_" + (i + 1), s); });
+    bc.forEach(function (s) { emitSlot(p, "WBEECNT_" + s.slot, s); });
     p("");
   }
 

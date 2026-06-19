@@ -32,9 +32,11 @@ It replaces the previous wired LIS3DH/LIS2DH12 accelerometer
    - Click **scan for wireless sensors** to list advertising BLE devices; sensors
      carrying a parseable 25015 payload are flagged.
    - Click **➕ Add wireless sensor**, leave the type as an in-hive sensor
-     (e.g. **HolyIot 25015**), paste the sensor's MAC, then **Save and reboot**.
-     The first in-hive row maps to hive 1, the second to hive 2.
-   The MACs persist in Preferences (`ble_mac0` / `ble_mac1`).
+     (e.g. **HolyIot 25015**), pick **Hive 1** or **Hive 2** in the **Maps to**
+     dropdown, paste the sensor's MAC, then **Save and reboot**. The **Maps to**
+     choice — not the row order — decides the hive, so you can pair a wireless
+     sensor for hive 2 alone and leave hive 1 on its wired probe.
+   The MACs persist in Preferences (`ble_mac0` = hive 1, `ble_mac1` = hive 2).
 
 Each cycle the firmware scans for `HOLYIOT_BLE_SCAN_SECONDS` (default 6 s),
 matches advertisements to the paired MACs, and folds the readings into the

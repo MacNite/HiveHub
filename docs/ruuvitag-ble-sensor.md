@@ -33,8 +33,9 @@ pre-swarm detector (`detect_lowrate_accel_swarm`) described in the HolyIot doc.
    - Click **scan for wireless sensors**; a RuuviTag broadcasting a parseable
      payload is flagged as `RuuviTag` in the type column.
    - Click **➕ Add wireless sensor**, pick **RuuviTag** (an in-hive type),
-     paste the sensor's MAC, then **Save and reboot**. The first in-hive row
-     maps to hive 1, the second to hive 2.
+     choose **Hive 1** or **Hive 2** in the **Maps to** dropdown, paste the
+     sensor's MAC, then **Save and reboot**. The **Maps to** choice decides the
+     hive, so either hive can be wireless independently.
    The MACs persist in Preferences (`ble_mac0` / `ble_mac1`), shared with the
    HolyIot/HiveInside in-hive slots — a slot holds one in-hive sensor of any
    supported type.

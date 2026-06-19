@@ -373,8 +373,9 @@ void handleSetupRoot() {
 #if ENABLE_BLE_SCAN
   html += ", or <a href='/ble/scan'>scan for wireless sensors</a> and copy a MAC below";
 #endif
-  html += ". In-hive sensors map slot 1 &rarr; hive 1 and slot 2 &rarr; hive 2 in the order listed; ";
-  html += "when a paired in-hive sensor reports temperature, vibration or sound, the matching wired sensor for that hive is disabled automatically to avoid duplicate readings.</p>";
+  html += ". Use each sensor's <em>Maps to</em> dropdown to pick which hive / scale / counter it serves &mdash; ";
+  html += "so you can, for example, keep hive 1 on its wired probe and add a wireless sensor for hive 2 only. ";
+  html += "When a paired in-hive sensor reports temperature, vibration or sound, the matching wired sensor for that hive is disabled automatically to avoid duplicate readings.</p>";
   html += "<div id='wlist'></div>";
   html += "<p id='wempty' class='meta'>No wireless sensors added yet.</p>";
   html += "<p><button type='button' class='button' id='waddbtn'>&#10133; Add wireless sensor</button></p>";
@@ -388,30 +389,40 @@ void handleSetupRoot() {
   {
     prefs.begin("hivescale", true);
     bool first = true;
-    auto emit = [&](const char* type, const String& mac) {
+    auto emit = [&](const char* type, const String& mac, int slot) {
       if (mac.length() == 0) return;
       if (!first) html += ",";
       first = false;
-      html += "{t:'"; html += type; html += "',m:'"; html += mac; html += "'}";
+      html += "{t:'"; html += type; html += "',m:'"; html += mac;
+      html += "',s:"; html += String(slot); html += "}";
     };
     if (prefs.isKey("wcount")) {
       int wc = (int)prefs.getUInt("wcount", 0);
       if (wc > 6) wc = 6;
+      // Derive a slot when an entry stored by older firmware has no wslotN key.
+      int seenInhive = 0, seenScale = 0, seenCnt = 0;
       for (int i = 0; i < wc; i++) {
         String t = prefs.getString((String("wtype") + i).c_str(), "");
         String m = prefs.getString((String("wmac") + i).c_str(), "");
         if (t.length() == 0) t = "holyiot";
-        emit(t.c_str(), m);
+        int slot = (int)prefs.getUInt((String("wslot") + i).c_str(), 0);
+        if (slot < 1 || slot > 2) {
+          if (t == "hivescale") slot = ++seenScale;
+          else if (t == "beecounter") slot = ++seenCnt;
+          else slot = ++seenInhive;
+          if (slot > 2) slot = 2;
+        }
+        emit(t.c_str(), m, slot);
       }
     } else {
-      emit("holyiot",    prefs.getString("ble_mac0", ""));
-      emit("holyiot",    prefs.getString("ble_mac1", ""));
-      emit("hiveheart",  prefs.getString("heart_mac0", ""));
-      emit("hiveheart",  prefs.getString("heart_mac1", ""));
-      emit("hivescale",  prefs.getString("scale_mac0", ""));
-      emit("hivescale",  prefs.getString("scale_mac1", ""));
-      emit("beecounter", prefs.getString("counter_mac0", ""));
-      emit("beecounter", prefs.getString("counter_mac1", ""));
+      emit("holyiot",    prefs.getString("ble_mac0", ""), 1);
+      emit("holyiot",    prefs.getString("ble_mac1", ""), 2);
+      emit("hiveheart",  prefs.getString("heart_mac0", ""), 1);
+      emit("hiveheart",  prefs.getString("heart_mac1", ""), 2);
+      emit("hivescale",  prefs.getString("scale_mac0", ""), 1);
+      emit("hivescale",  prefs.getString("scale_mac1", ""), 2);
+      emit("beecounter", prefs.getString("counter_mac0", ""), 1);
+      emit("beecounter", prefs.getString("counter_mac1", ""), 2);
     }
     prefs.end();
   }
@@ -429,35 +440,46 @@ beecounter:{label:"BeeCounter (GATT) - stored, not used by firmware yet",cat:"be
 var ORDER=["holyiot","ruuvitag","hiveinside","hiveheart","hivescale","beecounter"];
 var LIMIT={inhive:2,scale:2,beecounter:2},MAXT=6;
 var LAB={inhive:"In-hive sensor, hive",scale:"Scale, scale",beecounter:"Bee counter, counter"};
+var SLOTLAB={inhive:["Hive 1","Hive 2"],scale:["Scale 1","Scale 2"],beecounter:["Counter 1","Counter 2"]};
 var list=document.getElementById("wlist"),addbtn=document.getElementById("waddbtn"),form=document.getElementById("cfgform");
 function rows(){return Array.prototype.slice.call(list.querySelectorAll(".wsrow"));}
 function catCount(cat,except){var n=0;rows().forEach(function(r){if(r===except)return;if(TYPES[r.querySelector("[data-wtype]").value].cat===cat)n++;});return n;}
 function firstFree(except){for(var i=0;i<ORDER.length;i++){var k=ORDER[i];if(catCount(TYPES[k].cat,except)<LIMIT[TYPES[k].cat])return k;}return null;}
 function opts(sel){return ORDER.map(function(k){return "<option value='"+k+"'"+(k===sel?" selected":"")+">"+TYPES[k].label+"</option>";}).join("");}
-function addRow(type,mac){
+function slotTaken(cat,except){var t={};rows().forEach(function(r){if(r===except)return;if(TYPES[r.querySelector("[data-wtype]").value].cat!==cat)return;t[r.querySelector("[data-wslot]").value]=true;});return t;}
+function freeSlot(cat,except){var t=slotTaken(cat,except);for(var n=1;n<=LIMIT[cat];n++)if(!t[String(n)])return n;return LIMIT[cat];}
+function slotOpts(cat,sel){return SLOTLAB[cat].map(function(l,i){var n=i+1;return "<option value='"+n+"'"+(n===sel?" selected":"")+">"+l+"</option>";}).join("");}
+function buildSlots(r,want){var cat=TYPES[r.querySelector("[data-wtype]").value].cat,ss=r.querySelector("[data-wslot]"),w=want||freeSlot(cat,r);if(slotTaken(cat,r)[String(w)])w=freeSlot(cat,r);ss.innerHTML=slotOpts(cat,w);}
+function addRow(type,mac,slot){
 var key=type||firstFree(null);if(!key)return;
 var r=document.createElement("div");r.className="wsrow";
 r.innerHTML="<label>Sensor type</label><select data-wtype>"+opts(key)+"</select>"+
+"<label>Maps to</label><select data-wslot></select>"+
 "<label>MAC address</label><input data-wmac placeholder='AA:BB:CC:DD:EE:FF'>"+
 "<p class='wnote'></p>"+
 "<button type='button' class='button' data-wrem>Remove</button>";
 list.appendChild(r);
+buildSlots(r,slot);
 if(mac)r.querySelector("[data-wmac]").value=mac;
 r.querySelector("[data-wtype]").addEventListener("change",function(){onType(r);});
+r.querySelector("[data-wslot]").addEventListener("change",function(){onSlot(r);});
 r.querySelector("[data-wrem]").addEventListener("click",function(){list.removeChild(r);refresh();});
 refresh();}
 function onType(r){var sel=r.querySelector("[data-wtype]"),cat=TYPES[sel.value].cat;
-if(catCount(cat,r)>=LIMIT[cat])sel.value=firstFree(r)||ORDER[0];refresh();}
-function refresh(){var rs=rows(),seen={inhive:0,scale:0,beecounter:0};
-rs.forEach(function(r){var d=TYPES[r.querySelector("[data-wtype]").value],s=++seen[d.cat];
+if(catCount(cat,r)>=LIMIT[cat])sel.value=firstFree(r)||ORDER[0];
+buildSlots(r);refresh();}
+function onSlot(r){var cat=TYPES[r.querySelector("[data-wtype]").value].cat,ss=r.querySelector("[data-wslot]");
+if(slotTaken(cat,r)[ss.value])ss.value=freeSlot(cat,r);refresh();}
+function refresh(){var rs=rows();
+rs.forEach(function(r){var d=TYPES[r.querySelector("[data-wtype]").value],s=r.querySelector("[data-wslot]").value;
 r.querySelector(".wnote").textContent=LAB[d.cat]+" "+s;});
 document.getElementById("wempty").style.display=rs.length?"none":"block";
 var full=rs.length>=MAXT||firstFree(null)===null;
 addbtn.disabled=full;document.getElementById("wfull").style.display=full?"block":"none";}
 addbtn.addEventListener("click",function(){addRow(null,"");});
 form.addEventListener("submit",function(){var rs=rows();document.getElementById("wcount").value=rs.length;
-rs.forEach(function(r,i){r.querySelector("[data-wtype]").name="wtype"+i;r.querySelector("[data-wmac]").name="wmac"+i;});});
-INITIAL.forEach(function(e){addRow(e.t,e.m);});
+rs.forEach(function(r,i){r.querySelector("[data-wtype]").name="wtype"+i;r.querySelector("[data-wslot]").name="wslot"+i;r.querySelector("[data-wmac]").name="wmac"+i;});});
+INITIAL.forEach(function(e){addRow(e.t,e.m,e.s);});
 refresh();
 })();</script>)WSJS";
   html += "</fieldset>";
@@ -500,8 +522,9 @@ void handleSetupSave() {
   // the exact rows next time) AND fan each row out to the per-transport slot
   // keys the firmware reads: in-hive beacons/GATT -> ble_mac{0,1}, HiveHeart ->
   // heart_mac{0,1}, HiveScale -> scale_mac{0,1}, BeeCounter -> counter_mac{0,1}
-  // (stored only; no firmware support yet). Slots fill in the order listed, so
-  // the first in-hive row maps to hive 1, the second to hive 2.
+  // (stored only; no firmware support yet). Each row also submits a wslotN (the
+  // "Maps to" choice, 1 or 2) that decides the target index, so a sensor can be
+  // mapped to hive/scale/counter 2 even when slot 1 is left to a wired sensor.
   int wcount = setupServer.arg("wcount").toInt();
   if (wcount < 0) wcount = 0;
   if (wcount > 6) wcount = 6;
@@ -510,32 +533,37 @@ void handleSetupSave() {
   String heartMac[2] = {"", ""};
   String scaleMac[2] = {"", ""};
   String cntMac[2]   = {"", ""};
-  int bleN = 0, heartN = 0, scaleN = 0, cntN = 0;
 
   prefs.putUInt("wcount", (uint32_t)wcount);
   for (int i = 0; i < wcount; i++) {
     String type = setupServer.arg(String("wtype") + i);
     String mac = portalNormalizeMac(setupServer.arg(String("wmac") + i));
     type.trim();
+    int slot = setupServer.arg(String("wslot") + i).toInt();
+    if (slot < 1) slot = 1;
+    if (slot > 2) slot = 2;
+    int idx = slot - 1;
 
     prefs.putString((String("wtype") + i).c_str(), type);
     prefs.putString((String("wmac") + i).c_str(), mac);
+    prefs.putUInt((String("wslot") + i).c_str(), (uint32_t)slot);
 
     if (type == "hiveheart") {
-      if (heartN < 2) heartMac[heartN++] = mac;
+      heartMac[idx] = mac;
     } else if (type == "hivescale") {
-      if (scaleN < 2) scaleMac[scaleN++] = mac;
+      scaleMac[idx] = mac;
     } else if (type == "beecounter") {
-      if (cntN < 2) cntMac[cntN++] = mac;
+      cntMac[idx] = mac;
     } else {
       // holyiot / ruuvitag / hiveinside and any unknown type -> in-hive bridge.
-      if (bleN < 2) bleMac[bleN++] = mac;
+      bleMac[idx] = mac;
     }
   }
   // Clear any stale list entries left over from a previously longer list.
   for (int i = wcount; i < 6; i++) {
     prefs.remove((String("wtype") + i).c_str());
     prefs.remove((String("wmac") + i).c_str());
+    prefs.remove((String("wslot") + i).c_str());
   }
 
 #if ENABLE_BLE_SCAN
