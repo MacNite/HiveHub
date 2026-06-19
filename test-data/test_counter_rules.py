@@ -326,4 +326,47 @@ check("legacy rows still produce robbing alert", len(robbing) >= 1)
 check("legacy robbing has no counter signature",
       "counter_robbing_signature" not in robbing[0].evidence)
 
+# ---------------------------------------------------------------------------
+print("\n=== 10. Totals-only (BLE) path: interval derived from lifetime totals ===")
+# The wireless/BLE counter reports only monotonic total_in/out (no interval).
+# _extract_counter_series must difference consecutive totals into per-interval
+# counts, handle a missed poll (wider gap), and treat a reboot (total going
+# backwards) as the post-reboot count rather than a huge negative delta.
+start = NOW - timedelta(hours=1)
+
+# Cumulative outbound totals: +5, +7, +0, +12 across 4 successive readings,
+# i.e. per-interval deltas 5, 7, 0, 12 (the first reading has no baseline).
+totals_out = [100, 105, 112, 112, 124]
+def tout(i):
+    return totals_out[i]
+rows = _rows(len(totals_out), start,
+             bee_counter_1_ok=_const(True),
+             bee_counter_1_total_out=tout)
+# Deliberately NO bee_counter_1_interval_out field -> totals-only path.
+series = insights._extract_counter_series(rows, 1, "out")
+vals = [v for _, v in series]
+check("derives interval from totals", vals == [5.0, 7.0, 0.0, 12.0])
+check("first reading has no baseline (dropped)", len(series) == len(totals_out) - 1)
+
+# Reboot: totals climb, then the device restarts and totals begin again at a
+# small value. The drop must be read as "count since restart", not negative.
+reboot_out = [200, 205, 3, 9]   # reboot between idx1(205) and idx2(3)
+def rtout(i):
+    return reboot_out[i]
+rows_rb = _rows(len(reboot_out), start,
+                bee_counter_1_ok=_const(True),
+                bee_counter_1_total_out=rtout)
+series_rb = insights._extract_counter_series(rows_rb, 1, "out")
+vals_rb = [v for _, v in series_rb]
+check("reboot delta is post-restart total, not negative", vals_rb == [5.0, 3.0, 6.0])
+
+# Device-reported interval still wins when present (I2C latch path unchanged),
+# even if a total is also present.
+rows_mixed = _rows(3, start,
+                   bee_counter_1_ok=_const(True),
+                   bee_counter_1_interval_out=_const(2.0),
+                   bee_counter_1_total_out=lambda i: 100 + i * 99)  # totals ignored
+series_mixed = insights._extract_counter_series(rows_mixed, 1, "out")
+check("device interval preferred over totals", [v for _, v in series_mixed] == [2.0, 2.0, 2.0])
+
 print("\nAll checks passed. ✅")

@@ -500,22 +500,73 @@ def _extract_counter_series(
     broken counter never injects implicit zeros that would look like "no
     traffic". The values are interval counts (bees since the previous poll),
     not cumulative totals.
+
+    Two sources of the per-interval count are supported transparently:
+
+    * **Device-reported interval** (``bee_counter_{ch}_interval_{dir}``): the
+      I2C ``CMD_LATCH`` handshake path, where the counter resets its interval
+      each poll. Used as-is whenever present.
+    * **Differenced lifetime total** (``bee_counter_{ch}_total_{dir}``): the
+      totals-only wireless/BLE path, where the device never resets and the
+      interval is derived here as ``total_now - total_prev`` between
+      consecutive readings (see 2026-easy-bee-counter/docs/ble-mode.md). A
+      missed poll just widens the next interval; a counter reboot or uint32
+      wrap (``total_now < total_prev``) is treated as ``total_now`` so the
+      restart from zero is not mistaken for a huge negative delta.
+
+    Differencing needs chronological order, so rows are sorted before the
+    deltas are computed. The total baseline advances on every row that carries
+    a usable total — even rows that used the device interval — so a stream that
+    switches transports stays consistent across the boundary.
     """
     ok_field = f"bee_counter_{channel}_ok"
-    count_field = f"bee_counter_{channel}_interval_{direction}"
-    out: Series = []
+    interval_field = f"bee_counter_{channel}_interval_{direction}"
+    total_field = f"bee_counter_{channel}_total_{direction}"
+
+    def _as_float(v: Any) -> Optional[float]:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    # Collect reachable, timestamped rows in chronological order first, since
+    # differencing cumulative totals depends on it.
+    rows: list[tuple[datetime, dict[str, Any]]] = []
     for m in measurements:
         if not m.get(ok_field):
             continue
         ts = _as_datetime(m.get("measured_at"))
-        val = m.get(count_field)
-        if ts is None or val is None:
+        if ts is None:
             continue
-        try:
-            out.append((ts, float(val)))
-        except (TypeError, ValueError):
-            continue
-    out.sort(key=lambda p: p[0])
+        rows.append((ts, m))
+    rows.sort(key=lambda p: p[0])
+
+    out: Series = []
+    prev_total: Optional[float] = None
+    for ts, m in rows:
+        interval_val = _as_float(m.get(interval_field))
+        cur_total = _as_float(m.get(total_field))
+
+        # Fall back to differencing the monotonic lifetime total when the
+        # device did not report a per-interval count (the BLE/totals-only path).
+        if interval_val is None and cur_total is not None:
+            if prev_total is None:
+                interval_val = None          # no baseline yet — can't attribute
+            elif cur_total >= prev_total:
+                interval_val = cur_total - prev_total
+            else:
+                interval_val = cur_total     # reboot / wrap: count since restart
+
+        # Advance the differencing baseline on any usable total, regardless of
+        # which source supplied this row's interval.
+        if cur_total is not None:
+            prev_total = cur_total
+
+        if interval_val is not None:
+            out.append((ts, interval_val))
+
     return out
 
 
