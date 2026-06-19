@@ -361,7 +361,7 @@ void handleSetupRoot() {
   html += "<label>API key</label><input name='api_key' value='" + htmlEscape(apiKey) + "'>";
   html += "</fieldset>";
 
-#if (ENABLE_BLE_SCAN || ENABLE_BEEHIVE_GATT)
+#if (ENABLE_BLE_SCAN || ENABLE_BEEHIVE_GATT || ENABLE_WIRELESS_BEECOUNTER)
   // Dynamic wireless-sensor list. Instead of fixed per-slot fields, the user
   // adds rows and picks each sensor's type; the categories and limits mirror the
   // secrets.h configurator (in-hive / scale / bee counter, max 2 each, 6 total).
@@ -436,7 +436,7 @@ ruuvitag:{label:"RuuviTag - in-hive (BLE beacon)",cat:"inhive"},
 hiveinside:{label:"HiveInside - in-hive (GATT)",cat:"inhive"},
 hiveheart:{label:"HiveHeart - in-hive (GATT)",cat:"inhive"},
 hivescale:{label:"HiveScale - wireless scale (GATT)",cat:"scale"},
-beecounter:{label:"BeeCounter (GATT) - stored, not used by firmware yet",cat:"beecounter"}};
+beecounter:{label:"HiveTraffic - entrance bee counter (GATT)",cat:"beecounter"}};
 var ORDER=["holyiot","ruuvitag","hiveinside","hiveheart","hivescale","beecounter"];
 var LIMIT={inhive:2,scale:2,beecounter:2},MAXT=6;
 var LAB={inhive:"In-hive sensor, hive",scale:"Scale, scale",beecounter:"Bee counter, counter"};
@@ -516,7 +516,7 @@ void handleSetupSave() {
   if (newApiBase.length() > 0) prefs.putString("api_base", newApiBase);
   if (newApiKey.length() > 0) prefs.putString("api_key", newApiKey);
 
-#if (ENABLE_BLE_SCAN || ENABLE_BEEHIVE_GATT)
+#if (ENABLE_BLE_SCAN || ENABLE_BEEHIVE_GATT || ENABLE_WIRELESS_BEECOUNTER)
   // Dynamic wireless-sensor list. The portal submits wcount plus a wtypeN /
   // wmacN pair per row. We store that canonical list (so the page can repaint
   // the exact rows next time) AND fan each row out to the per-transport slot
@@ -582,9 +582,13 @@ void handleSetupSave() {
   scaleMac0 = scaleMac[0];
   scaleMac1 = scaleMac[1];
 #endif
-  // BeeCounter MACs are stored for a future build; no firmware consumes them yet.
+  // HiveTraffic (wireless bee counter) MACs — consumed when ENABLE_WIRELESS_BEECOUNTER.
   prefs.putString("counter_mac0", cntMac[0]);
   prefs.putString("counter_mac1", cntMac[1]);
+#if ENABLE_WIRELESS_BEECOUNTER
+  trafficMac0 = cntMac[0];
+  trafficMac1 = cntMac[1];
+#endif
 #endif
 
   int savedCount = 0;

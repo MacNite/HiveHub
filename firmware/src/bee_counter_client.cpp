@@ -2,6 +2,11 @@
 
 #include "bee_counter_client.h"
 
+#if ENABLE_WIRELESS_BEECOUNTER
+#include <NimBLEDevice.h>
+#include "config.h"
+#endif
+
 namespace beecnt {
 
 namespace {
@@ -166,11 +171,18 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
     doc[p + "gates_healthy"]    = snap.gates_healthy;
     doc[p + "total_in"]         = snap.total_in;
     doc[p + "total_out"]        = snap.total_out;
+    doc[p + "glitch_count"]     = snap.glitch_count;
+    doc[p + "read_attempts"]    = snap.read_attempts;
+
+    // Totals-only sources (the HiveTraffic BLE path) report no per-interval or
+    // per-gate detail. Omit those fields (leaving them NULL) so the backend
+    // differences the lifetime totals into intervals instead of recording a
+    // misleading zero. The wired I2C path fills them as before.
+    if (snap.totals_only) return;
+
     doc[p + "interval_in"]      = snap.interval_in;
     doc[p + "interval_out"]     = snap.interval_out;
-    doc[p + "glitch_count"]     = snap.glitch_count;
     doc[p + "busy_retries"]     = snap.busy_retries;
-    doc[p + "read_attempts"]    = snap.read_attempts;
     doc[p + "latch_succeeded"]  = snap.latch_succeeded;
 
     // Per-gate arrays go in raw_json only — they don't deserve top-level
@@ -328,5 +340,109 @@ bool pushFirmwareToBeeCounter(uint8_t address, const uint8_t* image, size_t len,
                   state, err, (unsigned)recv);
     return false;
 }
+
+// ---------------------------------------------------------------------------
+// HiveTraffic (wireless bee counter) GATT-client read
+// ---------------------------------------------------------------------------
+#if ENABLE_WIRELESS_BEECOUNTER
+
+namespace {
+
+// Parse the HiveTraffic measurement JSON (see 2026-easy-bee-counter
+// docs/ble-mode.md) into a totals-only Snapshot. Returns false on malformed
+// JSON. Fields absent in the document keep their Snapshot defaults.
+bool parseTrafficJson(const char* json, size_t len, Snapshot& out) {
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, json, len);
+    if (err) {
+        Serial.printf("[TRAFFIC] JSON parse failed: %s\n", err.c_str());
+        return false;
+    }
+    out.present          = true;
+    out.totals_only      = true;
+    out.protocol_version = doc["fw"]            | 0;
+    out.status_flags     = doc["status"]        | 0;
+    out.uptime_s         = doc["uptime_s"]      | 0;
+    out.num_gates        = doc["num_gates"]     | 0;
+    out.gates_healthy    = doc["gates_healthy"] | 0;
+    out.total_in         = doc["total_in"]      | 0u;
+    out.total_out        = doc["total_out"]     | 0u;
+    out.glitch_count     = doc["glitches"]      | 0;
+    return true;
+}
+
+// Connect to `mac`, read the measurement characteristic once, parse it into
+// `out`. Tries public then random address type (HiveTraffic advertises with the
+// ESP32's default random static address, but seeded MACs may be either).
+bool readTrafficSlot(const String& mac, Snapshot& out) {
+    if (mac.length() == 0) return false;
+
+    NimBLEClient* client = NimBLEDevice::createClient();
+    client->setConnectTimeout((uint32_t)BEECOUNTER_GATT_CONNECT_TIMEOUT_S * 1000UL);
+
+    const uint8_t addrTypes[2] = { BLE_ADDR_PUBLIC, BLE_ADDR_RANDOM };
+    bool connected = false;
+    for (int t = 0; t < 2 && !connected; t++) {
+        NimBLEAddress addr(std::string(mac.c_str()), addrTypes[t]);
+        Serial.printf("[TRAFFIC] connecting to %s (addr type %u) ...\n",
+                      mac.c_str(), addrTypes[t]);
+        if (client->connect(addr)) connected = true;
+    }
+    if (!connected) {
+        Serial.printf("[TRAFFIC] connect failed for %s\n", mac.c_str());
+        NimBLEDevice::deleteClient(client);
+        return false;
+    }
+
+    bool ok = false;
+    NimBLERemoteService* svc = client->getService(NimBLEUUID(BEECOUNTER_GATT_SERVICE_UUID));
+    if (!svc) {
+        Serial.println("[TRAFFIC] service not found");
+    } else {
+        NimBLERemoteCharacteristic* chr =
+            svc->getCharacteristic(NimBLEUUID(BEECOUNTER_GATT_CHAR_UUID));
+        if (!chr || !chr->canRead()) {
+            Serial.println("[TRAFFIC] measurement characteristic unreadable");
+        } else {
+            std::string v = chr->readValue();
+            if (v.empty()) {
+                Serial.println("[TRAFFIC] empty characteristic read");
+            } else {
+                ok = parseTrafficJson(v.c_str(), v.size(), out);
+                if (ok) {
+                    Serial.printf("[TRAFFIC] %s: in=%lu out=%lu uptime=%us status=0x%02X\n",
+                                  mac.c_str(), (unsigned long)out.total_in,
+                                  (unsigned long)out.total_out,
+                                  out.uptime_s, out.status_flags);
+                }
+            }
+        }
+    }
+
+    // HiveTraffic stays connectable; close the link deterministically and wait
+    // for it to drop before freeing the client so nothing is left for the
+    // deinit() in bleRunCycle() to trip over.
+    if (client->isConnected()) client->disconnect();
+    uint32_t deadline = millis() + BEECOUNTER_GATT_DISCONNECT_TIMEOUT_MS;
+    while (client->isConnected() && (int32_t)(deadline - millis()) > 0) delay(20);
+    NimBLEDevice::deleteClient(client);
+    return ok;
+}
+
+}  // namespace
+
+void bleRunCycle(const String& mac0, const String& mac1,
+                 Snapshot& slot1, Snapshot& slot2) {
+    slot1 = Snapshot{};
+    slot2 = Snapshot{};
+    if (mac0.length() == 0 && mac1.length() == 0) return;
+
+    NimBLEDevice::init("");
+    if (mac0.length()) (void)readTrafficSlot(mac0, slot1);
+    if (mac1.length()) (void)readTrafficSlot(mac1, slot2);
+    NimBLEDevice::deinit(true);
+}
+
+#endif  // ENABLE_WIRELESS_BEECOUNTER
 
 }  // namespace beecnt

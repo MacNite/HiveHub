@@ -134,13 +134,12 @@
 // The secrets.h configurator (website/configurator.html) can describe up to six
 // wireless BLE sensors across three categories — at most 2 in-hive sensors, 2
 // scales and 2 bee counters. In-hive sensors are scanned by the bridge above
-// (ENABLE_BLE_SCAN); the scale and bee-counter macros are placeholders that
-// capture the intended layout for a future firmware build.
+// (ENABLE_BLE_SCAN); HiveTraffic bee counters are read over GATT.
 //
 // Supported in-hive types: HolyIot 25015 (beacon), RuuviTag 4-in-1 (beacon),
 // HiveInside ESP32-C6 (beacon or GATT), HiveHeart (GATT, beehivemonitoring.com).
-// Placeholders awaiting firmware support: wireless HiveScale (GATT) and wireless
-// BeeCounter (GATT).
+// Supported bee counter: HiveTraffic (GATT). Placeholder awaiting firmware
+// support: wireless HiveScale (GATT).
 //
 // Each in-hive slot (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) records the chosen
 // sensor type, its transport and, for GATT devices, the service / characteristic
@@ -153,9 +152,18 @@
 //#define INHIVE_2_TYPE                "holyiot"
 //#define INHIVE_2_PROTOCOL            "beacon"
 
-// Wireless scale / bee-counter categories (placeholders — not consumed yet).
+// Wireless scale category (placeholder — not consumed yet).
 #define ENABLE_WIRELESS_SCALE        0
+
+// HiveTraffic wireless entrance bee counter (GATT). Set to 1 and pair each
+// counter's MAC in the provisioning portal, or seed WBEECNT_n_MAC below. A
+// slot with a paired MAC is read over BLE; a slot without one falls back to the
+// wired I2C BeeCounter. The firmware uses the shared BEECOUNTER_GATT_* UUIDs.
 #define ENABLE_WIRELESS_BEECOUNTER   0
+//#define WBEECNT_1_TYPE               "beecounter"
+//#define WBEECNT_1_PROTOCOL           "gatt"
+//#define WBEECNT_1_MAC                "AA:BB:CC:DD:EE:FF"   // HiveTraffic counter 1
+//#define WBEECNT_2_MAC                "AA:BB:CC:DD:EE:00"   // HiveTraffic counter 2
 
 // ==============================
 // OPTIONAL FLAGS

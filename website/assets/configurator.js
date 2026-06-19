@@ -19,18 +19,19 @@
                   svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
     hivescale:  { label: "HiveScale — beehivemonitoring.com (GATT)",         cat: "scale",      proto: "gatt",   supported: true, bhgatt: true,
                   svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
-    beecounter: { label: "BeeCounter — beehivemonitoring.com (GATT)",        cat: "beecounter", proto: "gatt",   supported: false },
+    beecounter: { label: "HiveTraffic — entrance bee counter (GATT)",        cat: "beecounter", proto: "gatt",   supported: true,  gattmac: true,
+                  svc: "8e8b0101-7a1c-4b9e-9a2f-1d6e0b9c1a01", chr: "8e8b0102-7a1c-4b9e-9a2f-1d6e0b9c1a01" },
     ruvitag:    { label: "RuuviTag 4-in-1 (BLE beacon)",                     cat: "inhive",     proto: "beacon", supported: true  }
   };
   var TYPE_ORDER = ["holyiot", "hiveinside", "hiveheart", "hivescale", "beecounter", "ruvitag"];
-  var CAT_LABEL = { inhive: "In-hive", scale: "Scale", beecounter: "Bee counter" };
+  var CAT_LABEL = { inhive: "In-hive", scale: "Scale", beecounter: "HiveTraffic" };
   var CAT_SLOT  = { inhive: "hive", scale: "scale", beecounter: "counter" };
   // Per-category slot labels shown in the "Maps to" dropdown. The index + 1 is
   // the slot number emitted into the macro name (INHIVE_1, WSCALE_2, …).
   var CAT_SLOT_LABEL = {
     inhive:     ["Hive 1", "Hive 2"],
     scale:      ["Scale 1", "Scale 2"],
-    beecounter: ["Counter 1", "Counter 2"]
+    beecounter: ["HiveTraffic 1", "HiveTraffic 2"]
   };
   var CAT_LIMIT = 2;
   var MAX_TOTAL = 6;
@@ -231,7 +232,7 @@
       $('.wmeta', r).textContent = CAT_LABEL[def.cat] + " · " + CAT_SLOT[def.cat] + " " + slot +
         "  ·  " + (def.proto === "gatt" ? "GATT" : "BLE beacon");
       $('.wgatt', r).style.display = def.proto === "gatt" ? "block" : "none";
-      $('.wmac', r).style.display = def.bhgatt ? "block" : "none";
+      $('.wmac', r).style.display = (def.bhgatt || def.gattmac) ? "block" : "none";
       $('.wunsupported', r).style.display = def.supported ? "none" : "block";
     });
     $("#wireless-empty").style.display = rows.length ? "none" : "block";
@@ -396,9 +397,9 @@
     p("// ==============================");
     p("// Up to 6 wireless sensors: at most 2 in-hive sensors, 2 scales, 2 bee");
     p("// counters. Pair each sensor's MAC from the provisioning portal after flashing.");
-    p("// The in-hive BLE bridge and the beehivemonitoring.com GATT sensors (HiveHeart");
-    p("// / HiveScale) are consumed by the firmware; the bee-counter macros are written");
-    p("// so the device's intended layout is captured, ready for a future build.");
+    p("// The in-hive BLE bridge, the beehivemonitoring.com GATT sensors (HiveHeart");
+    p("// / HiveScale) and HiveTraffic (the wireless entrance bee counter) are all");
+    p("// consumed by the firmware.");
     p("");
 
     // beehivemonitoring.com GATT (HiveHeart / HiveScale) master switch + shared UUIDs.
@@ -438,9 +439,9 @@
     scales.forEach(function (s) { emitSlot(p, "WSCALE_" + s.slot, s); });
     p("");
 
-    // --- Wireless bee counters ------------------------------------------------
+    // --- Wireless bee counters (HiveTraffic, GATT) ---------------------------
     var bc = byCat.beecounter;
-    p("// ---- Wireless bee counters (GATT) ----");
+    p("// ---- HiveTraffic wireless bee counters (GATT) ----");
     p(def("ENABLE_WIRELESS_BEECOUNTER", bc.length ? "1" : "0"));
     bc.forEach(function (s) { emitSlot(p, "WBEECNT_" + s.slot, s); });
     p("");
@@ -458,8 +459,9 @@
       if (svc) p(defStr(prefix + "_GATT_SERVICE_UUID", svc));
       if (chr) p(defStr(prefix + "_GATT_CHAR_UUID", chr));
     }
-    // Optional MAC seeding for beehivemonitoring.com devices (blank = pair in portal).
-    if (m.bhgatt) {
+    // Optional MAC seeding for GATT devices that connect by MAC — the
+    // beehivemonitoring.com sensors and HiveTraffic (blank = pair in portal).
+    if (m.bhgatt || m.gattmac) {
       var macEl = $('[data-wmac]', s.row);
       var mac = macEl && macEl.value.trim();
       if (mac) p(defStr(prefix + "_MAC", mac));

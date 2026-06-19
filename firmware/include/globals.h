@@ -95,6 +95,14 @@ extern String scaleMac0;
 extern String scaleMac1;
 #endif
 
+#if ENABLE_WIRELESS_BEECOUNTER
+// Paired HiveTraffic (wireless entrance bee counter) GATT MACs ("" when
+// unpaired). Slot 0 -> counter 1, slot 1 -> counter 2. Stored under the
+// portal's counter_mac{0,1} keys; seeded from WBEECNT_n_MAC in secrets.h.
+extern String trafficMac0;
+extern String trafficMac1;
+#endif
+
 // ---- Scale calibration ----------------------------------------------------
 extern long scale1Offset;
 extern long scale2Offset;

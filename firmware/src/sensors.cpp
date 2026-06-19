@@ -263,13 +263,24 @@ String createMeasurementJson() {
 #endif
 
 // ---- BeeCounter polling -------------------------------------------------
-  // Poll both possible BeeCounters on the shared I2C bus. Each slot is
-  // independent — a missing counter just reports "ok=false". Reading both
-  // takes roughly 30–80 ms; well within our wake budget.
+  // Each slot is independent — a missing counter just reports "ok=false".
+  // A slot with a paired HiveTraffic MAC is read wirelessly over GATT; any
+  // remaining slot falls back to the wired I2C BeeCounter on the shared bus.
   beecnt::Snapshot beeSnap1;
   beecnt::Snapshot beeSnap2;
-  (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_1, beeSnap1);
-  (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_2, beeSnap2);
+#if ENABLE_WIRELESS_BEECOUNTER
+  const bool trafficSlot1 = trafficMac0.length() > 0;
+  const bool trafficSlot2 = trafficMac1.length() > 0;
+  if (trafficSlot1 || trafficSlot2) {
+    // Single BLE up/down for both wireless slots (mirrors bhgatt::runCycle).
+    beecnt::bleRunCycle(trafficMac0, trafficMac1, beeSnap1, beeSnap2);
+  }
+#else
+  const bool trafficSlot1 = false;
+  const bool trafficSlot2 = false;
+#endif
+  if (!trafficSlot1) (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_1, beeSnap1);
+  if (!trafficSlot2) (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_2, beeSnap2);
 
   Serial.printf("[MEASURE] raw1=%ld weight1=%.3f kg\n", raw1, weight1);
   Serial.printf("[MEASURE] raw2=%ld weight2=%.3f kg\n", raw2, weight2);

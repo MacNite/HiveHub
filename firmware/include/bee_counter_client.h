@@ -10,6 +10,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include "config.h"   // ENABLE_WIRELESS_BEECOUNTER + BEECOUNTER_GATT_* UUIDs
 
 namespace beecnt {
 
@@ -88,6 +89,13 @@ struct Snapshot {
     uint8_t  per_gate_in[PER_GATE_ARRAY_LEN]  = {0};
     uint8_t  per_gate_out[PER_GATE_ARRAY_LEN] = {0};
     uint8_t  read_attempts    = 0;       // 1 = first try succeeded, 2 = retried
+
+    // True when this snapshot came from a totals-only source (the HiveTraffic
+    // BLE path), which reports lifetime totals but no per-interval or per-gate
+    // detail. writeSnapshotToJson then omits the interval_* and per_gate_*
+    // fields so the backend differences the totals into intervals instead of
+    // storing a misleading zero.
+    bool     totals_only      = false;
 };
 
 // Read every register listed above from one slave, then LATCH on
@@ -100,6 +108,17 @@ bool pollSlot(uint8_t address, Snapshot& out);
 // Serialize a snapshot into the parent measurement JSON document
 // under a per-slot key prefix (e.g. "bee_counter_1_").
 void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap);
+
+#if ENABLE_WIRELESS_BEECOUNTER
+// HiveTraffic (wireless bee counter) GATT-client read. Brings the BLE stack up
+// once, connects to each non-empty MAC, reads the JSON measurement
+// characteristic (BEECOUNTER_GATT_*), parses the lifetime totals into the
+// matching totals-only Snapshot, then tears the stack down — same lifecycle as
+// bhgatt::runCycle. An empty MAC leaves that slot !present. No CMD_LATCH is
+// written: the wire format is totals-only and the backend differences them.
+void bleRunCycle(const String& mac0, const String& mac1,
+                 Snapshot& slot1, Snapshot& slot2);
+#endif
 
 // CRC-32 (IEEE 802.3, poly 0xEDB88320) over a buffer, finalized. Matches the
 // BeeCounter and the backend (zlib.crc32). Exposed so the relay/download

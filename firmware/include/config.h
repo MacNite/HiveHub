@@ -253,6 +253,33 @@
 #define ENABLE_WIRELESS_BEECOUNTER 0
 #endif
 
+// ------------------------------------------------------------------
+// HiveTraffic (wireless entrance bee counter, BLE/GATT)
+// ------------------------------------------------------------------
+// When ENABLE_WIRELESS_BEECOUNTER is set, the firmware acts as a GATT client:
+// once per upload cycle it connects to each paired HiveTraffic MAC
+// (counter_mac{0,1}, paired in the portal or seeded via WBEECNT_n_MAC), reads
+// its JSON measurement characteristic and folds the lifetime IN/OUT totals into
+// the same bee_counter_{slot}_* fields the wired I2C BeeCounter uses. The wire
+// format is totals-only: the backend differences consecutive totals into
+// per-interval counts (see 2026-easy-bee-counter/docs/ble-mode.md), so no
+// CMD_LATCH reset is written. A slot with a paired MAC uses BLE; a slot without
+// one falls back to the wired I2C BeeCounter. All HiveTraffic devices share one
+// service/characteristic UUID, so a single pair of macros covers both slots.
+#ifndef BEECOUNTER_GATT_SERVICE_UUID
+#define BEECOUNTER_GATT_SERVICE_UUID "8e8b0101-7a1c-4b9e-9a2f-1d6e0b9c1a01"
+#endif
+#ifndef BEECOUNTER_GATT_CHAR_UUID
+#define BEECOUNTER_GATT_CHAR_UUID    "8e8b0102-7a1c-4b9e-9a2f-1d6e0b9c1a01"
+#endif
+// Seconds to wait for the GATT connection, then for the characteristic read.
+#ifndef BEECOUNTER_GATT_CONNECT_TIMEOUT_S
+#define BEECOUNTER_GATT_CONNECT_TIMEOUT_S 12
+#endif
+#ifndef BEECOUNTER_GATT_DISCONNECT_TIMEOUT_MS
+#define BEECOUNTER_GATT_DISCONNECT_TIMEOUT_MS 2000
+#endif
+
 // ==============================
 // BEEHIVEMONITORING.COM GATT SENSORS (HiveHeart / HiveScale)
 // ==============================

@@ -1,7 +1,7 @@
 // globals.cpp — single definition point for everything declared in globals.h.
 #include "globals.h"
 
-const char* const FIRMWARE_VERSION = "0.16.4";
+const char* const FIRMWARE_VERSION = "0.16.6";
 
 HX711 scale1;
 HX711 scale2;
@@ -57,6 +57,11 @@ String heartMac0;
 String heartMac1;
 String scaleMac0;
 String scaleMac1;
+#endif
+
+#if ENABLE_WIRELESS_BEECOUNTER
+String trafficMac0;
+String trafficMac1;
 #endif
 
 long scale1Offset = 0;

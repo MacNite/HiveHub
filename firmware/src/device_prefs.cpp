@@ -4,6 +4,7 @@
 #include "config.h"
 #include "secrets.h"
 #include "beehive_gatt.h"
+#include <cctype>
 
 String prefString(const char* key, const char* fallback) {
   prefs.begin("hivescale", true);
@@ -109,6 +110,28 @@ void seedPrefsFromSecretsIfNeeded() {
     #endif
   #endif
 
+  #if ENABLE_WIRELESS_BEECOUNTER
+    // Seed HiveTraffic (wireless bee counter) MACs from secrets.h (WBEECNT_n_MAC)
+    // into the portal's counter_mac keys. Like the GATT seeds above this runs
+    // every boot but only writes a key when ABSENT, so a portal pairing wins.
+    auto seedCounterMac = [&](const char* key, const char* raw) {
+      if (prefs.isKey(key)) return;
+      String hex;
+      for (const char* c = raw; *c; ++c)
+        if (isxdigit((unsigned char)*c)) hex += (char)toupper((unsigned char)*c);
+      String norm;
+      if (hex.length() == 12)
+        for (int i = 0; i < 12; i += 2) { if (i) norm += ':'; norm += hex.substring(i, i + 2); }
+      prefs.putString(key, norm.length() ? norm : String(raw));
+    };
+    #ifdef WBEECNT_1_MAC
+      seedCounterMac("counter_mac0", WBEECNT_1_MAC);
+    #endif
+    #ifdef WBEECNT_2_MAC
+      seedCounterMac("counter_mac1", WBEECNT_2_MAC);
+    #endif
+  #endif
+
   #ifdef CLAIM_CODE
     uint32_t storedClaimRevision = prefs.getUInt("claim_rev", 0);
     #ifdef CLAIM_CODE_REVISION
@@ -153,6 +176,12 @@ void loadConfigFromPrefs() {
   heartMac1 = prefs.getString("heart_mac1", "");
   scaleMac0 = prefs.getString("scale_mac0", "");
   scaleMac1 = prefs.getString("scale_mac1", "");
+#endif
+
+#if ENABLE_WIRELESS_BEECOUNTER
+  // HiveTraffic (wireless bee counter) MACs share the portal's counter_mac keys.
+  trafficMac0 = prefs.getString("counter_mac0", "");
+  trafficMac1 = prefs.getString("counter_mac1", "");
 #endif
 
   prefs.end();
