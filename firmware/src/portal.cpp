@@ -22,6 +22,21 @@ static String jsonNumberOrNA(JsonDocument& doc, const char* key, uint8_t decimal
 static String jsonBoolOrNA(JsonDocument& doc, const char* key);
 static void addMeasurementRow(String& html, const String& label, const String& value);
 
+// Normalise a MAC to the canonical "AA:BB:CC:DD:EE:FF" form (or "" when
+// invalid), independent of which wireless feature is compiled in. Both the
+// HolyIot bridge and the beehivemonitoring GATT client expose the same
+// normaliser; we just forward to whichever is built.
+static String portalNormalizeMac(const String& raw) {
+#if ENABLE_BEEHIVE_GATT
+  return bhgatt::normalizeMac(raw);
+#elif ENABLE_BLE_SCAN
+  return blesensor::normalizeMac(raw);
+#else
+  (void)raw;
+  return String("");
+#endif
+}
+
 bool calibrationModeExpired() {
   if (!calibrationModeActive) return false;
   return millis() - calibrationModeStartedMs >= calibrationModeTimeoutMs;
@@ -313,6 +328,9 @@ void handleSetupRoot() {
           "label{display:block;font-size:.88em;font-weight:500;margin-top:10px;color:var(--muted)}"
           "input{width:100%;padding:10px 12px;margin:6px 0 12px;border:1px solid var(--border);border-radius:8px;font-size:1rem;background:#fff;color:var(--fg)}"
           "input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(245,158,11,.25)}"
+          "select{width:100%;padding:10px 12px;margin:6px 0 12px;border:1px solid var(--border);border-radius:8px;font-size:1rem;background:#fff;color:var(--fg)}"
+          ".wsrow{border:1px dashed var(--border);border-radius:10px;padding:8px 12px;margin:10px 0;background:rgba(245,158,11,.03)}"
+          ".wnote{color:var(--muted);font-size:.82em;margin:4px 0 8px}"
           "button,a.button{display:inline-block;padding:11px 18px;margin:4px 6px 4px 0;font-size:1rem;text-decoration:none;border-radius:8px;border:1px solid var(--border);background:#fff;color:var(--fg);cursor:pointer}"
           "button:hover,a.button:hover{filter:brightness(.97)}"
           "button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}"
@@ -321,7 +339,7 @@ void handleSetupRoot() {
           "th,td{text-align:left;border-bottom:1px solid var(--border);padding:8px 6px}"
           "th{width:48%;font-weight:500;color:var(--muted)}"
           ".meta{color:var(--muted);font-size:.86em}p{margin:8px 0}"
-          "@media(prefers-color-scheme:dark){:root{--bg:#161618;--card:#1f1f23;--fg:#ececf1;--muted:#9aa0aa;--border:#33343a;--link:#f5b54a}input{background:#26262b}button,a.button{background:#26262b}button.danger{background:#2a1d1d;border-color:#5a2d2a;color:#f7a59c}}"
+          "@media(prefers-color-scheme:dark){:root{--bg:#161618;--card:#1f1f23;--fg:#ececf1;--muted:#9aa0aa;--border:#33343a;--link:#f5b54a}input{background:#26262b}select{background:#26262b}button,a.button{background:#26262b}button.danger{background:#2a1d1d;border-color:#5a2d2a;color:#f7a59c}}"
           "</style>";
   html += "</head><body><div class='wrap'><h1>HiveScale Setup</h1>";
   html += "<p class='sub'>Firmware: " + String(FIRMWARE_VERSION) + "</p>";
@@ -335,7 +353,7 @@ void handleSetupRoot() {
     html += "<p>SD card not available.</p>";
   }
   html += "</fieldset>";
-  html += "<form method='POST' action='/save'>";
+  html += "<form method='POST' action='/save' id='cfgform'>";
   html += "<fieldset><legend>Backend</legend>";
   html += "<label>Device ID</label><input name='device_id' value='" + htmlEscape(deviceId) + "'>";
   html += "<label>Claim code</label><input name='claim_code' value='" + htmlEscape(claimCode) + "'>";
@@ -343,31 +361,105 @@ void handleSetupRoot() {
   html += "<label>API key</label><input name='api_key' value='" + htmlEscape(apiKey) + "'>";
   html += "</fieldset>";
 
+#if (ENABLE_BLE_SCAN || ENABLE_BEEHIVE_GATT)
+  // Dynamic wireless-sensor list. Instead of fixed per-slot fields, the user
+  // adds rows and picks each sensor's type; the categories and limits mirror the
+  // secrets.h configurator (in-hive / scale / bee counter, max 2 each, 6 total).
+  // The default type is an in-hive sensor. handleSetupSave() persists this list
+  // and recomputes the per-transport slot keys the firmware actually reads.
+  html += "<fieldset><legend>Wireless sensors</legend>";
+  html += "<p>Add up to six wireless BLE sensors &mdash; at most two in-hive sensors, two scales and two bee counters. ";
+  html += "For each one choose its type and enter its MAC address";
 #if ENABLE_BLE_SCAN
-  html += "<fieldset><legend>In-hive BLE sensors (HolyIot 25015 / HiveInside / RuuviTag)</legend>";
-  html += "<p>Pair up to two sensors. Slot 1 maps to hive 1, slot 2 to hive 2. ";
-  html += "The HolyIot 25015 and RuuviTag beacons are supported and auto-detected. ";
-  html += "When a paired sensor reports temperature, vibration or sound, the matching wired sensor for that hive is disabled automatically to avoid duplicate readings. ";
-  html += "Enter each sensor's MAC address, or <a href='/ble/scan'>scan for nearby sensors</a> and copy a MAC below.</p>";
-  html += "<label>Sensor 1 MAC (hive 1)</label><input name='ble_mac0' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(bleSensorMac0) + "'>";
-  html += "<label>Sensor 2 MAC (hive 2)</label><input name='ble_mac1' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(bleSensorMac1) + "'>";
-  html += "</fieldset>";
+  html += ", or <a href='/ble/scan'>scan for wireless sensors</a> and copy a MAC below";
 #endif
+  html += ". In-hive sensors map slot 1 &rarr; hive 1 and slot 2 &rarr; hive 2 in the order listed; ";
+  html += "when a paired in-hive sensor reports temperature, vibration or sound, the matching wired sensor for that hive is disabled automatically to avoid duplicate readings.</p>";
+  html += "<div id='wlist'></div>";
+  html += "<p id='wempty' class='meta'>No wireless sensors added yet.</p>";
+  html += "<p><button type='button' class='button' id='waddbtn'>&#10133; Add wireless sensor</button></p>";
+  html += "<p id='wfull' class='meta' style='display:none'>Maximum of 6 wireless sensors reached (2 per category).</p>";
+  html += "<input type='hidden' name='wcount' id='wcount' value='0'>";
 
-#if ENABLE_BEEHIVE_GATT
-  html += "<fieldset><legend>beehivemonitoring.com sensors (HiveHeart / HiveScale)</legend>";
-  html += "<p>Pair by MAC address. HiveScale connects to each device, reads one GATT notification and disconnects. ";
-  html += "HiveHeart slot 1/2 map to hive 1/2; the wireless scales are independent. Leave a slot blank if you do not use it.";
-#if ENABLE_BLE_SCAN
-  html += " You can <a href='/ble/scan'>scan for nearby sensors</a> and copy a MAC below.";
-#else
-  html += " Read each device's MAC with a phone BLE scanner (e.g. nRF Connect) and paste it below.";
-#endif
-  html += "</p>";
-  html += "<label>HiveHeart 1 MAC (hive 1)</label><input name='heart_mac0' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(heartMac0) + "'>";
-  html += "<label>HiveHeart 2 MAC (hive 2)</label><input name='heart_mac1' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(heartMac1) + "'>";
-  html += "<label>HiveScale 1 MAC</label><input name='scale_mac0' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(scaleMac0) + "'>";
-  html += "<label>HiveScale 2 MAC</label><input name='scale_mac1' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(scaleMac1) + "'>";
+  // Seed the in-browser list from stored pairings. Prefer the canonical
+  // wcount/wtypeN/wmacN list; fall back to the legacy fixed-slot keys so devices
+  // provisioned before this change still show their existing pairings.
+  html += "<script>var INITIAL=[";
+  {
+    prefs.begin("hivescale", true);
+    bool first = true;
+    auto emit = [&](const char* type, const String& mac) {
+      if (mac.length() == 0) return;
+      if (!first) html += ",";
+      first = false;
+      html += "{t:'"; html += type; html += "',m:'"; html += mac; html += "'}";
+    };
+    if (prefs.isKey("wcount")) {
+      int wc = (int)prefs.getUInt("wcount", 0);
+      if (wc > 6) wc = 6;
+      for (int i = 0; i < wc; i++) {
+        String t = prefs.getString((String("wtype") + i).c_str(), "");
+        String m = prefs.getString((String("wmac") + i).c_str(), "");
+        if (t.length() == 0) t = "holyiot";
+        emit(t.c_str(), m);
+      }
+    } else {
+      emit("holyiot",    prefs.getString("ble_mac0", ""));
+      emit("holyiot",    prefs.getString("ble_mac1", ""));
+      emit("hiveheart",  prefs.getString("heart_mac0", ""));
+      emit("hiveheart",  prefs.getString("heart_mac1", ""));
+      emit("hivescale",  prefs.getString("scale_mac0", ""));
+      emit("hivescale",  prefs.getString("scale_mac1", ""));
+      emit("beecounter", prefs.getString("counter_mac0", ""));
+      emit("beecounter", prefs.getString("counter_mac1", ""));
+    }
+    prefs.end();
+  }
+  html += "];</script>";
+
+  // Inline list controller (no external assets — works on the offline portal).
+  html += R"WSJS(<script>(function(){
+var TYPES={
+holyiot:{label:"HolyIot 25015 - in-hive (BLE beacon)",cat:"inhive"},
+ruuvitag:{label:"RuuviTag - in-hive (BLE beacon)",cat:"inhive"},
+hiveinside:{label:"HiveInside - in-hive (GATT)",cat:"inhive"},
+hiveheart:{label:"HiveHeart - in-hive (GATT)",cat:"inhive"},
+hivescale:{label:"HiveScale - wireless scale (GATT)",cat:"scale"},
+beecounter:{label:"BeeCounter (GATT) - stored, not used by firmware yet",cat:"beecounter"}};
+var ORDER=["holyiot","ruuvitag","hiveinside","hiveheart","hivescale","beecounter"];
+var LIMIT={inhive:2,scale:2,beecounter:2},MAXT=6;
+var LAB={inhive:"In-hive sensor, hive",scale:"Scale, scale",beecounter:"Bee counter, counter"};
+var list=document.getElementById("wlist"),addbtn=document.getElementById("waddbtn"),form=document.getElementById("cfgform");
+function rows(){return Array.prototype.slice.call(list.querySelectorAll(".wsrow"));}
+function catCount(cat,except){var n=0;rows().forEach(function(r){if(r===except)return;if(TYPES[r.querySelector("[data-wtype]").value].cat===cat)n++;});return n;}
+function firstFree(except){for(var i=0;i<ORDER.length;i++){var k=ORDER[i];if(catCount(TYPES[k].cat,except)<LIMIT[TYPES[k].cat])return k;}return null;}
+function opts(sel){return ORDER.map(function(k){return "<option value='"+k+"'"+(k===sel?" selected":"")+">"+TYPES[k].label+"</option>";}).join("");}
+function addRow(type,mac){
+var key=type||firstFree(null);if(!key)return;
+var r=document.createElement("div");r.className="wsrow";
+r.innerHTML="<label>Sensor type</label><select data-wtype>"+opts(key)+"</select>"+
+"<label>MAC address</label><input data-wmac placeholder='AA:BB:CC:DD:EE:FF'>"+
+"<p class='wnote'></p>"+
+"<button type='button' class='button' data-wrem>Remove</button>";
+list.appendChild(r);
+if(mac)r.querySelector("[data-wmac]").value=mac;
+r.querySelector("[data-wtype]").addEventListener("change",function(){onType(r);});
+r.querySelector("[data-wrem]").addEventListener("click",function(){list.removeChild(r);refresh();});
+refresh();}
+function onType(r){var sel=r.querySelector("[data-wtype]"),cat=TYPES[sel.value].cat;
+if(catCount(cat,r)>=LIMIT[cat])sel.value=firstFree(r)||ORDER[0];refresh();}
+function refresh(){var rs=rows(),seen={inhive:0,scale:0,beecounter:0};
+rs.forEach(function(r){var d=TYPES[r.querySelector("[data-wtype]").value],s=++seen[d.cat];
+r.querySelector(".wnote").textContent=LAB[d.cat]+" "+s;});
+document.getElementById("wempty").style.display=rs.length?"none":"block";
+var full=rs.length>=MAXT||firstFree(null)===null;
+addbtn.disabled=full;document.getElementById("wfull").style.display=full?"block":"none";}
+addbtn.addEventListener("click",function(){addRow(null,"");});
+form.addEventListener("submit",function(){var rs=rows();document.getElementById("wcount").value=rs.length;
+rs.forEach(function(r,i){r.querySelector("[data-wtype]").name="wtype"+i;r.querySelector("[data-wmac]").name="wmac"+i;});});
+INITIAL.forEach(function(e){addRow(e.t,e.m);});
+refresh();
+})();</script>)WSJS";
   html += "</fieldset>";
 #endif
 
@@ -402,29 +494,69 @@ void handleSetupSave() {
   if (newApiBase.length() > 0) prefs.putString("api_base", newApiBase);
   if (newApiKey.length() > 0) prefs.putString("api_key", newApiKey);
 
-#if ENABLE_BLE_SCAN
-  // Persist the paired HolyIot 25015 MACs. An empty field clears that slot.
-  // Normalising here means an invalid entry is stored as "" (unpaired) rather
-  // than a string that can never match an advertisement.
-  String bleMac0 = blesensor::normalizeMac(setupServer.arg("ble_mac0"));
-  String bleMac1 = blesensor::normalizeMac(setupServer.arg("ble_mac1"));
-  prefs.putString("ble_mac0", bleMac0);
-  prefs.putString("ble_mac1", bleMac1);
-  bleSensorMac0 = bleMac0;
-  bleSensorMac1 = bleMac1;
-#endif
+#if (ENABLE_BLE_SCAN || ENABLE_BEEHIVE_GATT)
+  // Dynamic wireless-sensor list. The portal submits wcount plus a wtypeN /
+  // wmacN pair per row. We store that canonical list (so the page can repaint
+  // the exact rows next time) AND fan each row out to the per-transport slot
+  // keys the firmware reads: in-hive beacons/GATT -> ble_mac{0,1}, HiveHeart ->
+  // heart_mac{0,1}, HiveScale -> scale_mac{0,1}, BeeCounter -> counter_mac{0,1}
+  // (stored only; no firmware support yet). Slots fill in the order listed, so
+  // the first in-hive row maps to hive 1, the second to hive 2.
+  int wcount = setupServer.arg("wcount").toInt();
+  if (wcount < 0) wcount = 0;
+  if (wcount > 6) wcount = 6;
 
+  String bleMac[2]   = {"", ""};
+  String heartMac[2] = {"", ""};
+  String scaleMac[2] = {"", ""};
+  String cntMac[2]   = {"", ""};
+  int bleN = 0, heartN = 0, scaleN = 0, cntN = 0;
+
+  prefs.putUInt("wcount", (uint32_t)wcount);
+  for (int i = 0; i < wcount; i++) {
+    String type = setupServer.arg(String("wtype") + i);
+    String mac = portalNormalizeMac(setupServer.arg(String("wmac") + i));
+    type.trim();
+
+    prefs.putString((String("wtype") + i).c_str(), type);
+    prefs.putString((String("wmac") + i).c_str(), mac);
+
+    if (type == "hiveheart") {
+      if (heartN < 2) heartMac[heartN++] = mac;
+    } else if (type == "hivescale") {
+      if (scaleN < 2) scaleMac[scaleN++] = mac;
+    } else if (type == "beecounter") {
+      if (cntN < 2) cntMac[cntN++] = mac;
+    } else {
+      // holyiot / ruuvitag / hiveinside and any unknown type -> in-hive bridge.
+      if (bleN < 2) bleMac[bleN++] = mac;
+    }
+  }
+  // Clear any stale list entries left over from a previously longer list.
+  for (int i = wcount; i < 6; i++) {
+    prefs.remove((String("wtype") + i).c_str());
+    prefs.remove((String("wmac") + i).c_str());
+  }
+
+#if ENABLE_BLE_SCAN
+  prefs.putString("ble_mac0", bleMac[0]);
+  prefs.putString("ble_mac1", bleMac[1]);
+  bleSensorMac0 = bleMac[0];
+  bleSensorMac1 = bleMac[1];
+#endif
 #if ENABLE_BEEHIVE_GATT
-  // Persist the paired HiveHeart / HiveScale MACs. An empty field clears that
-  // slot; invalid entries normalise to "" so they can never match a device.
-  heartMac0 = bhgatt::normalizeMac(setupServer.arg("heart_mac0"));
-  heartMac1 = bhgatt::normalizeMac(setupServer.arg("heart_mac1"));
-  scaleMac0 = bhgatt::normalizeMac(setupServer.arg("scale_mac0"));
-  scaleMac1 = bhgatt::normalizeMac(setupServer.arg("scale_mac1"));
-  prefs.putString("heart_mac0", heartMac0);
-  prefs.putString("heart_mac1", heartMac1);
-  prefs.putString("scale_mac0", scaleMac0);
-  prefs.putString("scale_mac1", scaleMac1);
+  prefs.putString("heart_mac0", heartMac[0]);
+  prefs.putString("heart_mac1", heartMac[1]);
+  prefs.putString("scale_mac0", scaleMac[0]);
+  prefs.putString("scale_mac1", scaleMac[1]);
+  heartMac0 = heartMac[0];
+  heartMac1 = heartMac[1];
+  scaleMac0 = scaleMac[0];
+  scaleMac1 = scaleMac[1];
+#endif
+  // BeeCounter MACs are stored for a future build; no firmware consumes them yet.
+  prefs.putString("counter_mac0", cntMac[0]);
+  prefs.putString("counter_mac1", cntMac[1]);
 #endif
 
   int savedCount = 0;

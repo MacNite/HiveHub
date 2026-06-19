@@ -214,7 +214,7 @@ Press the setup button on GPIO27 to manage field configuration without reflashin
 | Short press | Starts `HiveScale-Setup-XXXX` AP; open `http://192.168.4.1` |
 | Long press, 10 seconds | Clears stored Preferences and reboots |
 
-The portal can edit Wi-Fi networks, backend URL, device ID, claim code, and API settings. It closes automatically after 10 minutes.
+The portal can edit Wi-Fi networks, backend URL, device ID, claim code, API settings, and the **Wireless sensors** list — add up to six BLE sensors (at most two in-hive, two scales, two bee counters), choosing each one's type and MAC, or scan for nearby devices. It closes automatically after 10 minutes.
 
 ---
 
