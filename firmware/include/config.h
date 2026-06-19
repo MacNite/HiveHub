@@ -283,6 +283,16 @@
 #define BEEHIVE_GATT_NOTIFY_TIMEOUT_S 5
 #endif
 
+// Milliseconds to wait, after the read, for the link to actually close before
+// freeing the client. These devices drop the link themselves but not always
+// promptly; deleting a still-connected client defers the free and leaves it for
+// NimBLEDevice::deinit() to terminate after the host stack is disabled — that is
+// the source of "ble_gap_terminate failed: rc=30" (BLE_HS_EDISABLED). Normal
+// BLE teardown completes well within this budget.
+#ifndef BEEHIVE_GATT_DISCONNECT_TIMEOUT_MS
+#define BEEHIVE_GATT_DISCONNECT_TIMEOUT_MS 1000
+#endif
+
 // ==============================
 // PIN MAP
 // ==============================
