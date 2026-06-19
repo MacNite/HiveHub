@@ -80,6 +80,10 @@ struct Snapshot {
 
   int      battery_pct   = -1;     // -1 = not reported
 
+  // Running firmware version reported by a HiveInside C6 over GATT (JSON "fw").
+  // Empty for HolyIot/Ruuvi beacons, which carry no firmware field.
+  String   fw_version;
+
   // Capability helpers used by the wired/BLE arbitration in sensors.cpp.
   bool providesTemp()  const { return present && !isnan(temp_c); }
   bool providesAccel() const { return present && !isnan(accel_rms_mg); }
