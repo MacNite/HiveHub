@@ -27,7 +27,10 @@ characteristic `513849eb-913d-4f80-8c44-3f0685533d6e`; only the payload differs.
 2. Optionally paste the device MAC in the configurator to pre-pair via
    `secrets.h` (`INHIVE_n_MAC` / `WSCALE_n_MAC`), or leave it blank.
 3. Flash, then **pair the MAC**: either it was seeded from `secrets.h`, or open
-   the provisioning portal and fill the *HiveHeart / HiveScale* MAC fields.
+   the provisioning portal, and under **Wireless sensors** click **➕ Add
+   wireless sensor**, choose **HiveHeart** (in-hive) or **HiveScale** (scale),
+   and paste the device MAC. HiveHeart rows fill hive 1 then hive 2; HiveScale
+   rows are the independent wireless scales.
 
 > A MAC is always required — it is the connection address. The UUIDs identify
 > *what* to read, not *which* device, so configuring UUIDs alone is not enough

@@ -29,14 +29,15 @@ pre-swarm detector (`detect_lowrate_accel_swarm`) described in the HolyIot doc.
    (`RUUVI_COMPANY_ID`, `0x0499`).
 2. **Pair from the setup portal.** Open the provisioning portal (short-press the
    setup button, join the `HiveScale-Setup-XXXX` AP, browse to
-   `http://192.168.4.1/`). Under **In-hive BLE sensors**:
-   - Click **scan for nearby sensors**; a RuuviTag broadcasting a parseable
+   `http://192.168.4.1/`). Under **Wireless sensors**:
+   - Click **scan for wireless sensors**; a RuuviTag broadcasting a parseable
      payload is flagged as `RuuviTag` in the type column.
-   - Paste each sensor's MAC into **Sensor 1 MAC (hive 1)** / **Sensor 2 MAC
-     (hive 2)** and **Save and reboot**.
+   - Click **➕ Add wireless sensor**, pick **RuuviTag** (an in-hive type),
+     paste the sensor's MAC, then **Save and reboot**. The first in-hive row
+     maps to hive 1, the second to hive 2.
    The MACs persist in Preferences (`ble_mac0` / `ble_mac1`), shared with the
-   HolyIot/HiveInside slots — a slot holds one in-hive sensor of any supported
-   type.
+   HolyIot/HiveInside in-hive slots — a slot holds one in-hive sensor of any
+   supported type.
 
 Each cycle the firmware scans for `HOLYIOT_BLE_SCAN_SECONDS` (default 6 s),
 matches advertisements to the paired MACs, decodes the RuuviTag payload and
