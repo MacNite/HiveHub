@@ -25,7 +25,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -409,6 +409,19 @@ class MeasurementIn(BaseModel):
     bee_counter_1_per_gate_out: Optional[list[int]] = Field(default=None, max_length=64)
     bee_counter_2_per_gate_in:  Optional[list[int]] = Field(default=None, max_length=64)
     bee_counter_2_per_gate_out: Optional[list[int]] = Field(default=None, max_length=64)
+
+    # Belt-and-suspenders for field devices running firmware that predates the
+    # DS18B20 disconnect-sentinel fix: an enabled-but-unwired probe reports
+    # ~-127 C (DEVICE_DISCONNECTED_C), which is far below any plausible in-hive
+    # temperature. Treat sub-range values as "no reading" (None) so they are not
+    # persisted and rendered as bogus -127 C in HivePal. -40 C is comfortably
+    # below any real reading while still catching every Dallas error code.
+    @field_validator("hive_1_temp_c", "hive_2_temp_c")
+    @classmethod
+    def _drop_disconnected_probe(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= -40.0:
+            return None
+        return v
 
 
 # Max measurements accepted in a single bulk-import request. The HivePal backend
