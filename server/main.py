@@ -1520,6 +1520,11 @@ def import_measurements(
 #                              104  ble_2_pressure_hpa
 #                              105  hive_1_humidity_percent
 #                              106  hive_2_humidity_percent
+#  (107..130 hiveheart/hivescale fields — see SELECT order below)
+#                              131  ble_1_battery_percent
+#                              132  ble_1_rssi_dbm
+#                              133  ble_2_battery_percent
+#                              134  ble_2_rssi_dbm
 # ---------------------------------------------------------------------------
 
 MEASUREMENT_SELECT_COLUMNS = """
@@ -1640,7 +1645,11 @@ MEASUREMENT_SELECT_COLUMNS = """
     COALESCE(hivescale_2_temp_c,           NULLIF(raw_json->>'hivescale_2_temp_c',           '')::double precision) AS hivescale_2_temp_c,
     COALESCE(hivescale_2_humidity_percent, NULLIF(raw_json->>'hivescale_2_humidity_percent', '')::double precision) AS hivescale_2_humidity_percent,
     COALESCE(hivescale_2_pressure_hpa,     NULLIF(raw_json->>'hivescale_2_pressure_hpa',     '')::double precision) AS hivescale_2_pressure_hpa,
-    COALESCE(hivescale_2_battery_v,        NULLIF(raw_json->>'hivescale_2_battery_v',        '')::double precision) AS hivescale_2_battery_v
+    COALESCE(hivescale_2_battery_v,        NULLIF(raw_json->>'hivescale_2_battery_v',        '')::double precision) AS hivescale_2_battery_v,
+    NULLIF(raw_json->>'ble_1_battery_percent', '')::integer AS ble_1_battery_percent,
+    NULLIF(raw_json->>'ble_1_rssi_dbm',        '')::integer AS ble_1_rssi_dbm,
+    NULLIF(raw_json->>'ble_2_battery_percent', '')::integer AS ble_2_battery_percent,
+    NULLIF(raw_json->>'ble_2_rssi_dbm',        '')::integer AS ble_2_rssi_dbm
 """
 
 
@@ -1766,27 +1775,43 @@ def measurement_row_to_dict(r):
         # In-hive relative humidity (mirrors hive_N_temp_c; appended last).
         "hive_1_humidity_percent":   r[105],
         "hive_2_humidity_percent":   r[106],
-        # beehivemonitoring.com GATT sensors (HiveHeart / HiveScale)
+        # beehivemonitoring.com GATT sensors (HiveHeart / HiveScale).
+        # NOTE: hiveheart_N_temp_c / hiveheart_N_humidity_percent are SELECTed
+        # (they are kept "independently visible" per the MeasurementIn comment)
+        # and so MUST be mapped here — omitting them shifts every positional
+        # index below them and silently mis-reads hiveheart_2_* / hivescale_*.
         "hiveheart_1_frequency_hz":     r[107],
         "hiveheart_1_energy":           r[108],
         "hiveheart_1_peak":             r[109],
         "hiveheart_1_battery_v":        r[110],
-        "hiveheart_2_frequency_hz":     r[111],
-        "hiveheart_2_energy":           r[112],
-        "hiveheart_2_peak":             r[113],
-        "hiveheart_2_battery_v":        r[114],
-        "hivescale_1_weight_kg":        r[115],
-        "hivescale_1_raw_weight":       r[116],
-        "hivescale_1_temp_c":           r[117],
-        "hivescale_1_humidity_percent": r[118],
-        "hivescale_1_pressure_hpa":     r[119],
-        "hivescale_1_battery_v":        r[120],
-        "hivescale_2_weight_kg":        r[121],
-        "hivescale_2_raw_weight":       r[122],
-        "hivescale_2_temp_c":           r[123],
-        "hivescale_2_humidity_percent": r[124],
-        "hivescale_2_pressure_hpa":     r[125],
-        "hivescale_2_battery_v":        r[126],
+        "hiveheart_1_temp_c":           r[111],
+        "hiveheart_1_humidity_percent": r[112],
+        "hiveheart_2_frequency_hz":     r[113],
+        "hiveheart_2_energy":           r[114],
+        "hiveheart_2_peak":             r[115],
+        "hiveheart_2_battery_v":        r[116],
+        "hiveheart_2_temp_c":           r[117],
+        "hiveheart_2_humidity_percent": r[118],
+        "hivescale_1_weight_kg":        r[119],
+        "hivescale_1_raw_weight":       r[120],
+        "hivescale_1_temp_c":           r[121],
+        "hivescale_1_humidity_percent": r[122],
+        "hivescale_1_pressure_hpa":     r[123],
+        "hivescale_1_battery_v":        r[124],
+        "hivescale_2_weight_kg":        r[125],
+        "hivescale_2_raw_weight":       r[126],
+        "hivescale_2_temp_c":           r[127],
+        "hivescale_2_humidity_percent": r[128],
+        "hivescale_2_pressure_hpa":     r[129],
+        "hivescale_2_battery_v":        r[130],
+        # HolyIot 25015 / HiveInside in-hive BLE sensor battery + link RSSI.
+        # Stored in raw_json on ingest; surfaced here so the app can show a
+        # per-sensor charge level (HolyIot reports %, HiveInside reports % too —
+        # 0% while USB-powered). Appended last in the SELECT.
+        "ble_1_battery_percent":        r[131],
+        "ble_1_rssi_dbm":               r[132],
+        "ble_2_battery_percent":        r[133],
+        "ble_2_rssi_dbm":               r[134],
     }
 
 
