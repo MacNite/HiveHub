@@ -20,7 +20,7 @@
     hivescale:  { label: "HiveScale — beehivemonitoring.com (GATT)",         cat: "scale",      proto: "gatt",   supported: true, bhgatt: true,
                   svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
     beecounter: { label: "BeeCounter — beehivemonitoring.com (GATT)",        cat: "beecounter", proto: "gatt",   supported: false },
-    ruvitag:    { label: "RuuviTag 4-in-1 (BLE beacon)",                     cat: "inhive",     proto: "beacon", supported: false }
+    ruvitag:    { label: "RuuviTag 4-in-1 (BLE beacon)",                     cat: "inhive",     proto: "beacon", supported: true  }
   };
   var TYPE_ORDER = ["holyiot", "hiveinside", "hiveheart", "hivescale", "beecounter", "ruvitag"];
   var CAT_LABEL = { inhive: "In-hive", scale: "Scale", beecounter: "Bee counter" };

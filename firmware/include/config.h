@@ -126,6 +126,20 @@
 #endif
 
 // ==============================
+// RUUVITAG IN-HIVE BLE SENSOR (optional, shares the same bridge)
+// ==============================
+// The RuuviTag (Ruuvi Innovations) is a four-in-one BLE beacon — temperature,
+// humidity, pressure and 3-axis acceleration — auto-detected on the SAME passive
+// scan bridge as the HolyIot 25015. It is told apart by its registered Ruuvi
+// company id (0x0499) and decoded by firmware/include/ruuvi_decode.h (Data
+// Format 5 / RAWv2, with legacy Format 3 support). Its readings fold into the
+// existing ble_{slot}_* and accel_{slot}_* fields, so no extra enable flag or
+// server column is required. Override only if Ruuvi ever changes the id.
+#ifndef RUUVI_COMPANY_ID
+#define RUUVI_COMPANY_ID 0x0499
+#endif
+
+// ==============================
 // HIVEINSIDE ESP32-C6 IN-HIVE BLE SENSOR (optional, shares the same bridge)
 // ==============================
 // The HiveInside ESP32-C6 prototype advertises through the SAME passive scan

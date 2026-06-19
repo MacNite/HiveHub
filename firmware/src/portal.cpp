@@ -274,7 +274,7 @@ void handleBleScan() {
           "@media(prefers-color-scheme:dark){:root{--bg:#161618;--card:#1f1f23;--fg:#ececf1;--muted:#9aa0aa;--border:#33343a;--link:#f5b54a}code{background:#2a2a30}}"
           "</style>";
   html += "</head><body><div class='wrap'><h1>Nearby BLE devices</h1>";
-  html += "<p>All nearby BLE devices are listed. HolyIot 25015 beacons and HiveInside sensors show their type in the last column. GATT sensors (HiveHeart, wireless HiveScale) also appear — copy their MAC and paste it into the GATT pairing fields on the <a href='/'>setup page</a>.</p>";
+  html += "<p>All nearby BLE devices are listed. HolyIot 25015, RuuviTag and HiveInside sensors show their type in the last column. GATT sensors (HiveHeart, wireless HiveScale) also appear — copy their MAC and paste it into the GATT pairing fields on the <a href='/'>setup page</a>.</p>";
 
   if (found.empty()) {
     html += "<p>No BLE devices were seen during the scan. Make sure the sensor is powered and in range, then <a href='/ble/scan'>scan again</a>.</p>";
@@ -344,9 +344,9 @@ void handleSetupRoot() {
   html += "</fieldset>";
 
 #if ENABLE_BLE_SCAN
-  html += "<fieldset><legend>In-hive BLE sensors (HolyIot 25015 / HiveInside)</legend>";
+  html += "<fieldset><legend>In-hive BLE sensors (HolyIot 25015 / HiveInside / RuuviTag)</legend>";
   html += "<p>Pair up to two sensors. Slot 1 maps to hive 1, slot 2 to hive 2. ";
-  html += "The HolyIot 25015 beacon is supported and auto-detected. ";
+  html += "The HolyIot 25015 and RuuviTag beacons are supported and auto-detected. ";
   html += "When a paired sensor reports temperature, vibration or sound, the matching wired sensor for that hive is disabled automatically to avoid duplicate readings. ";
   html += "Enter each sensor's MAC address, or <a href='/ble/scan'>scan for nearby sensors</a> and copy a MAC below.</p>";
   html += "<label>Sensor 1 MAC (hive 1)</label><input name='ble_mac0' placeholder='AA:BB:CC:DD:EE:FF' value='" + htmlEscape(bleSensorMac0) + "'>";
