@@ -35,6 +35,37 @@ void onNotify(NimBLERemoteCharacteristic* /*chr*/, uint8_t* data, size_t len, bo
   portEXIT_CRITICAL(&g_captureMux);
 }
 
+// Cleanly close and free a GATT client.
+//
+// NimBLEDevice::deleteClient() only frees a client *synchronously* once it is
+// disconnected; called on a still-connected client it merely flags
+// deleteOnDisconnect and leaves the client in NimBLE's internal list. That
+// leftover link is then terminated by runCycle()'s NimBLEDevice::deinit() — but
+// by then the host stack is already disabled, so ble_gap_terminate() returns
+// BLE_HS_EDISABLED and the library logs "ble_gap_terminate failed: rc=30".
+//
+// So rather than a fixed delay and hope, we drive the teardown to completion:
+// ask the link to terminate (idempotent — the library tolerates ENOTCONN /
+// EALREADY if the peer already dropped it) and then wait for the NimBLE host
+// task to process the disconnect event (which clears the connection handle, so
+// isConnected() flips false) before deleting. The client object stays alive
+// while we poll because we have not set deleteOnDisconnect ourselves.
+void closeClient(NimBLEClient* client) {
+  if (!client) return;
+  if (client->isConnected()) client->disconnect();
+
+  uint32_t deadline = millis() + BEEHIVE_GATT_DISCONNECT_TIMEOUT_MS;
+  while (client->isConnected() && (int32_t)(deadline - millis()) > 0) delay(20);
+
+  if (client->isConnected()) {
+    // Peer is holding the link open past our budget. Free it anyway — NimBLE
+    // finishes the teardown on the eventual disconnect event. Logged, not
+    // hidden, so a genuinely stuck peer is still visible in the serial log.
+    Serial.println("[BHGATT] link still up after disconnect timeout; freeing client");
+  }
+  NimBLEDevice::deleteClient(client);
+}
+
 // Connect to `mac`, subscribe to the configured notify characteristic, and wait
 // up to BEEHIVE_GATT_NOTIFY_TIMEOUT_S for one notification. On success copies the
 // raw payload into `outBuf`/`outLen` and returns the connection RSSI via `rssi`.
@@ -103,13 +134,11 @@ bool readNotification(const String& mac, uint8_t* outBuf, size_t cap, size_t& ou
     }
   }
 
-  // These sensors push one notification then drop the link themselves.
-  // A short yield lets the NimBLE host task process the peer's disconnect
-  // event so isConnected() reflects the true state before we call terminate
-  // (avoids a TOCTOU race that logs a spurious "ble_gap_terminate rc=30").
-  delay(100);
-  if (client->isConnected()) client->disconnect();
-  NimBLEDevice::deleteClient(client);
+  // These sensors push one notification then drop the link themselves. Close
+  // the link deterministically and wait for it to actually go down before
+  // freeing the client, so nothing is left for runCycle()'s deinit() to trip
+  // over (see closeClient() for why that produced "ble_gap_terminate rc=30").
+  closeClient(client);
   return ok;
 }
 
