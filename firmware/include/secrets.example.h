@@ -123,6 +123,11 @@
 // common generic default; override once the real id is known from a capture.
 #define HOLYIOT_COMPANY_ID       0xFFFF
 
+// RuuviTag four-in-one beacons (temp/humidity/pressure/accel) ride the SAME scan
+// bridge and are auto-detected by Ruuvi's registered company id below — no extra
+// enable flag. Pair a RuuviTag exactly like a HolyIot: paste its MAC into a slot.
+#define RUUVI_COMPANY_ID         0x0499
+
 // ==============================
 // WIRELESS SENSOR CATALOG (optional)
 // ==============================
@@ -132,10 +137,10 @@
 // (ENABLE_BLE_SCAN); the scale and bee-counter macros are placeholders that
 // capture the intended layout for a future firmware build.
 //
-// Supported in-hive types: HolyIot 25015 (beacon), HiveInside ESP32-C6 (beacon
-// or GATT), HiveHeart (GATT, beehivemonitoring.com). Placeholders awaiting
-// firmware support: RuuviTag 4-in-1 (beacon), wireless HiveScale (GATT) and
-// wireless BeeCounter (GATT).
+// Supported in-hive types: HolyIot 25015 (beacon), RuuviTag 4-in-1 (beacon),
+// HiveInside ESP32-C6 (beacon or GATT), HiveHeart (GATT, beehivemonitoring.com).
+// Placeholders awaiting firmware support: wireless HiveScale (GATT) and wireless
+// BeeCounter (GATT).
 //
 // Each in-hive slot (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) records the chosen
 // sensor type, its transport and, for GATT devices, the service / characteristic

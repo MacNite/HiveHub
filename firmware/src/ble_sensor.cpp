@@ -6,6 +6,8 @@
 #include <NimBLEDevice.h>
 #include <math.h>
 
+#include "ruuvi_decode.h"
+
 namespace blesensor {
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -187,10 +189,32 @@ static Parsed parseHiveInside(const uint8_t* d, size_t len) {
   return out;
 }
 
+// RuuviTag: one manufacturer-data frame carries temp/humidity/pressure + raw
+// axes + battery (no on-board FFT). Decoding lives in the dependency-free
+// ruuvi_decode.h so it can be host-unit-tested; here we just map it onto Parsed.
+static Parsed parseRuuvi(const uint8_t* d, size_t len) {
+  Parsed out;
+  ruuvi::Reading r;
+  if (!ruuvi::decode(d, len, r)) return out;
+
+  out.type         = SensorType::Ruuvi;
+  out.temp_c       = r.temp_c;
+  out.humidity_pct = r.humidity_pct;
+  out.pressure_hpa = r.pressure_hpa;
+  out.ax           = r.accel_x_mg;
+  out.ay           = r.accel_y_mg;
+  out.az           = r.accel_z_mg;
+  out.battery_pct  = ruuvi::batteryPercent(r.battery_mv);
+  out.ok = true;
+  return out;
+}
+
 // Dispatcher: try each known in-hive sensor format. Foreign beacons (no company
 // match) return ok=false and are ignored.
 static Parsed parsePayload(const uint8_t* d, size_t len) {
   Parsed p = parseHolyIot(d, len);
+  if (p.ok) return p;
+  p = parseRuuvi(d, len);
   if (p.ok) return p;
   return parseHiveInside(d, len);
 }
@@ -317,13 +341,16 @@ class ScanCallbacks : public NimBLEScanCallbacks {
         a.mic_stress_dbfs = p.mic_stress_dbfs;
         a.mic_high_dbfs   = p.mic_high_dbfs;
       } else {
-        // HolyIot: each slot carries a different sensor subset — merge, don't
-        // overwrite. Battery lives in service data (UUID 0x180A), last byte.
+        // HolyIot / RuuviTag: a beacon frame carries a subset of sensor fields —
+        // merge, don't overwrite. HolyIot reports battery in service data (UUID
+        // 0x180A, last byte); RuuviTag embeds it in the manufacturer payload, so
+        // parsePayload already set p.battery_pct for that case.
         if (dev->haveServiceData()) {
           auto sd = dev->getServiceData();
           if (sd.size() == 9)
             a.battery_pct = (uint8_t)sd[8];
         }
+        if (p.battery_pct >= 0)     a.battery_pct  = p.battery_pct;
         if (!isnan(p.temp_c))       a.temp_c       = p.temp_c;
         if (!isnan(p.humidity_pct)) a.humidity_pct = p.humidity_pct;
         if (!isnan(p.pressure_hpa)) a.pressure_hpa = p.pressure_hpa;
@@ -480,6 +507,7 @@ const char* sensorTypeName(SensorType t) {
   switch (t) {
     case SensorType::HolyIot:    return "HolyIot 25015";
     case SensorType::HiveInside: return "HiveInside C6";
+    case SensorType::Ruuvi:      return "RuuviTag";
     default:                     return "";
   }
 }

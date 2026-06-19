@@ -390,6 +390,7 @@ The current PCB is an early revision and should be prototyped before field deplo
 - [docs/ap-mode-sd-download.md](docs/ap-mode-sd-download.md) — AP/setup mode, button handling, and SD-card download.
 - [docs/insights.md](docs/insights.md) — rule-based colony insights and detector catalogue.
 - [docs/holyiot-ble-sensor.md](docs/holyiot-ble-sensor.md) — optional HolyIot 25015 in-hive BLE sensor (temp/humidity/pressure/acceleration) and pairing.
+- [docs/ruuvitag-ble-sensor.md](docs/ruuvitag-ble-sensor.md) — optional RuuviTag in-hive BLE sensor (temp/humidity/pressure/acceleration) on the same scan bridge.
 - [docs/api.md](docs/api.md) — complete API reference.
 - [docs/test-commands.md](docs/test-commands.md) — curl commands for testing the backend.
 - [docs/docker-install.md](docs/docker-install.md) — generic Docker setup.

@@ -40,6 +40,7 @@ enum class SensorType : uint8_t {
   None       = 0,
   HolyIot    = 1,   // HolyIot 25015 beacon: temp/humidity/pressure/raw accel
   HiveInside = 2,   // HiveInside ESP32-C6: + vibration & acoustic FFT bands
+  Ruuvi      = 3,   // RuuviTag beacon: temp/humidity/pressure/raw accel
 };
 
 const char* sensorTypeName(SensorType t);
