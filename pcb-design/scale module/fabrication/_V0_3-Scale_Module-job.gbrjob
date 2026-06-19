@@ -5,12 +5,12 @@
       "Application": "Pcbnew",
       "Version": "10.0.3-10.0.3~ubuntu24.04.1"
     },
-    "CreationDate": "2026-06-02T07:27:00+02:00"
+    "CreationDate": "2026-06-19T10:22:31+02:00"
   },
   "GeneralSpecs": {
     "ProjectId": {
-      "Name": "_V0_2-Scale_Module",
-      "GUID": "5f56305f-322d-4536-9361-6c655f4d6f64",
+      "Name": "_V0_3-Scale_Module",
+      "GUID": "5f56305f-332d-4536-9361-6c655f4d6f64",
       "Revision": "rev?"
     },
     "Size": {
@@ -34,47 +34,47 @@
   ],
   "FilesAttributes": [
     {
-      "Path": "_V0_2-Scale_Module-F_Cu.gbr",
+      "Path": "_V0_3-Scale_Module-F_Cu.gbr",
       "FileFunction": "Copper,L1,Top",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "_V0_2-Scale_Module-B_Cu.gbr",
+      "Path": "_V0_3-Scale_Module-B_Cu.gbr",
       "FileFunction": "Copper,L2,Bot",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "_V0_2-Scale_Module-F_Paste.gbr",
+      "Path": "_V0_3-Scale_Module-F_Paste.gbr",
       "FileFunction": "SolderPaste,Top",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "_V0_2-Scale_Module-B_Paste.gbr",
+      "Path": "_V0_3-Scale_Module-B_Paste.gbr",
       "FileFunction": "SolderPaste,Bot",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "_V0_2-Scale_Module-F_Silkscreen.gbr",
+      "Path": "_V0_3-Scale_Module-F_Silkscreen.gbr",
       "FileFunction": "Legend,Top",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "_V0_2-Scale_Module-B_Silkscreen.gbr",
+      "Path": "_V0_3-Scale_Module-B_Silkscreen.gbr",
       "FileFunction": "Legend,Bot",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "_V0_2-Scale_Module-F_Mask.gbr",
+      "Path": "_V0_3-Scale_Module-F_Mask.gbr",
       "FileFunction": "SolderMask,Top",
       "FilePolarity": "Negative"
     },
     {
-      "Path": "_V0_2-Scale_Module-B_Mask.gbr",
+      "Path": "_V0_3-Scale_Module-B_Mask.gbr",
       "FileFunction": "SolderMask,Bot",
       "FilePolarity": "Negative"
     },
     {
-      "Path": "_V0_2-Scale_Module-Edge_Cuts.gbr",
+      "Path": "_V0_3-Scale_Module-Edge_Cuts.gbr",
       "FileFunction": "Profile",
       "FilePolarity": "Positive"
     }

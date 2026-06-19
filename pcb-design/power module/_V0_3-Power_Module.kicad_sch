@@ -850,6 +850,16 @@
 		)
 		(uuid "41e30f00-39ed-40da-8a30-8f35d2ebe303")
 	)
+	(label "BATpos"
+		(at 82.55 97.79 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "4a00b015-ed1f-44a1-ac50-e1009269f880")
+	)
 	(label "3.3V"
 		(at 198.12 60.96 0)
 		(effects
@@ -999,6 +1009,16 @@
 			(justify right bottom)
 		)
 		(uuid "e24a6265-9ee5-445c-bb58-d2a7126c657c")
+	)
+	(label "BATneg"
+		(at 82.55 95.25 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "e97f6986-b3fb-43b1-9a6f-1fabdc2f8b13")
 	)
 	(label "SDA"
 		(at 68.58 54.61 0)
@@ -1405,6 +1425,88 @@
 			(project "_V0_3-Power_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J16")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector_Generic:Conn_01x02")
+		(at 77.47 97.79 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "5125046b-30a6-456e-85be-eeb9a7d33e44")
+		(property "Reference" "Bat_Connector"
+			(at 74.93 93.726 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "Battery"
+			(at 76.2001 100.33 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "TerminalBlock:TerminalBlock_Xinya_XY308-2.54-2P_1x02_P2.54mm_Horizontal"
+			(at 77.47 97.79 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 77.47 97.79 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)"
+			(at 77.47 97.79 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "cb36f051-9c2b-4f5b-be26-f37524b32104")
+		)
+		(pin "2"
+			(uuid "87eac0e2-594e-48f3-8785-79e807dd0329")
+		)
+		(instances
+			(project "_V0_3-Power_Module"
+				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
+					(reference "Bat_Connector")
 					(unit 1)
 				)
 			)
