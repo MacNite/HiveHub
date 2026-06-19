@@ -169,8 +169,20 @@ String createMeasurementJson() {
 #endif
   if (!(ds18Skip1 && ds18Skip2)) {
     ds18b20.requestTemperatures();
-    if (!ds18Skip1) hiveTemp1 = ds18b20.getTempCByIndex(0);
-    if (!ds18Skip2) hiveTemp2 = ds18b20.getTempCByIndex(1);
+    // A DS18B20 that is enabled in config but not physically wired reports the
+    // library's disconnect sentinel (DEVICE_DISCONNECTED_C = -127 C), not a
+    // read error. Leaving that value in hiveTemp{1,2} would (a) defeat the
+    // isnan() BLE/HiveHeart fallback below and (b) upload nonsense temperatures.
+    // Map the sentinel (and the other sub-range error codes) back to NAN so the
+    // slot is treated as "no wired reading".
+    if (!ds18Skip1) {
+      float t = ds18b20.getTempCByIndex(0);
+      hiveTemp1 = (t <= DEVICE_DISCONNECTED_C) ? NAN : t;
+    }
+    if (!ds18Skip2) {
+      float t = ds18b20.getTempCByIndex(1);
+      hiveTemp2 = (t <= DEVICE_DISCONNECTED_C) ? NAN : t;
+    }
   }
 #endif
   float ambientTemp = NAN;
