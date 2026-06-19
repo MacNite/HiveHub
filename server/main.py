@@ -355,6 +355,9 @@ class MeasurementIn(BaseModel):
     ble_1_accel_z_mg:       Optional[float] = None
     ble_1_battery_percent:  Optional[int]   = None
     ble_1_rssi_dbm:         Optional[int]   = None
+    # HiveInside C6 reports its running firmware version over GATT ("fw"); kept
+    # in raw_json (declared so extra="ignore" does not drop it).
+    ble_1_firmware_version: Optional[str]   = None
 
     ble_2_humidity_percent: Optional[float] = None
     ble_2_pressure_hpa:     Optional[float] = None
@@ -363,6 +366,7 @@ class MeasurementIn(BaseModel):
     ble_2_accel_z_mg:       Optional[float] = None
     ble_2_battery_percent:  Optional[int]   = None
     ble_2_rssi_dbm:         Optional[int]   = None
+    ble_2_firmware_version: Optional[str]   = None
 
     # ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) ───────────
     # HiveHeart is an in-hive sensor read over GATT: its temperature/humidity feed
@@ -1538,6 +1542,8 @@ def import_measurements(
 #                              132  ble_1_rssi_dbm
 #                              133  ble_2_battery_percent
 #                              134  ble_2_rssi_dbm
+#                              135  ble_1_firmware_version
+#                              136  ble_2_firmware_version
 # ---------------------------------------------------------------------------
 
 MEASUREMENT_SELECT_COLUMNS = """
@@ -1662,7 +1668,9 @@ MEASUREMENT_SELECT_COLUMNS = """
     NULLIF(raw_json->>'ble_1_battery_percent', '')::integer AS ble_1_battery_percent,
     NULLIF(raw_json->>'ble_1_rssi_dbm',        '')::integer AS ble_1_rssi_dbm,
     NULLIF(raw_json->>'ble_2_battery_percent', '')::integer AS ble_2_battery_percent,
-    NULLIF(raw_json->>'ble_2_rssi_dbm',        '')::integer AS ble_2_rssi_dbm
+    NULLIF(raw_json->>'ble_2_rssi_dbm',        '')::integer AS ble_2_rssi_dbm,
+    raw_json->>'ble_1_firmware_version' AS ble_1_firmware_version,
+    raw_json->>'ble_2_firmware_version' AS ble_2_firmware_version
 """
 
 
@@ -1825,6 +1833,8 @@ def measurement_row_to_dict(r):
         "ble_1_rssi_dbm":               r[132],
         "ble_2_battery_percent":        r[133],
         "ble_2_rssi_dbm":               r[134],
+        "ble_1_firmware_version":       r[135],
+        "ble_2_firmware_version":       r[136],
     }
 
 

@@ -412,6 +412,7 @@ static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
           out.humidity_pct = doc["humidity_percent"]  | NAN;
           int bpct         = doc["battery_percent"]   | -1;
           out.battery_pct  = bpct;
+          out.fw_version   = (const char*)(doc["fw"] | "");
 
           if (doc["accel_ok"] | false) {
             out.accel_rms_mg          = doc["accel_rms_mg"]           | NAN;
@@ -625,6 +626,10 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
   if (!isnan(snap.accel_z_mg))   doc[bp + "accel_z_mg"]       = snap.accel_z_mg;
   if (snap.battery_pct >= 0)     doc[bp + "battery_percent"]  = snap.battery_pct;
   doc[bp + "rssi_dbm"] = snap.rssi_dbm;
+  // HiveInside reports its running firmware version over GATT ("fw"); surface it
+  // as ble_{slot}_firmware_version so the backend and HivePal can display it
+  // next to the HiveScale node's own firmware. HolyIot/Ruuvi leave this empty.
+  if (snap.fw_version.length()) doc[bp + "firmware_version"] = snap.fw_version;
 
   // ── reused accel_{slot}_* fields (per-cycle AC magnitude + FFT bands) ───────
   if (snap.sample_count > 0) {
