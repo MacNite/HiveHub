@@ -1874,9 +1874,65 @@ def attach_temperature_compensation(measurements: list[dict]) -> list[dict]:
     return measurements
 
 
+def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
+    """Backfill NULL per-interval bee-counter counts from the lifetime totals.
+
+    The wireless/BLE (HiveTraffic) bee-counter path is *totals-only*: the device
+    reports the monotonic lifetime ``total_in``/``total_out`` but no per-poll
+    ``interval_in``/``interval_out`` — it performs no I2C ``CMD_LATCH`` handshake,
+    so those interval columns are stored NULL (see
+    2026-easy-bee-counter/docs/ble-mode.md and bee_counter_client's totals_only
+    path). Display clients (HivePal) chart the interval fields directly, so a
+    BLE-sourced counter would otherwise read as zero traffic for every row.
+
+    Here we derive each missing interval as ``total_now - total_prev`` between
+    consecutive readings of the same channel — the same differencing the insight
+    engine already does in insights._extract_counter_series, applied to the read
+    APIs so the chart panel matches the insight card. Rules:
+
+    * Only NULL intervals are filled; the wired I2C path, which already reports a
+      device interval, is left untouched.
+    * Rows where the channel was unreachable (``bee_counter_{ch}_ok`` falsy) are
+      skipped and never advance the baseline, so a dead counter can't inject a
+      bogus delta.
+    * A counter reboot or uint32 wrap (``total_now < total_prev``) is attributed
+      as ``total_now`` so the restart from zero is not seen as a huge negative.
+
+    The dicts are mutated in place; the caller's ordering is preserved (we sort a
+    shallow copy by ``measured_at`` only to compute the deltas).
+    """
+    ordered = sorted(
+        (m for m in measurements if m.get("measured_at") is not None),
+        key=lambda m: m["measured_at"],
+    )
+    for ch in (1, 2):
+        ok_key = f"bee_counter_{ch}_ok"
+        for direction in ("in", "out"):
+            interval_key = f"bee_counter_{ch}_interval_{direction}"
+            total_key = f"bee_counter_{ch}_total_{direction}"
+            prev_total = None
+            for m in ordered:
+                if not m.get(ok_key):
+                    continue
+                cur_total = m.get(total_key)
+                if m.get(interval_key) is None and cur_total is not None:
+                    if prev_total is None:
+                        pass  # no baseline yet — can't attribute the first reading
+                    elif cur_total >= prev_total:
+                        m[interval_key] = cur_total - prev_total
+                    else:
+                        m[interval_key] = cur_total  # reboot / wrap
+                if cur_total is not None:
+                    prev_total = cur_total
+    return measurements
+
+
 def serialize_measurements(rows) -> list[dict]:
     """Map raw DB rows to API dicts and attach temperature compensation."""
-    return attach_temperature_compensation([measurement_row_to_dict(r) for r in rows])
+    measurements = attach_temperature_compensation(
+        [measurement_row_to_dict(r) for r in rows]
+    )
+    return difference_bee_counter_intervals(measurements)
 
 
 def measurements_for_insights(rows) -> list[dict]:

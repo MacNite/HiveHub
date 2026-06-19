@@ -46,11 +46,22 @@ HiveScale reads it, fills a totals-only `beecnt::Snapshot`, and disconnects. No
 ## Intervals are differenced server-side
 
 The wire format carries only the **monotonic lifetime totals**. The backend
-derives each interval as `total_now − total_prev` between consecutive readings
-(`server/insights.py::_extract_counter_series`), so a missed connection loses
-nothing and a counter reboot (totals going backwards, corroborated by a
-`uptime_s` drop) is handled cleanly. See
-`2026-easy-bee-counter/docs/ble-mode.md` for the device side and the rationale.
+derives each interval as `total_now − total_prev` between consecutive readings,
+so a missed connection loses nothing and a counter reboot (totals going
+backwards) is handled cleanly. See `2026-easy-bee-counter/docs/ble-mode.md` for
+the device side and the rationale.
+
+This differencing happens in two places, with identical semantics:
+
+* The insight engine (`server/insights.py::_extract_counter_series`), which
+  feeds the swarm/foraging detectors and the insight cards.
+* The measurement read APIs (`server/main.py::difference_bee_counter_intervals`,
+  applied by `serialize_measurements`), which backfill the `NULL`
+  `interval_in`/`interval_out` columns from the totals before returning rows.
+  Without this, display clients that chart the interval fields directly (HivePal's
+  bee-counter panel) would read every BLE row as zero traffic. Only `NULL`
+  intervals are filled, so the wired I2C path — which reports a real device
+  interval — is left untouched.
 
 Because the BLE path reports no per-interval or per-gate detail, those columns
 arrive `NULL` for HiveTraffic readings; the derived interval is authoritative.
