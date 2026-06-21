@@ -366,8 +366,12 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 
 #if HIVEINSIDE_USE_GATT
 // HiveInside GATT service / characteristic UUIDs — must match ble_link.cpp.
-static const char* HIVEINSIDE_GATT_SVC = "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01";
-static const char* HIVEINSIDE_GATT_CHR = "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01";
+static const char* HIVEINSIDE_GATT_SVC  = "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01";
+static const char* HIVEINSIDE_GATT_CHR  = "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01";
+static const char* HIVEINSIDE_GATT_SYNC = "8e8b0003-7a1c-4b9e-9a2f-1d6e0b9c1a01";
+// Forward-declare rather than pulling in all of globals.h (which drags in WiFi,
+// SD and every hardware driver header).
+extern unsigned long sendIntervalMs;
 
 // Connect to a HiveInside GATT server, read the JSON measurement characteristic,
 // and populate `out`. Returns true on success. Must be called while the NimBLE
@@ -436,6 +440,28 @@ static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
                         (int)out.mic_present, rssi);
           ok = true;
         }
+      }
+    }
+    // Write wake-sync hint: how many seconds HiveInside should sleep before the
+    // next connection. Subtracting HIVEINSIDE_SYNC_LEAD_S gives HiveInside time
+    // to wake and be connectable before HiveScale's scan arrives; RC-oscillator
+    // drift (±5–10%) is then absorbed by HiveInside's SYNC_LISTEN_MS window.
+    // Non-fatal if the characteristic is absent (HiveInside firmware too old).
+    NimBLERemoteCharacteristic* chrSync = svc->getCharacteristic(HIVEINSIDE_GATT_SYNC);
+    if (chrSync && chrSync->canWrite()) {
+      static const uint32_t HIVEINSIDE_SYNC_LEAD_S = 30;
+      uint32_t sec = (uint32_t)(sendIntervalMs / 1000UL);
+      if (sec > HIVEINSIDE_SYNC_LEAD_S) sec -= HIVEINSIDE_SYNC_LEAD_S;
+      uint8_t buf[4] = {
+        (uint8_t)(sec         & 0xFF),
+        (uint8_t)((sec >>  8) & 0xFF),
+        (uint8_t)((sec >> 16) & 0xFF),
+        (uint8_t)((sec >> 24) & 0xFF),
+      };
+      if (chrSync->writeValue(buf, sizeof(buf), /*response=*/true)) {
+        Serial.printf("[BLE] GATT: wake-sync written: sleep %us\n", (unsigned)sec);
+      } else {
+        Serial.println("[BLE] GATT: wake-sync write failed (non-fatal)");
       }
     }
   }
