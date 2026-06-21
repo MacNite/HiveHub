@@ -8,6 +8,10 @@
 
 #include "ruuvi_decode.h"
 
+// Declared at global scope so the blesensor namespace sees ::sendIntervalMs,
+// not blesensor::sendIntervalMs.  Defined in globals.cpp.
+extern unsigned long sendIntervalMs;
+
 namespace blesensor {
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -369,9 +373,6 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 static const char* HIVEINSIDE_GATT_SVC  = "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01";
 static const char* HIVEINSIDE_GATT_CHR  = "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01";
 static const char* HIVEINSIDE_GATT_SYNC = "8e8b0003-7a1c-4b9e-9a2f-1d6e0b9c1a01";
-// Forward-declare rather than pulling in all of globals.h (which drags in WiFi,
-// SD and every hardware driver header).
-extern unsigned long sendIntervalMs;
 
 // Connect to a HiveInside GATT server, read the JSON measurement characteristic,
 // and populate `out`. Returns true on success. Must be called while the NimBLE
