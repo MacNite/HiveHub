@@ -697,7 +697,10 @@ NimBLERemoteCharacteristic* s_otaCtrl   = nullptr;
 NimBLERemoteCharacteristic* s_otaData   = nullptr;
 NimBLERemoteCharacteristic* s_otaStatus = nullptr;
 size_t                      s_otaChunk  = 20;   // negotiated DATA payload size
+String                      s_otaLastError;     // reason for the last OTA failure
 }  // namespace
+
+const String& otaLastError() { return s_otaLastError; }
 
 void otaCleanup() {
   if (s_otaClient) {
@@ -710,9 +713,11 @@ void otaCleanup() {
 }
 
 bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
+  s_otaLastError = "";
   String m = normalizeMac(mac);
   if (m.length() == 0 || totalLen == 0) {
     Serial.println("[HI-OTA] bad arguments");
+    s_otaLastError = "bad OTA arguments (mac/size)";
     return false;
   }
 
@@ -734,6 +739,7 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
   if (g_slot[0].found_by_mac) { found = true; addrType = g_slot[0].ble_addr_type; }
   if (!found) {
     Serial.printf("[HI-OTA] device %s not found in scan\n", m.c_str());
+    s_otaLastError = "HiveInside not found in scan (asleep or out of range?)";
     NimBLEDevice::deinit(true);
     return false;
   }
@@ -744,6 +750,7 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
   Serial.printf("[HI-OTA] connecting to %s ...\n", addr.toString().c_str());
   if (!s_otaClient->connect(addr)) {
     Serial.println("[HI-OTA] connect failed");
+    s_otaLastError = "BLE connect to HiveInside failed";
     otaCleanup();
     return false;
   }
@@ -755,6 +762,7 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
   if (!svc || !s_otaCtrl || !s_otaData) {
     Serial.println("[HI-OTA] OTA service/characteristics not found "
                    "(HiveInside firmware too old for BLE OTA?)");
+    s_otaLastError = "OTA characteristics not found (HiveInside firmware too old?)";
     otaCleanup();
     return false;
   }
@@ -773,6 +781,7 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
   beg[7] = (crc32 >> 16) & 0xFF;   beg[8] = (crc32 >> 24) & 0xFF;
   if (!s_otaCtrl->writeValue(beg, sizeof(beg), /*response=*/true)) {
     Serial.println("[HI-OTA] BEGIN write failed");
+    s_otaLastError = "OTA BEGIN write failed";
     otaCleanup();
     return false;
   }
@@ -790,6 +799,7 @@ bool otaWrite(const uint8_t* data, size_t len) {
     if (n > s_otaChunk) n = s_otaChunk;
     if (!s_otaData->writeValue(data + sent, n, /*response=*/true)) {
       Serial.printf("[HI-OTA] DATA write failed after %u bytes\n", (unsigned)sent);
+      s_otaLastError = "OTA DATA write failed (BLE link lost?)";
       return false;
     }
     sent += n;
@@ -804,6 +814,7 @@ bool otaFinish() {
   uint8_t op = HI_OTA_OP_END;
   if (!s_otaCtrl->writeValue(&op, 1, /*response=*/true)) {
     Serial.println("[HI-OTA] END write failed");
+    s_otaLastError = "OTA END write failed";
     return false;
   }
   if (!s_otaStatus || !s_otaStatus->canRead()) {
@@ -821,6 +832,8 @@ bool otaFinish() {
       }
       if (state >= 0x10) {
         Serial.printf("[HI-OTA] device reported error state=0x%02X err=0x%02X\n", state, err);
+        s_otaLastError = String("HiveInside rejected image (state=0x") + String(state, HEX) +
+                         " err=0x" + String(err, HEX) + ", CRC/size mismatch?)";
         return false;
       }
     }
@@ -828,11 +841,13 @@ bool otaFinish() {
       // Link dropped before we read DONE; treat as inconclusive failure so the
       // caller reports it and the backend can re-queue.
       Serial.println("[HI-OTA] link dropped before DONE confirmation");
+      s_otaLastError = "BLE link dropped before DONE confirmation";
       return false;
     }
     delay(200);
   }
   Serial.println("[HI-OTA] timed out waiting for DONE");
+  s_otaLastError = "timed out waiting for HiveInside DONE";
   return false;
 }
 

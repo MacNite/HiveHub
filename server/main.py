@@ -946,7 +946,7 @@ def init_db():
 
                 CREATE TABLE IF NOT EXISTS firmware_releases (
                     id BIGSERIAL PRIMARY KEY,
-                    version TEXT NOT NULL UNIQUE,
+                    version TEXT NOT NULL,
                     filename TEXT NOT NULL,
                     active BOOLEAN NOT NULL DEFAULT true,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -956,6 +956,19 @@ def init_db():
                     ADD COLUMN IF NOT EXISTS target TEXT NOT NULL DEFAULT 'hivescale';
                 ALTER TABLE firmware_releases
                     ADD COLUMN IF NOT EXISTS crc32 BIGINT;
+
+                -- A release is identified by (target, version), NOT by version
+                -- alone. The original schema declared version globally UNIQUE,
+                -- which meant uploading e.g. a HiveInside 0.3.0 release would
+                -- overwrite an existing HiveScale 0.3.0 row (clobbering its
+                -- target/filename/crc32). Drop that legacy constraint and add a
+                -- composite unique index so each device family keeps its own
+                -- release per version. The upsert below relies on this index for
+                -- its ON CONFLICT (target, version) inference.
+                ALTER TABLE firmware_releases
+                    DROP CONSTRAINT IF EXISTS firmware_releases_version_key;
+                CREATE UNIQUE INDEX IF NOT EXISTS firmware_releases_target_version_key
+                    ON firmware_releases (target, version);
 
                 CREATE TABLE IF NOT EXISTS device_commands (
                     id BIGSERIAL PRIMARY KEY,
@@ -2146,17 +2159,21 @@ def crc32_of_file(path: Path) -> int:
 
 def upsert_firmware_release(version: str, filename: str, active: bool,
                             target: str, crc: int) -> None:
-    """Insert or update a firmware_releases row keyed on the unique version."""
+    """Insert or update a firmware_releases row keyed on (target, version).
+
+    Releases are unique per (target, version), so re-uploading the same version
+    for the same target replaces it, while the same version number can coexist
+    across different targets (hivescale / beecounter / hiveinside).
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO firmware_releases (version, filename, active, target, crc32)
                 VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (version) DO UPDATE SET
+                ON CONFLICT (target, version) DO UPDATE SET
                     filename = EXCLUDED.filename,
                     active   = EXCLUDED.active,
-                    target   = EXCLUDED.target,
                     crc32    = EXCLUDED.crc32;
                 """,
                 (version, filename, active, target, crc),
@@ -2207,62 +2224,56 @@ def queue_command(device_id: str, payload: DeviceCommandIn):
     return {"status": result["status"], "id": result["id"]}
 
 
-@app.post("/api/v1/devices/{device_id}/commands/update-beecounter",
-          dependencies=[Depends(require_api_key)])
-def queue_beecounter_update(device_id: str, slot: int = Query(1)):
-    """Queue a command telling the HiveScale to relay the active BeeCounter
-    firmware to the BeeCounter at the given slot (1 -> 0x30, 2 -> 0x31) over
-    I2C. The image URL and its CRC-32 are looked up server-side and embedded in
-    the command payload so the HiveScale can verify the download before relay."""
+def queue_relay_firmware_update(device_id: str, target: str,
+                                command_type: str, slot: int) -> dict:
+    """Queue a command telling the HiveScale to relay the active firmware for
+    ``target`` to the sub-device in the given slot.
+
+    The image URL and its CRC-32 are looked up server-side (the latest active
+    release for the target) and embedded in the command payload so the HiveScale
+    can verify the download before relaying it. The CRC-32 is checked end-to-end
+    on the receiving device before it swaps slots, so a corrupted relay never
+    bricks it. Shared by the device-authenticated and HivePal-authenticated
+    command endpoints.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT version, filename, crc32 FROM firmware_releases
-                WHERE active = true AND target = 'beecounter'
+                WHERE active = true AND target = %s
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1;
                 """,
+                (target,),
             )
             r = cur.fetchone()
     if not r:
-        raise HTTPException(status_code=404, detail="No active beecounter firmware release")
+        raise HTTPException(status_code=404, detail=f"No active {target} firmware release")
     version, filename, crc32 = r
     url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
     return create_command(device_id, DeviceCommandIn(
-        command_type="update_beecounter",
+        command_type=command_type,
         payload={"slot": slot, "url": url, "version": version, "crc32": int(crc32 or 0)},
     ))
+
+
+@app.post("/api/v1/devices/{device_id}/commands/update-beecounter",
+          dependencies=[Depends(require_api_key)])
+def queue_beecounter_update(device_id: str, slot: int = Query(1)):
+    """Queue a relay of the active BeeCounter firmware to the BeeCounter at the
+    given slot (1 -> 0x30, 2 -> 0x31) over I2C."""
+    return queue_relay_firmware_update(device_id, "beecounter", "update_beecounter", slot)
 
 
 @app.post("/api/v1/devices/{device_id}/commands/update-hiveinside",
           dependencies=[Depends(require_api_key)])
 def queue_hiveinside_update(device_id: str, slot: int = Query(1)):
-    """Queue a command telling the HiveScale to relay the active HiveInside
-    firmware to the HiveInside sensor paired in the given slot (1 -> bleSensorMac0,
-    2 -> bleSensorMac1) over BLE GATT. The HiveScale resolves the BLE MAC locally,
-    so only slot + image URL + CRC-32 are sent. The CRC-32 is verified end-to-end
-    on the HiveInside device before it swaps its OTA slot, so a corrupted relay
-    never bricks the sensor."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT version, filename, crc32 FROM firmware_releases
-                WHERE active = true AND target = 'hiveinside'
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1;
-                """,
-            )
-            r = cur.fetchone()
-    if not r:
-        raise HTTPException(status_code=404, detail="No active hiveinside firmware release")
-    version, filename, crc32 = r
-    url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
-    return create_command(device_id, DeviceCommandIn(
-        command_type="update_hiveinside",
-        payload={"slot": slot, "url": url, "version": version, "crc32": int(crc32 or 0)},
-    ))
+    """Queue a relay of the active HiveInside firmware to the HiveInside sensor
+    paired in the given slot (1 -> bleSensorMac0, 2 -> bleSensorMac1) over BLE
+    GATT. The HiveScale resolves the BLE MAC locally, so only slot + image URL +
+    CRC-32 are sent."""
+    return queue_relay_firmware_update(device_id, "hiveinside", "update_hiveinside", slot)
 
 
 @app.get("/api/v1/devices/{device_id}/commands/next", dependencies=[Depends(require_device_key)])
@@ -2838,6 +2849,61 @@ def stop_calibration_mode_from_app(device_id: str, user_id: str = Depends(requir
         "id": result["id"],
         "command_type": "stop_calibration_mode",
         "payload": {},
+    }
+
+
+@app.post(
+    "/api/v1/app/devices/{device_id}/commands/update-hiveinside",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def queue_hiveinside_update_from_app(
+    device_id: str,
+    slot: int = Query(1),
+    user_id: str = Depends(require_user_id),
+):
+    """App-facing trigger for a HiveInside OTA relay.
+
+    Uploading a HiveInside binary (POST .../firmware) only *registers* the
+    release; it does not start the relay. HivePal calls this endpoint to actually
+    queue the ``update_hiveinside`` command for the HiveScale to pick up. The
+    caller must be owner or admin on the device.
+    """
+    if slot not in (1, 2):
+        raise HTTPException(status_code=400, detail="slot must be 1 or 2")
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    result = queue_relay_firmware_update(
+        device_id, "hiveinside", "update_hiveinside", slot
+    )
+    return {
+        "status": result["status"],
+        "id": result["id"],
+        "command_type": "update_hiveinside",
+        "payload": {"slot": slot},
+    }
+
+
+@app.post(
+    "/api/v1/app/devices/{device_id}/commands/update-beecounter",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def queue_beecounter_update_from_app(
+    device_id: str,
+    slot: int = Query(1),
+    user_id: str = Depends(require_user_id),
+):
+    """App-facing trigger for a BeeCounter OTA relay (see the HiveInside endpoint
+    above; same upload-then-queue split). The caller must be owner or admin."""
+    if slot not in (1, 2):
+        raise HTTPException(status_code=400, detail="slot must be 1 or 2")
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    result = queue_relay_firmware_update(
+        device_id, "beecounter", "update_beecounter", slot
+    )
+    return {
+        "status": result["status"],
+        "id": result["id"],
+        "command_type": "update_beecounter",
+        "payload": {"slot": slot},
     }
 
 

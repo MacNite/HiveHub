@@ -139,6 +139,11 @@ void otaAbort();
 // Disconnect and tear the BLE stack down. Always call this to end a session,
 // success or failure.
 void otaCleanup();
+// Human-readable reason for the most recent OTA failure (e.g. "device not found
+// in scan", "connect failed", "device reported error"). Set by otaBegin /
+// otaWrite / otaFinish and cleared at the start of each otaBegin so the relay
+// caller can surface a specific cause instead of a bare boolean.
+const String& otaLastError();
 #endif
 
 }  // namespace blesensor
