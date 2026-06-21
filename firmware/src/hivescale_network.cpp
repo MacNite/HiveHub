@@ -512,8 +512,11 @@ bool updateBeeCounter(uint8_t address, const String& firmwareUrl, uint32_t expec
 // end-to-end CRC-32 (passed in BEGIN) before swapping its OTA slot, so a
 // corrupted relay can never brick the sensor — it just aborts and keeps running
 // the old image.
-bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t expectedCrc32) {
-  if (!connectWifi()) return false;
+bool updateHiveInside(const String& mac, const String& firmwareUrl,
+                      uint32_t expectedCrc32, String* outMsg) {
+  auto setMsg = [&](const String& m) { if (outMsg) *outMsg = m; };
+
+  if (!connectWifi()) { setMsg("WiFi connect failed"); return false; }
 
   String url = absoluteUrl(firmwareUrl);
   Serial.print("[HI-OTA] Downloading HiveInside firmware: ");
@@ -525,6 +528,7 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t exp
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   if (!http.begin(client, url)) {
     Serial.println("[HI-OTA] http.begin failed");
+    setMsg("firmware download init failed");
     return false;
   }
 
@@ -532,6 +536,7 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t exp
   if (code != HTTP_CODE_OK) {
     Serial.printf("[HI-OTA] Download failed. HTTP %d\n", code);
     http.end();
+    setMsg(String("firmware download failed (HTTP ") + code + ")");
     return false;
   }
 
@@ -539,6 +544,7 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t exp
   if (contentLength <= 0 || contentLength > 4 * 1024 * 1024) {
     Serial.printf("[HI-OTA] Invalid content length %d\n", contentLength);
     http.end();
+    setMsg(String("invalid firmware content length ") + contentLength);
     return false;
   }
 
@@ -547,6 +553,8 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t exp
   if (!blesensor::otaBegin(mac, (uint32_t)contentLength, expectedCrc32)) {
     Serial.println("[HI-OTA] otaBegin failed");
     http.end();
+    setMsg(blesensor::otaLastError().length() ? blesensor::otaLastError()
+                                              : String("BLE OTA begin failed"));
     return false;
   }
 
@@ -559,6 +567,7 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t exp
   int read = 0;
   unsigned long lastData = millis();
   bool relayOk = true;
+  bool stalled = false;
   while (read < contentLength && (http.connected() || stream->available())) {
     size_t avail = stream->available();
     if (avail) {
@@ -578,6 +587,7 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t exp
     } else if (millis() - lastData > 15000) {
       Serial.println("[HI-OTA] download stalled");
       relayOk = false;
+      stalled = true;
       break;
     } else {
       delay(1);
@@ -588,12 +598,24 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl, uint32_t exp
   bool ok = false;
   if (relayOk && read == contentLength) {
     ok = blesensor::otaFinish();
+    if (!ok) {
+      setMsg(blesensor::otaLastError().length() ? blesensor::otaLastError()
+                                                : String("OTA finalize/verify failed"));
+    }
   } else {
     Serial.printf("[HI-OTA] incomplete relay %d/%d — aborting\n", read, contentLength);
     blesensor::otaAbort();
+    if (stalled) {
+      setMsg(String("firmware download stalled at ") + read + "/" + contentLength + " bytes");
+    } else {
+      setMsg(blesensor::otaLastError().length()
+                 ? blesensor::otaLastError()
+                 : String("incomplete relay ") + read + "/" + contentLength + " bytes");
+    }
   }
   blesensor::otaCleanup();
 
+  if (ok) setMsg("HiveInside OTA completed");
   Serial.printf("[HI-OTA] result: %s\n", ok ? "OK" : "FAIL");
   return ok;
 }
@@ -687,11 +709,13 @@ void checkCommands() {
     if (fwUrl.length() == 0) {
       postCommandResult(commandId, false, "update_beecounter missing url");
     } else {
-      postCommandResult(commandId, true, "BeeCounter OTA started");
+      // Report the FINAL result, not "started": the relay runs synchronously and
+      // we only know success/failure once updateBeeCounter returns. Reporting
+      // "started" eagerly made a failed relay look successful in the backend/UI.
       bool ok = updateBeeCounter(addr, fwUrl, crc);
       Serial.printf("[BEE-OTA] update result: %s\n", ok ? "OK" : "FAIL");
-      // Optionally report a second, final result here via a follow-up endpoint
-      // if you want the backend to record success/failure after the fact.
+      postCommandResult(commandId, ok,
+                        ok ? "BeeCounter OTA completed" : "BeeCounter OTA failed");
     }
   }
 #if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
@@ -708,9 +732,18 @@ void checkCommands() {
     } else if (mac.length() == 0) {
       postCommandResult(commandId, false, String("No HiveInside paired in slot ") + slot);
     } else {
-      postCommandResult(commandId, true, "HiveInside OTA started");
-      bool ok = updateHiveInside(mac, fwUrl, crc);
-      Serial.printf("[HI-OTA] update result: %s\n", ok ? "OK" : "FAIL");
+      // Report the FINAL result with a specific cause, not "started": the relay
+      // runs synchronously (it can take minutes for a >1 MB image) and we only
+      // know the real outcome once updateHiveInside returns. Reporting "started"
+      // eagerly was the main reason a failed OTA still looked successful.
+      String resultMsg;
+      bool ok = updateHiveInside(mac, fwUrl, crc, &resultMsg);
+      Serial.printf("[HI-OTA] update result: %s (%s)\n",
+                    ok ? "OK" : "FAIL", resultMsg.c_str());
+      postCommandResult(commandId, ok,
+                        resultMsg.length() ? resultMsg
+                                           : (ok ? "HiveInside OTA completed"
+                                                 : "HiveInside OTA failed"));
     }
   }
 #endif

@@ -420,6 +420,18 @@ def queue_beecounter_update(device_id: str, slot: int = Query(1)):
     return {"id": cmd["id"], "status": cmd["status"]}
 
 
+@app.post("/api/v1/devices/{device_id}/commands/update-hiveinside", dependencies=[Depends(require_api_key)])
+def queue_hiveinside_update(device_id: str, slot: int = Query(1)):
+    releases = [r for r in STORE["firmware_releases"] if r["active"] and r["target"] == "hiveinside"]
+    if not releases:
+        raise HTTPException(status_code=404, detail="No active hiveinside firmware release")
+    r = releases[-1]
+    cmd = _create_command(device_id, "update_hiveinside",
+                          {"slot": slot, "url": f"/firmware/{r['filename']}",
+                           "version": r["version"], "crc32": int(r["crc32"] or 0)})
+    return {"id": cmd["id"], "status": cmd["status"]}
+
+
 @app.get("/api/v1/devices/{device_id}/commands/next", dependencies=[Depends(require_api_key)])
 def next_command(device_id: str):
     for cmd in STORE["commands"]:
@@ -652,6 +664,36 @@ def stop_calibration_mode_from_app(device_id: str, user_id: str = Depends(requir
     require_device_role(user_id, device_id, ["owner", "admin"])
     cmd = _create_command(device_id, "stop_calibration_mode", {})
     return {"status": cmd["status"], "id": cmd["id"], "command_type": "stop_calibration_mode", "payload": {}}
+
+
+def _queue_relay_update_from_app(device_id: str, target: str, command_type: str, slot: int):
+    if slot not in (1, 2):
+        raise HTTPException(status_code=400, detail="slot must be 1 or 2")
+    releases = [r for r in STORE["firmware_releases"] if r["active"] and r["target"] == target]
+    if not releases:
+        raise HTTPException(status_code=404, detail=f"No active {target} firmware release")
+    r = releases[-1]
+    cmd = _create_command(device_id, command_type,
+                          {"slot": slot, "url": f"/firmware/{r['filename']}",
+                           "version": r["version"], "crc32": int(r["crc32"] or 0)})
+    return {"status": cmd["status"], "id": cmd["id"], "command_type": command_type,
+            "payload": {"slot": slot}}
+
+
+@app.post("/api/v1/app/devices/{device_id}/commands/update-hiveinside",
+          dependencies=[Depends(require_hivepal_service_key)])
+def queue_hiveinside_update_from_app(device_id: str, slot: int = Query(1),
+                                     user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    return _queue_relay_update_from_app(device_id, "hiveinside", "update_hiveinside", slot)
+
+
+@app.post("/api/v1/app/devices/{device_id}/commands/update-beecounter",
+          dependencies=[Depends(require_hivepal_service_key)])
+def queue_beecounter_update_from_app(device_id: str, slot: int = Query(1),
+                                     user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    return _queue_relay_update_from_app(device_id, "beecounter", "update_beecounter", slot)
 
 
 @app.get("/api/v1/app/devices/{device_id}/insights", dependencies=[Depends(require_hivepal_service_key)])

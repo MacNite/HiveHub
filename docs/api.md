@@ -45,8 +45,8 @@ There are two kinds of device key:
 - **Master/admin key** — the value of the server `API_KEY` environment
   variable. Used for server-to-server / tooling endpoints that no device
   calls: `GET /api/v1/measurements/latest`, `POST /api/v1/firmware/releases`,
-  `POST …/commands` (queueing), `…/commands/update-beecounter`, and
-  `GET /api/v1/time`.
+  `POST …/commands` (queueing), `…/commands/update-beecounter`,
+  `…/commands/update-hiveinside`, and `GET /api/v1/time`.
 
 > A device's per-device key no longer has to match the server `API_KEY`. To
 > rotate or re-register a device key, clear its stored hash with
@@ -413,6 +413,32 @@ Returns `404` if there is no active `beecounter` release. Response on success:
 { "id": 71, "status": "pending" }
 ```
 
+### `POST /api/v1/devices/{device_id}/commands/update-hiveinside`
+
+Queues an `update_hiveinside` command that tells the HiveScale to relay the active
+HiveInside firmware image to the HiveInside sensor paired in the given slot over
+BLE GATT. The image URL, version, and CRC-32 are looked up server-side and embedded
+in the command payload; the HiveScale resolves the BLE MAC locally.
+
+**Auth:** `X-API-Key` (master/admin key)
+
+| Query parameter | Default | Description |
+|---|---|---|
+| `slot` | `1` | HiveInside slot: `1` → `bleSensorMac0`, `2` → `bleSensorMac1` |
+
+Returns `404` if there is no active `hiveinside` release. Response on success:
+
+```json
+{ "id": 72, "status": "pending" }
+```
+
+> The HiveScale reports the command result **after** the relay finishes, so the
+> command transitions `pending` → `claimed` → `done`/`failed` reflecting the real
+> outcome. A failed relay records a specific cause in the command result message
+> (e.g. `HiveInside not found in scan (asleep or out of range?)`,
+> `firmware download failed (HTTP 404)`, `HiveInside rejected image (… CRC/size
+> mismatch?)`). The HiveInside must be awake/advertising during the locate scan.
+
 ---
 
 ## Remote commands
@@ -442,6 +468,7 @@ Commands are queued server-side and claimed by the device on a later cycle.
 | `reset_wifi` | `{}` | Clear saved Wi-Fi credentials and reboot |
 | `check_ota` / `ota_update` | `{}` | Trigger immediate OTA check/update |
 | `update_beecounter` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a BeeCounter over I2C (normally queued via the `update-beecounter` helper above) |
+| `update_hiveinside` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a HiveInside sensor over BLE GATT (normally queued via the `update-hiveinside` helper above) |
 | `start_provisioning` | `{}` | Start provisioning AP |
 
 Response:
@@ -685,7 +712,7 @@ writes it into `FIRMWARE_DIR`, computes its CRC-32, and upserts the release.
 |---|---:|---|
 | `file` | Yes | The firmware binary |
 | `version` | Yes | Release version string |
-| `target` | No | `hivescale` (default) or `beecounter` |
+| `target` | No | `hivescale` (default), `beecounter`, or `hiveinside` |
 | `active` | No | Whether the release is active (default `true`) |
 
 ```json
@@ -698,6 +725,41 @@ writes it into `FIRMWARE_DIR`, computes its CRC-32, and upserts the release.
   "size_bytes": 1048576,
   "crc32": 2882343476
 }
+```
+
+> **Uploading only registers the release; it does not start a relay.** For a
+> `hiveinside` (or `beecounter`) target, queue the OTA with the trigger endpoint
+> below after the upload. Releases are unique per `(target, version)`, so the same
+> version number can coexist across `hivescale`/`beecounter`/`hiveinside`.
+
+### `POST /api/v1/app/devices/{device_id}/commands/update-hiveinside`
+
+Queues an `update_hiveinside` command so the HiveScale relays the active HiveInside
+release to the paired sensor over BLE. This is the app-facing counterpart of the
+device-key `…/commands/update-hiveinside` helper; it authenticates with the HivePal
+service key + user JWT and requires `owner` or `admin` on the device.
+
+| Query parameter | Default | Description |
+|---|---|---|
+| `slot` | `1` | HiveInside slot (`1` or `2`) |
+
+Returns `404` if there is no active `hiveinside` release. Response on success:
+
+```json
+{ "status": "pending", "id": 72, "command_type": "update_hiveinside", "payload": { "slot": 1 } }
+```
+
+### `POST /api/v1/app/devices/{device_id}/commands/update-beecounter`
+
+App-facing trigger for a BeeCounter OTA relay (same upload-then-queue split as
+HiveInside). Requires `owner` or `admin`.
+
+| Query parameter | Default | Description |
+|---|---|---|
+| `slot` | `1` | BeeCounter slot (`1` or `2`) |
+
+```json
+{ "status": "pending", "id": 73, "command_type": "update_beecounter", "payload": { "slot": 1 } }
 ```
 
 ### `GET /api/v1/app/devices/{device_id}/insights`
