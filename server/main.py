@@ -916,6 +916,12 @@ def init_db():
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now();
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_firmware_version TEXT;
+                -- Accept-to-apply OTA gate: the ESP32 self-update only proceeds
+                -- once the device owner approves a specific version for THIS device
+                -- in HivePal. check_firmware returns update=true only when
+                -- approved_firmware_version equals the latest available version, so
+                -- a fielded device never auto-flashes an unapproved build.
+                ALTER TABLE devices ADD COLUMN IF NOT EXISTS approved_firmware_version TEXT;
 
                 CREATE INDEX IF NOT EXISTS idx_measurements_device_time
                     ON measurements (device_id, measured_at DESC);
@@ -956,19 +962,28 @@ def init_db():
                     ADD COLUMN IF NOT EXISTS target TEXT NOT NULL DEFAULT 'hivescale';
                 ALTER TABLE firmware_releases
                     ADD COLUMN IF NOT EXISTS crc32 BIGINT;
+                -- Owner scoping: a release uploaded from HivePal is private to the
+                -- uploading device's owner (owner_user_id = that HivePal user id).
+                -- A NULL owner_user_id is a global / "official" release (e.g. pushed
+                -- via the master-key POST /api/v1/firmware/releases) that any device
+                -- may fall back to. See latest_release_for_owner / check_firmware.
+                ALTER TABLE firmware_releases
+                    ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
 
-                -- A release is identified by (target, version), NOT by version
-                -- alone. The original schema declared version globally UNIQUE,
-                -- which meant uploading e.g. a HiveInside 0.3.0 release would
-                -- overwrite an existing HiveScale 0.3.0 row (clobbering its
-                -- target/filename/crc32). Drop that legacy constraint and add a
-                -- composite unique index so each device family keeps its own
-                -- release per version. The upsert below relies on this index for
-                -- its ON CONFLICT (target, version) inference.
+                -- A release is identified by (owner_user_id, target, version): each
+                -- owner keeps their own release per (target, version), and the same
+                -- version can also exist as a global release (owner_user_id NULL).
+                -- NULLs are distinct in a plain unique index, so we key on
+                -- COALESCE(owner_user_id, '') to collapse global rows to one per
+                -- (target, version). The upsert relies on this index for its
+                -- ON CONFLICT (COALESCE(owner_user_id, ''), target, version) inference.
+                -- Drop the legacy globally-unique version constraint and the older
+                -- (target, version) index it was replaced by.
                 ALTER TABLE firmware_releases
                     DROP CONSTRAINT IF EXISTS firmware_releases_version_key;
-                CREATE UNIQUE INDEX IF NOT EXISTS firmware_releases_target_version_key
-                    ON firmware_releases (target, version);
+                DROP INDEX IF EXISTS firmware_releases_target_version_key;
+                CREATE UNIQUE INDEX IF NOT EXISTS firmware_releases_owner_target_version_key
+                    ON firmware_releases (COALESCE(owner_user_id, ''), target, version);
 
                 CREATE TABLE IF NOT EXISTS device_commands (
                     id BIGSERIAL PRIMARY KEY,
@@ -2099,38 +2114,105 @@ def update_device_config(device_id: str, patch: DeviceConfigUpdate):
     return get_device_config(device_id)
 
 
-@app.get("/api/v1/devices/{device_id}/firmware", dependencies=[Depends(require_device_key)])
-def check_firmware(device_id: str, version: str = Query("0.0.0"),
-                   target: str = Query("hivescale")):
-    ensure_device_config(device_id)
+def get_device_owner_id(device_id: str) -> Optional[str]:
+    """Return the HivePal user id of the device's owner, or None if unclaimed.
+
+    A device has at most one ``owner`` membership (set at claim time); admins and
+    viewers are added later via sharing. Owner-scoped firmware is keyed on this id.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT version, filename FROM firmware_releases
-                WHERE active = true AND target = %s
-                ORDER BY created_at DESC, id DESC
+                SELECT user_id FROM device_members
+                WHERE device_id = %s AND role = 'owner'
+                ORDER BY created_at
                 LIMIT 1;
                 """,
-                (target,),
+                (device_id,),
             )
             r = cur.fetchone()
+    return r[0] if r else None
+
+
+def latest_release_for_owner(target: str, owner_user_id: Optional[str]):
+    """Most recent active release for a target, owner-first with global fallback.
+
+    Returns the owner's own release when one exists, otherwise the newest global
+    (owner_user_id IS NULL) "official" release. ``ORDER BY (owner_user_id IS NULL)``
+    sorts owner-specific rows (false) ahead of global rows (true). Returns a
+    (version, filename, crc32, owner_user_id) tuple, or None when nothing matches.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT version, filename, crc32, owner_user_id
+                FROM firmware_releases
+                WHERE active = true AND target = %s
+                  AND (owner_user_id = %s OR owner_user_id IS NULL)
+                ORDER BY (owner_user_id IS NULL), created_at DESC, id DESC
+                LIMIT 1;
+                """,
+                (target, owner_user_id),
+            )
+            return cur.fetchone()
+
+
+def get_approved_firmware_version(device_id: str) -> Optional[str]:
+    """Return the firmware version the owner has approved for this device, if any."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT approved_firmware_version FROM devices WHERE device_id = %s;",
+                (device_id,),
+            )
+            r = cur.fetchone()
+    return r[0] if r and r[0] else None
+
+
+def set_approved_firmware_version(device_id: str, version: str) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE devices SET approved_firmware_version = %s WHERE device_id = %s;",
+                (version, device_id),
+            )
+            conn.commit()
+
+
+@app.get("/api/v1/devices/{device_id}/firmware", dependencies=[Depends(require_device_key)])
+def check_firmware(device_id: str, version: str = Query("0.0.0"),
+                   target: str = Query("hivescale")):
+    ensure_device_config(device_id)
+    owner_id = get_device_owner_id(device_id)
+    r = latest_release_for_owner(target, owner_id)
     # NOTE: the "update" and "update_available" keys carry the same value. The
     # ESP32 firmware reads doc["update"] while older clients/docs use
     # "update_available"; we emit both so a field-name mismatch can never
     # silently disable OTA again. Keep both keys if you change this.
+    no_update = {"update": False, "update_available": False}
     if not r:
-        return {"update": False, "update_available": False}
-    latest_version, filename = r
-    if parse_version(latest_version) > parse_version(version):
-        url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
-        return {
-            "update": True,
-            "update_available": True,
-            "version": latest_version,
-            "url": url,
-        }
-    return {"update": False, "update_available": False}
+        return no_update
+    latest_version, filename = r[0], r[1]
+    if parse_version(latest_version) <= parse_version(version):
+        return no_update
+    # Accept-to-apply gate for the ESP32 self-update: a newer hivescale build is
+    # only served once the owner has approved THIS exact version for THIS device
+    # in HivePal (POST /api/v1/app/devices/{id}/firmware/approve). Without an
+    # approval the device keeps polling but never flashes, so publishing firmware
+    # no longer auto-updates every scale. Sub-device images (beecounter /
+    # hiveinside) are relayed explicitly via commands, not here, so they are
+    # unaffected by this gate.
+    if target == "hivescale" and get_approved_firmware_version(device_id) != latest_version:
+        return no_update
+    url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
+    return {
+        "update": True,
+        "update_available": True,
+        "version": latest_version,
+        "url": url,
+    }
 
 
 # Allowed firmware targets, shared by the JSON registration endpoint and the
@@ -2158,25 +2240,28 @@ def crc32_of_file(path: Path) -> int:
 
 
 def upsert_firmware_release(version: str, filename: str, active: bool,
-                            target: str, crc: int) -> None:
-    """Insert or update a firmware_releases row keyed on (target, version).
+                            target: str, crc: int,
+                            owner_user_id: Optional[str] = None) -> None:
+    """Insert or update a firmware_releases row keyed on (owner_user_id, target, version).
 
-    Releases are unique per (target, version), so re-uploading the same version
-    for the same target replaces it, while the same version number can coexist
-    across different targets (hivescale / beecounter / hiveinside).
+    Releases are unique per (owner_user_id, target, version), so re-uploading the
+    same version for the same owner+target replaces it, while the same version
+    number can coexist across different targets (hivescale / beecounter /
+    hiveinside) and across owners. ``owner_user_id=None`` registers a global /
+    "official" release that any device may fall back to.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO firmware_releases (version, filename, active, target, crc32)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (target, version) DO UPDATE SET
+                INSERT INTO firmware_releases (version, filename, active, target, crc32, owner_user_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (COALESCE(owner_user_id, ''), target, version) DO UPDATE SET
                     filename = EXCLUDED.filename,
                     active   = EXCLUDED.active,
                     crc32    = EXCLUDED.crc32;
                 """,
-                (version, filename, active, target, crc),
+                (version, filename, active, target, crc, owner_user_id),
             )
             conn.commit()
 
@@ -2235,22 +2320,16 @@ def queue_relay_firmware_update(device_id: str, target: str,
     on the receiving device before it swaps slots, so a corrupted relay never
     bricks it. Shared by the device-authenticated and HivePal-authenticated
     command endpoints.
+
+    The release is resolved owner-first (the relaying HiveScale's owner), falling
+    back to a global release, so a sub-device only ever receives an image its
+    owner published or an official build.
     """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT version, filename, crc32 FROM firmware_releases
-                WHERE active = true AND target = %s
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1;
-                """,
-                (target,),
-            )
-            r = cur.fetchone()
+    owner_id = get_device_owner_id(device_id)
+    r = latest_release_for_owner(target, owner_id)
     if not r:
         raise HTTPException(status_code=404, detail=f"No active {target} firmware release")
-    version, filename, crc32 = r
+    version, filename, crc32 = r[0], r[1], r[2]
     url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
     return create_command(device_id, DeviceCommandIn(
         command_type=command_type,
@@ -2719,11 +2798,16 @@ async def upload_firmware_from_app(
     firmware_releases row.
 
     Authorization is per-device: the caller must be owner or admin on the given
-    device. The device_id scopes who may publish firmware; the resulting release
-    is global (any device of the matching target can pick it up via the normal
-    firmware-check endpoint), which mirrors how releases already work.
+    device. The release is scoped to that device's OWNER (owner_user_id), so it is
+    only offered to scales owned by the same user — not the whole fleet. Pushing a
+    global / official build is still possible via the master-key
+    POST /api/v1/firmware/releases (which leaves owner_user_id NULL).
     """
     require_device_role(user_id, device_id, ["owner", "admin"])
+    # Scope the release to the device's owner so only that owner's scales can pick
+    # it up. Fall back to the uploader (an admin acting on an owner-less device)
+    # so a release always has an owner and never silently becomes global.
+    owner_user_id = get_device_owner_id(device_id) or user_id
 
     normalized_version = version.strip()
     if not normalized_version:
@@ -2794,7 +2878,8 @@ async def upload_firmware_from_app(
         raise HTTPException(status_code=400, detail="Uploaded firmware file is empty")
 
     crc = crc32_of_file(dest)
-    upsert_firmware_release(normalized_version, filename, active, target, crc)
+    upsert_firmware_release(normalized_version, filename, active, target, crc,
+                            owner_user_id=owner_user_id)
 
     return {
         "status": "ok",
@@ -2804,6 +2889,89 @@ async def upload_firmware_from_app(
         "active": active,
         "size_bytes": bytes_written,
         "crc32": crc,
+    }
+
+
+@app.get(
+    "/api/v1/app/devices/{device_id}/firmware/status",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def firmware_status_from_app(device_id: str, user_id: str = Depends(require_user_id)):
+    """Report the device's firmware-update status for the HivePal setup panel.
+
+    HivePal renders an "update available — apply" notice from this.
+    ``current_version`` is the version the device last reported; ``latest_version``
+    is the newest active release resolved owner-first (the owner's own build, else
+    a global/official one). ``update_available`` means latest > current;
+    ``pending_approval`` means an update is available but the owner has not approved
+    it yet, so the device will NOT auto-flash until they do via the approve
+    endpoint below. Any role may read.
+    """
+    require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT last_firmware_version FROM devices WHERE device_id = %s;",
+                (device_id,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    current_version = row[0]
+
+    owner_id = get_device_owner_id(device_id)
+    release = latest_release_for_owner("hivescale", owner_id)
+    latest_version = release[0] if release else None
+    latest_is_official = bool(release) and release[3] is None
+    approved_version = get_approved_firmware_version(device_id)
+
+    update_available = bool(
+        latest_version is not None
+        and current_version is not None
+        and parse_version(latest_version) > parse_version(current_version)
+    )
+    return {
+        "device_id": device_id,
+        "target": "hivescale",
+        "current_version": current_version,
+        "latest_version": latest_version,
+        "latest_is_official": latest_is_official,
+        "approved_version": approved_version,
+        "update_available": update_available,
+        "pending_approval": update_available and approved_version != latest_version,
+    }
+
+
+@app.post(
+    "/api/v1/app/devices/{device_id}/firmware/approve",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def approve_firmware_from_app(device_id: str, user_id: str = Depends(require_user_id)):
+    """Approve the latest available firmware so this device may apply it.
+
+    The accept-to-apply step: it records the approved version for this device (so
+    check_firmware starts returning update=true for it) and queues an
+    ``ota_update`` command to nudge the scale to update on its next check-in rather
+    than waiting for its scheduled OTA poll. Requires owner or admin.
+    """
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    owner_id = get_device_owner_id(device_id)
+    release = latest_release_for_owner("hivescale", owner_id)
+    if not release:
+        raise HTTPException(
+            status_code=404, detail="No firmware release available for this device"
+        )
+    latest_version = release[0]
+    set_approved_firmware_version(device_id, latest_version)
+    # Nudge the device to check now rather than waiting for its scheduled poll.
+    command = create_command(
+        device_id, DeviceCommandIn(command_type="ota_update", payload={})
+    )
+    return {
+        "status": "approved",
+        "device_id": device_id,
+        "version": latest_version,
+        "command_id": command["id"],
     }
 
 

@@ -92,9 +92,11 @@ def _startup() -> None:
         "last_firmware_version": hive_data.FIRMWARE_VERSION,
     }
     # A pre-registered "newer" release so the OTA check can demonstrate an update.
+    # owner_user_id None => a global / "official" release that any device may fall
+    # back to; it stays gated behind owner approval (accept-to-apply) per device.
     STORE["firmware_releases"].append(
         {"version": "0.6.3", "filename": "hivescale-0.6.3.bin", "active": True,
-         "target": "hivescale", "crc32": 305419896}
+         "target": "hivescale", "crc32": 305419896, "owner_user_id": None}
     )
 
     # A second device so the claim endpoint can be exercised. Like every demo
@@ -182,6 +184,30 @@ def require_device_role(user_id: str, device_id: str, allowed_roles: list[str]):
     # visible without wiring up HivePal user IDs or per-device roles. The real
     # HiveScale backend enforces owner/admin/viewer roles here.
     _ensure_app_device(device_id)
+
+
+def _device_owner_id(device_id: str) -> Optional[str]:
+    """Owner user id from the device's members, or None (treated as global)."""
+    for m in STORE["members"].get(device_id, []):
+        if m.get("role") == "owner":
+            return m.get("user_id")
+    return None
+
+
+def _latest_release_for_owner(target: str, owner_user_id: Optional[str]) -> Optional[dict]:
+    """Newest active release for a target, owner-first with global fallback.
+
+    Mirrors server/main.py: prefer the owner's own release, else the newest global
+    (owner_user_id None) "official" release. Newest is last in the append-only list.
+    """
+    owned = [r for r in STORE["firmware_releases"]
+             if r["active"] and r["target"] == target
+             and r.get("owner_user_id") == owner_user_id]
+    if owned:
+        return owned[-1]
+    glob = [r for r in STORE["firmware_releases"]
+            if r["active"] and r["target"] == target and r.get("owner_user_id") is None]
+    return glob[-1] if glob else None
 
 
 def _ensure_config(device_id: str) -> dict:
@@ -360,26 +386,32 @@ def update_device_config(device_id: str, patch: DeviceConfigUpdate):
 
 @app.get("/api/v1/devices/{device_id}/firmware", dependencies=[Depends(require_api_key)])
 def check_firmware(device_id: str, version: str = Query("0.0.0"), target: str = Query("hivescale")):
-    releases = [r for r in STORE["firmware_releases"] if r["active"] and r["target"] == target]
-    if not releases:
+    latest = _latest_release_for_owner(target, _device_owner_id(device_id))
+    if not latest:
         return {"update": False, "update_available": False}
-    latest = releases[-1]
 
     def _ver(v: str):
         return tuple(int("".join(c for c in p if c.isdigit()) or "0") for p in v.split("."))
 
-    if _ver(latest["version"]) > _ver(version):
-        return {"update": True, "update_available": True, "version": latest["version"],
-                "url": f"/firmware/{latest['filename']}"}
-    return {"update": False, "update_available": False}
+    if _ver(latest["version"]) <= _ver(version):
+        return {"update": False, "update_available": False}
+    # Accept-to-apply gate for the ESP32 self-update: serve only once the owner has
+    # approved this exact version for this device (mirrors server/main.py).
+    if target == "hivescale":
+        approved = STORE["devices"].get(device_id, {}).get("approved_firmware_version")
+        if approved != latest["version"]:
+            return {"update": False, "update_available": False}
+    return {"update": True, "update_available": True, "version": latest["version"],
+            "url": f"/firmware/{latest['filename']}"}
 
 
 @app.post("/api/v1/firmware/releases", dependencies=[Depends(require_api_key)])
 def create_firmware_release(payload: FirmwareReleaseIn):
     crc = 305419896
+    # Master-key registrations are global / official releases (owner_user_id None).
     STORE["firmware_releases"].append(
         {"version": payload.version, "filename": payload.filename, "active": payload.active,
-         "target": payload.target, "crc32": crc}
+         "target": payload.target, "crc32": crc, "owner_user_id": None}
     )
     return {"status": "ok", "version": payload.version, "target": payload.target, "crc32": crc}
 
@@ -410,10 +442,9 @@ def queue_command(device_id: str, payload: DeviceCommandIn):
 
 @app.post("/api/v1/devices/{device_id}/commands/update-beecounter", dependencies=[Depends(require_api_key)])
 def queue_beecounter_update(device_id: str, slot: int = Query(1)):
-    releases = [r for r in STORE["firmware_releases"] if r["active"] and r["target"] == "beecounter"]
-    if not releases:
+    r = _latest_release_for_owner("beecounter", _device_owner_id(device_id))
+    if not r:
         raise HTTPException(status_code=404, detail="No active beecounter firmware release")
-    r = releases[-1]
     cmd = _create_command(device_id, "update_beecounter",
                           {"slot": slot, "url": f"/firmware/{r['filename']}",
                            "version": r["version"], "crc32": int(r["crc32"] or 0)})
@@ -422,10 +453,9 @@ def queue_beecounter_update(device_id: str, slot: int = Query(1)):
 
 @app.post("/api/v1/devices/{device_id}/commands/update-hiveinside", dependencies=[Depends(require_api_key)])
 def queue_hiveinside_update(device_id: str, slot: int = Query(1)):
-    releases = [r for r in STORE["firmware_releases"] if r["active"] and r["target"] == "hiveinside"]
-    if not releases:
+    r = _latest_release_for_owner("hiveinside", _device_owner_id(device_id))
+    if not r:
         raise HTTPException(status_code=404, detail="No active hiveinside firmware release")
-    r = releases[-1]
     cmd = _create_command(device_id, "update_hiveinside",
                           {"slot": slot, "url": f"/firmware/{r['filename']}",
                            "version": r["version"], "crc32": int(r["crc32"] or 0)})
@@ -641,11 +671,55 @@ async def upload_firmware_from_app(
         raise HTTPException(status_code=400, detail="Uploaded firmware file is empty")
     filename = os.path.basename(file.filename or f"{target}-{version}.bin")
     crc = 305419896
+    # Scope the release to the device's owner (global fallback to the uploader).
+    owner_user_id = _device_owner_id(device_id) or user_id
     STORE["firmware_releases"].append(
-        {"version": version.strip(), "filename": filename, "active": active, "target": target, "crc32": crc}
+        {"version": version.strip(), "filename": filename, "active": active, "target": target,
+         "crc32": crc, "owner_user_id": owner_user_id}
     )
     return {"status": "ok", "version": version.strip(), "filename": filename, "target": target,
             "active": active, "size_bytes": size, "crc32": crc}
+
+
+@app.get("/api/v1/app/devices/{device_id}/firmware/status",
+         dependencies=[Depends(require_hivepal_service_key)])
+def firmware_status_from_app(device_id: str, user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
+    dev = STORE["devices"].get(device_id, {})
+    current_version = dev.get("last_firmware_version")
+    release = _latest_release_for_owner("hivescale", _device_owner_id(device_id))
+    latest_version = release["version"] if release else None
+    latest_is_official = bool(release) and release.get("owner_user_id") is None
+    approved_version = dev.get("approved_firmware_version")
+
+    def _ver(v: str):
+        return tuple(int("".join(c for c in p if c.isdigit()) or "0") for p in v.split("."))
+
+    update_available = bool(
+        latest_version is not None and current_version is not None
+        and _ver(latest_version) > _ver(current_version)
+    )
+    return {
+        "device_id": device_id, "target": "hivescale",
+        "current_version": current_version, "latest_version": latest_version,
+        "latest_is_official": latest_is_official, "approved_version": approved_version,
+        "update_available": update_available,
+        "pending_approval": update_available and approved_version != latest_version,
+    }
+
+
+@app.post("/api/v1/app/devices/{device_id}/firmware/approve",
+          dependencies=[Depends(require_hivepal_service_key)])
+def approve_firmware_from_app(device_id: str, user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    release = _latest_release_for_owner("hivescale", _device_owner_id(device_id))
+    if not release:
+        raise HTTPException(status_code=404, detail="No firmware release available for this device")
+    latest_version = release["version"]
+    STORE["devices"][device_id]["approved_firmware_version"] = latest_version
+    cmd = _create_command(device_id, "ota_update", {})
+    return {"status": "approved", "device_id": device_id, "version": latest_version,
+            "command_id": cmd["id"]}
 
 
 @app.post("/api/v1/app/devices/{device_id}/calibration/start", dependencies=[Depends(require_hivepal_service_key)])
@@ -669,10 +743,9 @@ def stop_calibration_mode_from_app(device_id: str, user_id: str = Depends(requir
 def _queue_relay_update_from_app(device_id: str, target: str, command_type: str, slot: int):
     if slot not in (1, 2):
         raise HTTPException(status_code=400, detail="slot must be 1 or 2")
-    releases = [r for r in STORE["firmware_releases"] if r["active"] and r["target"] == target]
-    if not releases:
+    r = _latest_release_for_owner(target, _device_owner_id(device_id))
+    if not r:
         raise HTTPException(status_code=404, detail=f"No active {target} firmware release")
-    r = releases[-1]
     cmd = _create_command(device_id, command_type,
                           {"slot": slot, "url": f"/firmware/{r['filename']}",
                            "version": r["version"], "crc32": int(r["crc32"] or 0)})
