@@ -343,6 +343,18 @@ Updates one or more config fields and increments `config_version`.
 
 Checks whether a newer active firmware release is available for the given target.
 
+The release is resolved **owner-first**: the backend looks up the device's owner
+and serves that owner's most recent active release, falling back to a global /
+"official" release (one with no owner) when the owner has none. A scale therefore
+only ever sees firmware its own owner uploaded, or an official build.
+
+For the `hivescale` self-update this endpoint is also **accept-to-apply**: it
+returns `update: true` only once the owner has approved that exact version for the
+device (`POST /api/v1/app/devices/{device_id}/firmware/approve`). Until then it
+reports no update, so publishing firmware never auto-flashes a whole fleet. The
+sub-device targets (`beecounter` / `hiveinside`) are relayed explicitly via
+commands and are not gated here.
+
 **Auth:** `X-API-Key` (per-device key)
 
 | Query parameter | Default | Description |
@@ -708,6 +720,11 @@ Requires `owner` or `admin`. Unlike `POST /api/v1/firmware/releases` (device key
 file must already be in `FIRMWARE_DIR`), this endpoint accepts the binary itself,
 writes it into `FIRMWARE_DIR`, computes its CRC-32, and upserts the release.
 
+The release is **scoped to the device's owner** (`owner_user_id`), so only scales
+owned by the same user are offered it — the upload no longer reaches the whole
+fleet. Pushing a global / official build is still done with the master-key
+`POST /api/v1/firmware/releases`, which leaves the release un-owned.
+
 | Form field | Required | Description |
 |---|---:|---|
 | `file` | Yes | The firmware binary |
@@ -727,10 +744,48 @@ writes it into `FIRMWARE_DIR`, computes its CRC-32, and upserts the release.
 }
 ```
 
-> **Uploading only registers the release; it does not start a relay.** For a
-> `hiveinside` (or `beecounter`) target, queue the OTA with the trigger endpoint
-> below after the upload. Releases are unique per `(target, version)`, so the same
-> version number can coexist across `hivescale`/`beecounter`/`hiveinside`.
+> **Uploading only registers the release; it does not start a relay or auto-flash.**
+> For a `hivescale` target the owner must still approve the update per device (see
+> `firmware/status` and `firmware/approve` below) before any scale installs it. For
+> a `hiveinside` (or `beecounter`) target, queue the OTA with the trigger endpoint
+> below after the upload. Releases are unique per `(owner, target, version)`, so the
+> same version number can coexist across owners and across
+> `hivescale`/`beecounter`/`hiveinside`.
+
+### `GET /api/v1/app/devices/{device_id}/firmware/status`
+
+Reports the device's firmware-update status for the HivePal setup panel. Any role
+may read. `current_version` is what the device last reported; `latest_version` is
+the newest active `hivescale` release resolved owner-first (the owner's own build,
+else a global/official one). `update_available` means `latest_version` is newer
+than `current_version`; `pending_approval` means an update is available but the
+owner has not approved it yet, so the device will **not** auto-flash until they do.
+
+```json
+{
+  "device_id": "hive_scale_dual_01",
+  "target": "hivescale",
+  "current_version": "0.9.2",
+  "latest_version": "0.9.3",
+  "latest_is_official": false,
+  "approved_version": null,
+  "update_available": true,
+  "pending_approval": true
+}
+```
+
+### `POST /api/v1/app/devices/{device_id}/firmware/approve`
+
+Approves the latest available `hivescale` firmware so this device may install it —
+the accept-to-apply step behind the HivePal panel's "Apply update" button. Records
+the approved version (so the device-facing firmware check starts returning
+`update: true` for this device) and queues an `ota_update` command to nudge the
+scale to update on its next check-in instead of waiting for its scheduled OTA poll.
+Requires `owner` or `admin`. Returns `404` if there is no release available.
+
+```json
+{ "status": "approved", "device_id": "hive_scale_dual_01", "version": "0.9.3", "command_id": 88 }
+```
 
 ### `POST /api/v1/app/devices/{device_id}/commands/update-hiveinside`
 
@@ -856,12 +911,12 @@ The backend auto-creates and updates the schema on startup.
 
 | Table | Description |
 |---|---|
-| `devices` | Device identity, claim status, per-device API key hash, display name, last seen, firmware version |
+| `devices` | Device identity, claim status, per-device API key hash, display name, last seen, firmware version, and the owner-approved firmware version (accept-to-apply gate) |
 | `device_members` | Users with `owner`, `admin`, or `viewer` role per device |
 | `device_channels` | Display names for scale channel 1 and 2 |
 | `device_configs` | Send interval, offsets, calibration factors, config version |
 | `measurements` | Measurement records, including power/acoustic/BeeCounter columns and `raw_json` |
-| `firmware_releases` | Firmware versions available for OTA, with `target` and `crc32` |
+| `firmware_releases` | Firmware versions available for OTA, with `target`, `crc32`, and `owner_user_id` (NULL = global/official; otherwise the owner the release is private to) |
 | `device_commands` | Pending, claimed, done, and failed commands |
 | `insight_alerts` | Persisted lifecycle of insight alerts (first/last seen, peak severity, resolution) powering the history endpoint |
 
