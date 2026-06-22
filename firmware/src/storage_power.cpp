@@ -6,7 +6,9 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <driver/gpio.h>
+#ifndef CONFIG_IDF_TARGET_ESP32C6
 #include <driver/rtc_io.h>
+#endif
 
 #if ENABLE_INMP441_MICS
 #include "mics.h"
@@ -17,8 +19,13 @@ String wakeReasonName(uint32_t wakeCauses) {
   // checked with BIT(enum_value) because the ESP_SLEEP_WAKEUP_* values are
   // sequential indices, not powers of two.
   if (wakeCauses & BIT(ESP_SLEEP_WAKEUP_TIMER))    return "timer";
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+  // ESP32-C6 has no RTC GPIO / EXT0 subsystem; button wake uses GPIO wakeup.
+  if (wakeCauses & BIT(ESP_SLEEP_WAKEUP_GPIO))     return "button/gpio";
+#else
   if (wakeCauses & BIT(ESP_SLEEP_WAKEUP_EXT0))     return "button/ext0";
   if (wakeCauses & BIT(ESP_SLEEP_WAKEUP_EXT1))     return "ext1";
+#endif
   if (wakeCauses & BIT(ESP_SLEEP_WAKEUP_TOUCHPAD)) return "touchpad";
   if (wakeCauses & BIT(ESP_SLEEP_WAKEUP_ULP))      return "ulp";
   return "power-on/reset";
@@ -30,8 +37,13 @@ void releaseSleepPinHolds() {
   gpio_hold_dis((gpio_num_t)HX2_SCK);
   gpio_hold_dis((gpio_num_t)SD_CS);
 
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+  // On C6 the button pull-up is held via gpio_hold_en(); release it normally.
+  gpio_hold_dis((gpio_num_t)SETUP_BUTTON_PIN);
+#else
   // EXT0 wake config turns the button into an RTC IO. Return it to normal GPIO.
   rtc_gpio_deinit((gpio_num_t)SETUP_BUTTON_PIN);
+#endif
 }
 
 uint32_t cyclesForInterval(unsigned long intervalMs) {
@@ -139,6 +151,14 @@ void prepareSdForSleep() {
 void configureButtonWake() {
   if (!WAKE_BUTTON_FROM_DEEP_SLEEP) return;
 
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+  // ESP32-C6 has no RTC GPIO subsystem. Any GPIO can wake from deep sleep via
+  // esp_deep_sleep_enable_gpio_wakeup(). gpio_hold_en() preserves the pull-up
+  // state across the sleep boundary (C6 does not power-cycle GPIOs in deep sleep).
+  gpio_pullup_en((gpio_num_t)SETUP_BUTTON_PIN);
+  gpio_hold_en((gpio_num_t)SETUP_BUTTON_PIN);
+  esp_deep_sleep_enable_gpio_wakeup(1ULL << SETUP_BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+#else
   // GPIO27 is an RTC-capable pin on ESP32. The RTC pull-up lets the existing
   // button-to-GND wiring wake the device without an external pull-up. For the
   // lowest possible sleep current, use an external pull-up and remove this.
@@ -147,6 +167,7 @@ void configureButtonWake() {
   rtc_gpio_pullup_en((gpio_num_t)SETUP_BUTTON_PIN);
   rtc_gpio_pulldown_dis((gpio_num_t)SETUP_BUTTON_PIN);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)SETUP_BUTTON_PIN, 0);
+#endif
 }
 
 void enterDeepSleep(unsigned long sleepMs) {
@@ -376,6 +397,21 @@ bool appendCacheLine(const String& line) {
   // contains the complete measurement history for manual recovery.
   cacheFileLooksSane();
   return appendLineToSdFile(CACHE_FILE, line, "CACHE");
+}
+
+void configureC6Antenna() {
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+  // Drive the RF switch on the XIAO ESP32-C6 PCB (GPIO3, internal trace):
+  //   LOW  → built-in ceramic patch antenna
+  //   HIGH → external u.FL antenna
+  // Controlled by XIAO_C6_USE_EXTERNAL_ANTENNA in secrets.h (default 0 = internal).
+  pinMode(XIAO_C6_ANTENNA_GPIO, OUTPUT);
+  digitalWrite(XIAO_C6_ANTENNA_GPIO, XIAO_C6_USE_EXTERNAL_ANTENNA ? HIGH : LOW);
+  Serial.printf("[ANT] XIAO C6: %s antenna (GPIO%d=%s)\n",
+      XIAO_C6_USE_EXTERNAL_ANTENNA ? "external" : "internal",
+      (int)XIAO_C6_ANTENNA_GPIO,
+      XIAO_C6_USE_EXTERNAL_ANTENNA ? "HIGH" : "LOW");
+#endif
 }
 
 String tarSafeName(String path) {

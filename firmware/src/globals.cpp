@@ -5,8 +5,10 @@ const char* const FIRMWARE_VERSION = "0.16.11";
 
 HX711 scale1;
 HX711 scale2;
+#if ENABLE_DS18B20_HIVE_TEMP
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature ds18b20(&oneWire);
+#endif
 Adafruit_SHT4x sht4;
 RTC_DS3231 rtc;
 Preferences prefs;

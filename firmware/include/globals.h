@@ -2,6 +2,10 @@
 // modules. Declarations only; definitions live in globals.cpp.
 #pragma once
 
+// config.h (and secrets.h it pulls in) must come first so that feature flags
+// like ENABLE_DS18B20_HIVE_TEMP are defined before the conditional includes below.
+#include "config.h"
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
@@ -10,15 +14,15 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <HX711.h>
+#if ENABLE_DS18B20_HIVE_TEMP
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#endif
 #include <Adafruit_SHT4x.h>
 #include <RTClib.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <esp_sleep.h>
-
-#include "config.h"
 
 #if ENABLE_INA219_SOLAR
 #include <Adafruit_INA219.h>
@@ -32,8 +36,10 @@ extern const char* const FIRMWARE_VERSION;
 // ---- Hardware driver instances -------------------------------------------
 extern HX711 scale1;
 extern HX711 scale2;
+#if ENABLE_DS18B20_HIVE_TEMP
 extern OneWire oneWire;
 extern DallasTemperature ds18b20;
+#endif
 extern Adafruit_SHT4x sht4;
 extern RTC_DS3231 rtc;
 extern Preferences prefs;

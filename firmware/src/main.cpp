@@ -70,11 +70,17 @@ void setup() {
   delay(1000);
 
   uint32_t wakeReason = esp_sleep_get_wakeup_causes();
-  bool wokeFromDeepSleep = (wakeReason & BIT(ESP_SLEEP_WAKEUP_TIMER)) ||
-                            (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT0)) ||
-                            (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT1));
+  bool wokeFromDeepSleep = (wakeReason & BIT(ESP_SLEEP_WAKEUP_TIMER))
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+      || (wakeReason & BIT(ESP_SLEEP_WAKEUP_GPIO))   // C6 GPIO deep-sleep wake
+#else
+      || (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT0))   // classic ESP32 RTC-GPIO wake
+      || (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT1))
+#endif
+      ;
 
   releaseSleepPinHolds();
+  configureC6Antenna();
   pinMode(SETUP_BUTTON_PIN, INPUT_PULLUP);
 
   rtcBootCount++;
@@ -91,7 +97,13 @@ void setup() {
   seedPrefsFromSecretsIfNeeded();
   loadConfigFromPrefs();
 
-  if (digitalRead(SETUP_BUTTON_PIN) == LOW || (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT0))) {
+  if (digitalRead(SETUP_BUTTON_PIN) == LOW
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+      || (wakeReason & BIT(ESP_SLEEP_WAKEUP_GPIO))
+#else
+      || (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT0))
+#endif
+  ) {
     Serial.println("[SETUP] Button wake/press detected; starting provisioning portal");
     initSdCard();
     startProvisioningPortal();

@@ -334,24 +334,69 @@
 #endif
 
 // ==============================
-// PIN MAP
+// PIN MAP — 30-pin ESP32 DevKit (original board)
 // ==============================
-#define HX1_DOUT 16
-#define HX1_SCK  17
-#define HX2_DOUT 32
-#define HX2_SCK  33
-#define ONE_WIRE_PIN 4
-#define I2C_SDA 21
-#define I2C_SCL 22
-#define SD_CS   5
-#define SD_SCK  18
-#define SD_MISO 23
-#define SD_MOSI 19
-
+#ifndef CONFIG_IDF_TARGET_ESP32C6
+#define HX1_DOUT     16
+#define HX1_SCK      17
+#define HX2_DOUT     32
+#define HX2_SCK      33
+#define ONE_WIRE_PIN  4
+#define I2C_SDA      21
+#define I2C_SCL      22
+#define SD_CS         5
+#define SD_SCK       18
+#define SD_MISO      23
+#define SD_MOSI      19
 // External button. Wire button between this pin and GND. Uses INPUT_PULLUP.
 // Short press: start WiFi provisioning AP.
 // Long press: reset Preferences and reboot.
+// GPIO27 is RTC-capable so it can wake the ESP32 from deep sleep via EXT0.
 #define SETUP_BUTTON_PIN 27
+#endif // !CONFIG_IDF_TARGET_ESP32C6
+
+// ==============================
+// PIN MAP — XIAO ESP32-C6 (compact RISC-V variant)
+// ==============================
+// Only the 11 front-header pins D0–D10 are used. DS18B20 and INMP441 wired
+// sensors are not supported on this board; pair BLE in-hive sensors instead.
+// Deep-sleep button wake uses esp_deep_sleep_enable_gpio_wakeup() (no RTC GPIO
+// subsystem on C6); see storage_power.cpp for the platform-specific guard.
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+#define HX1_DOUT        16   // D6
+#define HX1_SCK         17   // D7
+#define HX2_DOUT         0   // D0
+#define HX2_SCK          1   // D1
+#define I2C_SDA         22   // D4 (XIAO SDA label)
+#define I2C_SCL         23   // D5 (XIAO SCL label)
+#define SD_CS           21   // D3
+#define SD_SCK          19   // D8 (XIAO SCK label)
+#define SD_MISO         20   // D9 (XIAO MISO label)
+#define SD_MOSI         18   // D10 (XIAO MOSI label)
+// D2 is the setup button; button-to-GND, INPUT_PULLUP.
+#define SETUP_BUTTON_PIN 2   // D2
+#endif // CONFIG_IDF_TARGET_ESP32C6
+
+// ==============================
+// XIAO ESP32-C6 ANTENNA SELECTION
+// ==============================
+// The XIAO ESP32-C6 has both a built-in ceramic patch antenna and a u.FL
+// connector for an external antenna. The RF switch is driven by GPIO3 (internal
+// board trace, not broken out on the headers):
+//   GPIO3 LOW  → built-in ceramic antenna (default)
+//   GPIO3 HIGH → external u.FL antenna
+// To use an external antenna, add to secrets.h:
+//   #define XIAO_C6_USE_EXTERNAL_ANTENNA 1
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+#ifndef XIAO_C6_USE_EXTERNAL_ANTENNA
+#define XIAO_C6_USE_EXTERNAL_ANTENNA 0
+#endif
+#ifndef XIAO_C6_ANTENNA_GPIO
+#define XIAO_C6_ANTENNA_GPIO 3
+#endif
+#endif // CONFIG_IDF_TARGET_ESP32C6
+
+// External button shared constants (both board variants)
 static const unsigned long BUTTON_DEBOUNCE_MS = 50;
 static const unsigned long BUTTON_LONG_PRESS_MS = 10000;
 
