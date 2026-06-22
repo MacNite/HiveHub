@@ -70,9 +70,9 @@
 //
 // VDD on each mic -> 3.3V, GND -> GND.
 //
-// The wired in-hive microphone is OPTIONAL — set to 0 (or omit) on builds that
-// do not fit an INMP441.
-#define ENABLE_INMP441_MICS      1
+// The wired in-hive microphone is OPTIONAL and OFF by default. Set to 1 on
+// builds that fit two INMP441 mics.
+#define ENABLE_INMP441_MICS      0
 
 #define INMP441_BCLK_PIN         14
 #define INMP441_WS_PIN           13
@@ -89,11 +89,11 @@
 // ==============================
 // DS18B20 WIRED IN-HIVE TEMPERATURE (optional)
 // ==============================
-// The two 1-Wire DS18B20 probes (hive_1_temp_c / hive_2_temp_c) are optional.
-// Default is on (1). Set to 0 on builds where in-hive temperature comes from a
-// paired HolyIot 25015 BLE sensor instead (see below). When both are present
-// the wired probe wins and the BLE temperature is the fallback.
-#define ENABLE_DS18B20_HIVE_TEMP 1
+// The two 1-Wire DS18B20 probes (hive_1_temp_c / hive_2_temp_c) are optional and
+// OFF by default. Set to 1 on builds that fit the wired probes; otherwise in-hive
+// temperature comes from a paired in-hive BLE sensor instead (see below). When
+// both are present the wired probe wins and the BLE temperature is the fallback.
+#define ENABLE_DS18B20_HIVE_TEMP 0
 
 // ==============================
 // HOLYIOT 25015 IN-HIVE BLE SENSOR (optional)
@@ -138,8 +138,9 @@
 //
 // Supported in-hive types: HolyIot 25015 (beacon), RuuviTag 4-in-1 (beacon),
 // HiveInside ESP32-C6 (beacon or GATT), HiveHeart (GATT, beehivemonitoring.com).
-// Supported bee counter: HiveTraffic (GATT). Placeholder awaiting firmware
-// support: wireless HiveScale (GATT).
+// Supported scale: HiveScale (GATT, beehivemonitoring.com) via ENABLE_BEEHIVE_GATT.
+// Supported bee counter: HiveTraffic (GATT). The separate ENABLE_WIRELESS_SCALE
+// flag below is captured for a future build and not consumed yet.
 //
 // Each in-hive slot (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) records the chosen
 // sensor type, its transport and, for GATT devices, the service / characteristic

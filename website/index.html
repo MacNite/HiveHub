@@ -50,7 +50,7 @@
       <div class="card"><div class="ico">⚖️</div><h3>Dual load cells</h3><p>Two HX711 amplifiers drive two independent hive scales for per-colony weight trends.</p></div>
       <div class="card"><div class="ico">🌡️</div><h3>Per-hive temperature</h3><p>DS18B20 probes on a shared 1-Wire bus, or an in-hive BLE sensor as an alternative source.</p></div>
       <div class="card"><div class="ico">🔊</div><h3>In-hive sound</h3><p>Stereo INMP441 I2S microphones with per-band FFT energy to catch piping and stress.</p></div>
-      <div class="card"><div class="ico">📳</div><h3>Comb vibration</h3><p>Optional LIS3DH / LIS2DH12 accelerometers capture the ~20 Hz pre-swarm signal mics miss.</p></div>
+      <div class="card"><div class="ico">📳</div><h3>Comb vibration</h3><p>An in-hive BLE sensor (e.g. HiveInside) captures the ~20 Hz pre-swarm signal microphones miss.</p></div>
       <div class="card"><div class="ico">💧</div><h3>Ambient T &amp; humidity</h3><p>An SHT4x on I2C records weather context alongside the hive readings.</p></div>
       <div class="card"><div class="ico">🛰️</div><h3>Off-grid power telemetry</h3><p>Optional INA219 solar and MAX17048 LiPo fuel-gauge data for unattended deployments.</p></div>
       <div class="card"><div class="ico">📶</div><h3>BLE in-hive sensor</h3><p>Pair a HolyIot 25015 beacon (temp / humidity / pressure / accel) — no extra wiring.</p></div>
@@ -70,7 +70,7 @@
        no SMD soldering required for the core build.</p>
     <div class="grid">
       <div class="card"><h3>Core</h3><p>ESP32 dev board · 2× HX711 + load cells · 2× DS18B20 probes · 2× INMP441 mics · SHT4x · DS3231 RTC · microSD module · setup button · 3.3 V supply.</p></div>
-      <div class="card"><h3>Optional off-grid</h3><p>INA219 solar telemetry · MAX17048 LiPo gauge · 2× LIS3DH/LIS2DH12 accelerometers · CN3971 solar charger · TPS63020 buck-boost · TP4056 · LiPo + solar panel.</p></div>
+      <div class="card"><h3>Optional off-grid</h3><p>INA219 solar telemetry · MAX17048 LiPo gauge · CN3791 solar charger · TPS63020 buck-boost · TP4056 · LiPo + solar panel.</p></div>
       <div class="card"><h3>Boards</h3><p>KiCad <strong>Scale Module</strong> (central, header-based) and a <strong>Power Module</strong> (solar / battery / LTE) connected over I2C / ESP-NOW. Fabrication outputs included.</p></div>
     </div>
     <p style="margin-top:1.5rem">

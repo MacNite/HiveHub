@@ -183,12 +183,15 @@ the rest of its fields are null. For `N` in `1`, `2`:
 The per-gate 24-byte arrays are kept only in `raw_json` as
 `bee_counter_N_per_gate_in` / `bee_counter_N_per_gate_out`.
 
-#### Vibration fields (LIS3DH / LIS2DH12 accelerometer)
+#### Vibration fields (in-hive accelerometer)
 
-One accelerometer may be fitted per hive on the shared I2C bus (`0x18` / `0x19`).
-Each block is independent; a missing unit reports `accel_N_ok=false` and the rest
-of its fields are null. All band/RMS values are AC (gravity removed), in
-milli-g (mg). For `N` in `1`, `2`:
+Per-hive vibration, populated from a paired in-hive **BLE sensor** (a HiveInside
+ESP32-C6 supplies the full FFT bands; a HolyIot 25015 / RuuviTag beacon supplies
+only broadband `accel_N_rms_mg` / `accel_N_peak_mg`). A legacy wired
+LIS3DH/LIS2DH12 driver can also fill these (see
+[accelerometer.md](accelerometer.md)). Each block is independent; a missing
+source reports `accel_N_ok=false` and the rest of its fields are null. All
+band/RMS values are AC (gravity removed), in milli-g (mg). For `N` in `1`, `2`:
 
 | Field | Type | Description |
 |---|---|---|
@@ -920,7 +923,7 @@ The backend auto-creates and updates the schema on startup.
 | `device_commands` | Pending, claimed, done, and failed commands |
 | `insight_alerts` | Persisted lifecycle of insight alerts (first/last seen, peak severity, resolution) powering the history endpoint |
 
-The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), cellular status, calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, and per-hive BeeCounter counts; `firmware_releases` gains `target` and `crc32`. The SQL files in `server/migrations/` (`001_offgrid_telemetry.sql`, `002_mic_telemetry.sql`, `003_mic_fft_bands.sql`, `004_firmware_upload.sql`, `005_insight_alerts.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
+The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), cellular status, calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive BeeCounter counts, load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, and the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields; `firmware_releases` gains `target`, `crc32`, and `owner_user_id`. The SQL files in `server/migrations/` (`001`–`011`, from `001_offgrid_telemetry.sql` through `011_firmware_owner_scoping.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
 
 ---
 

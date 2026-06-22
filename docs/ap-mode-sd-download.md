@@ -206,8 +206,8 @@ time.
 
 | Purpose | File | Code reference |
 |---|---|---|
-| Setup button pin | `include/config.h` | `SETUP_BUTTON_PIN` (line 93) |
-| Factory reset hold duration | `include/config.h` | `BUTTON_LONG_PRESS_MS` (line 95) |
+| Setup button pin | `include/config.h` | `SETUP_BUTTON_PIN` |
+| Factory reset hold duration | `include/config.h` | `BUTTON_LONG_PRESS_MS` |
 | Deep-sleep wake from button | `src/storage_power.cpp` | `configureButtonWake()` |
 | Boot-time AP entry check | `src/main.cpp` | `digitalRead(SETUP_BUTTON_PIN) == LOW \|\| wakeReason == ESP_SLEEP_WAKEUP_EXT0` |
 | Button short/long press handling | `src/portal.cpp` | `handleButton()` |

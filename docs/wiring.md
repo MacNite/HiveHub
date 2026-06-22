@@ -62,8 +62,8 @@ All module grounds must be tied together.
 Assembly notes:
 
 - Set adjustable converters to the correct output voltage before connecting the ESP32.
-- Keep the load-cell analog wiring away from switching regulators and LTE antenna/power wiring.
-- Use one common ground reference, but route high-current modem and solar paths with wider traces or wires.
+- Keep the load-cell analog wiring away from switching regulators.
+- Use one common ground reference, but route high-current solar/charge paths with wider traces or wires.
 - For the breakout PCB, review `pcb-design/README.md` before ordering prototypes.
 
 ---
@@ -98,7 +98,7 @@ Practical rules:
 
 - Use four matched cells from the same kit.
 - Keep all load-cell cable lengths similar.
-- Twist or bundle each cell's wires and keep them away from LTE and regulator wiring.
+- Twist or bundle each cell's wires and keep them away from regulator wiring.
 - Check the unloaded A+/A- differential voltage before connecting to the HX711.
 - Calibrate each channel after final mechanical installation.
 
@@ -141,7 +141,7 @@ Place the SHT4x outside the electronics box but shield it from rain and direct s
 | SDA | GPIO21 |
 | SCL | GPIO22 |
 
-Install a backup coin cell if the module supports it. The firmware can use the RTC as a fallback when cellular or Wi-Fi time sync fails.
+Install a backup coin cell if the module supports it. The firmware can use the RTC as a fallback when Wi-Fi/NTP time sync fails.
 
 ---
 
@@ -200,6 +200,11 @@ energy (sub-bass, hum, piping, stress, high) per channel.
 ---
 
 ## LIS3DH / LIS2DH12 accelerometers (per-hive vibration)
+
+> **Legacy / optional.** The wired accelerometer is no longer wired into the stock
+> firmware's measurement cycle — in-hive vibration now comes from a BLE sensor
+> (see [accelerometer.md](accelerometer.md)). The driver is retained behind
+> `ENABLE_LIS3DH_ACCEL` for custom builds; this wiring is kept for that case.
 
 One low-g MEMS accelerometer per hive captures low-frequency comb/wall
 vibration — most importantly the **~20 Hz pre-swarm signal** that hive
@@ -339,4 +344,4 @@ Most breakout boards include SDA/SCL pull-ups. If multiple breakout boards are i
 - Label scale 1 and scale 2 wiring at both the sensor and electronics box.
 - Use ferrules, locking connectors, or soldered joints where vibration or condensation is expected.
 - Keep the SD card accessible for debugging, but protected from water ingress.
-- In off-grid builds, test modem attach and upload current before sealing the enclosure.
+- In off-grid builds, test upload and battery-charge current before sealing the enclosure.
