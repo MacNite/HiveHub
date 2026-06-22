@@ -21,7 +21,7 @@ This document is the authoritative reference for **what is detected**,
 |---|---|
 | Computation source | `server/insights.py` (pure Python, no DB access) |
 | Trigger | Every call to the insights endpoint; cached on the frontend for 5 minutes |
-| Inputs | Weight, hive temperature, ambient temperature/humidity, FFT mic bands, BeeCounter entrance counts, and accelerometer vibration bands — all per channel, all optional except weight/temperature |
+| Inputs | Weight, hive temperature, ambient temperature/humidity, FFT mic bands, BeeCounter entrance counts, and in-hive vibration (HiveInside FFT bands or a low-rate HolyIot/RuuviTag beacon magnitude) — all per channel, all optional except weight/temperature |
 | Lookback | Up to 14 days, configurable via the `lookback_days` query parameter |
 | Per-channel | Each detector runs independently for scale 1 and scale 2 |
 | Output | A flat list of `Alert` objects, sorted by severity then time |
@@ -384,6 +384,27 @@ season, or when vibration levels are below the noise floor. See
 
 ---
 
+### 12. Pre-swarm movement rising (low-rate BLE accelerometer)
+
+| | |
+|---|---|
+| Function | `detect_lowrate_accel_swarm` |
+| Category | `swarm` |
+| Severity | `watch` |
+| Inputs | Per-cycle broadband magnitude `accel_{ch}_rms_mg` from a passive in-hive BLE beacon (HolyIot 25015 / RuuviTag), night-time (00:00–05:00), active season only |
+| Rule | Recent night-time mean ≥ **1.8×** the baseline, with floors (baseline ≥ 2.0 mg, recent ≥ 4.0 mg). **Defers** to detector 11 when real 8–30 Hz FFT-band data exists for the hive, so the two never double-fire |
+| Confidence | 0.35 plus `(ratio − 1.8) × 0.2`, capped at 0.7 |
+| Source | Bencsik et al. (2011); Ramsey et al. (2020) — low-rate proxy |
+
+**Why it fires.** A passive beacon emits only periodic single-shot acceleration
+samples, so the 8–30 Hz FFT swarm band of detector 11 cannot be computed. Instead
+this trends the night-time mean of the broadband AC magnitude: rising in-hive
+movement over days is a coarse pre-swarm activity cue. It is deliberately
+lower-confidence than the FFT-band detector. See
+[holyiot-ble-sensor.md](holyiot-ble-sensor.md).
+
+---
+
 ## Severity precedence
 
 When multiple detectors fire for the same channel, all alerts are kept and
@@ -441,6 +462,11 @@ VIBRATION_SWARM_RISE_MULT       = 1.6      # rise that boosts the temp watch
 VIBRATION_SWARM_STANDALONE_MULT = 2.0      # rise that fires a standalone watch
 VIBRATION_MIN_BASELINE_MG       = 0.4      # noise floor for the baseline
 VIBRATION_MIN_RECENT_MG         = 0.8      # noise floor for the recent level
+
+# Low-rate BLE beacon proxy (HolyIot/RuuviTag; detector 12) — higher floors
+LOWRATE_SWARM_RISE_MULT         = 1.8      # rise that fires the BLE-beacon watch
+LOWRATE_MIN_BASELINE_MG         = 2.0      # noise floor for the baseline
+LOWRATE_MIN_RECENT_MG           = 4.0      # noise floor for the recent level
 ```
 
 These are starting values calibrated against the project spec and the
@@ -468,7 +494,7 @@ which detectors each one feeds:
 |---|---|---|
 | Microphone | Pre-swarm (piping/tooting), queenlessness (acoustic signature), robbing (agitated spectrum) | **Integrated** (FFT bands) |
 | Entrance counter (BeeCounter) | Swarm event (asymmetric outflow), robbing (incoming-spike pattern), queenlessness (forager decline), absconding (daily decline → 3-of-3), foraging (traffic cross-check), winter (cleansing flights) | **Integrated** |
-| Accelerometer (LIS3DH / LIS2DH12) | Pre-swarm vibration rising (8–30 Hz, detector 11) and the pre-swarm temperature watch boost | **Integrated** (vibration bands) |
+| In-hive vibration (BLE: HiveInside FFT / HolyIot-RuuviTag low-rate; legacy wired LIS3DH) | Pre-swarm vibration rising (detectors 11 and 12) and the pre-swarm temperature watch boost | **Integrated** |
 
 With the BeeCounter integrated, the swarm-event, robbing, queenlessness,
 absconding, foraging and winter detectors all consume
@@ -477,10 +503,11 @@ absconding, foraging and winter detectors all consume
 weight/temperature/acoustic rules when the counter is absent or a hive has
 no counter fitted. No detector *requires* the counter.
 
-With the accelerometer integrated, the pre-swarm detectors additionally consume
-`accel_{ch}_band_swarm_mg` (gated by `accel_{ch}_ok`) when present — the
-low-frequency ~20 Hz swarm precursor the microphones cannot record. It is
-optional too: no detector *requires* the accelerometer. See
+With in-hive vibration integrated, the pre-swarm detectors additionally consume
+`accel_{ch}_band_swarm_mg` (FFT bands, detector 11) or fall back to
+`accel_{ch}_rms_mg` (low-rate beacon magnitude, detector 12), gated by
+`accel_{ch}_ok` — the low-frequency ~20 Hz swarm precursor the microphones cannot
+record. It is optional too: no detector *requires* it. See
 [accelerometer.md](accelerometer.md).
 
 ---

@@ -13,7 +13,7 @@ The firmware is split across several units: the calibration constants live in
 `calibrationModeExpired()` are in `firmware/src/portal.cpp`; `enterDeepSleep()` is
 in `firmware/src/storage_power.cpp`; the `loop()` interval/timeout handling is in
 `firmware/src/main.cpp`; and command parsing (`checkCommands()`) is in
-`firmware/src/network.cpp`.
+`firmware/src/hivescale_network.cpp`.
 
 ### Constants (`config.h`)
 

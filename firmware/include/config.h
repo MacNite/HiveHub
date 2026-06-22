@@ -43,12 +43,12 @@
 // ==============================
 // DS18B20 WIRED IN-HIVE TEMPERATURE (optional)
 // ==============================
-// The two 1-Wire DS18B20 probes (hive_1_temp_c / hive_2_temp_c) are now an
-// OPTIONAL sensor: in-hive temperature can instead come from a paired HolyIot
-// 25015 BLE sensor (see below). Default 1 so existing wired builds are
-// unchanged; set to 0 in secrets.h on devices that rely on the BLE sensor.
+// The two 1-Wire DS18B20 probes (hive_1_temp_c / hive_2_temp_c) are an OPTIONAL
+// sensor and OFF by default: in-hive temperature can instead come from a paired
+// in-hive BLE sensor (see below). Set ENABLE_DS18B20_HIVE_TEMP 1 in secrets.h on
+// builds that fit the wired probes.
 #ifndef ENABLE_DS18B20_HIVE_TEMP
-#define ENABLE_DS18B20_HIVE_TEMP 1
+#define ENABLE_DS18B20_HIVE_TEMP 0
 #endif
 
 // ==============================

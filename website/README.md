@@ -53,6 +53,12 @@ The configurator mirrors the firmware feature flags found in
 | INA219 solar monitor | `ENABLE_INA219_SOLAR`, I2C address |
 | MAX17048 LiPo fuel gauge | `ENABLE_MAX17048_BATTERY`, alert percent |
 
+> DS18B20 and the INMP441 mics default to **off** in the tool (toggle them on if
+> fitted). The wired LIS3DH/LIS2DH12 accelerometer is a legacy option — current
+> builds get in-hive vibration from a BLE sensor (HiveInside FFT bands;
+> HolyIot/RuuviTag low-rate); see
+> [`docs/accelerometer.md`](../docs/accelerometer.md).
+
 ### Wireless sensors
 
 Use **➕ Add wireless sensor** to attach up to six BLE sensors — at most **2
@@ -65,8 +71,8 @@ dropdown:
 | HiveInside ESP32-C6 | GATT | in-hive | ✅ supported |
 | HiveHeart *(beehivemonitoring.com)* | GATT | in-hive | ✅ supported (GATT decode) |
 | HiveScale *(beehivemonitoring.com)* | GATT | scale | ✅ supported (GATT decode) |
-| BeeCounter *(beehivemonitoring.com)* | GATT | bee counter | ⚠ placeholder |
-| RuuviTag 4-in-1 | BLE beacon | in-hive | ⚠ placeholder |
+| HiveTraffic *(entrance bee counter)* | GATT | bee counter | ✅ supported |
+| RuuviTag 4-in-1 | BLE beacon | in-hive | ✅ supported |
 
 GATT devices have their service / characteristic UUIDs pre-filled (editable).
 For HiveHeart / HiveScale you can also paste the device MAC to pre-pair via
@@ -78,7 +84,7 @@ can replace the matching wired sensor per hive.
 HiveHeart and HiveScale are decoded by the firmware (see
 [`docs/beehivemonitoring-gatt.md`](../docs/beehivemonitoring-gatt.md)).
 
-> **Placeholder types are not yet supported by the firmware.** The tool still
-> lets you select them and writes their macros to `secrets.h` so a future build
-> can pick them up; this is called out clearly in the UI. The wireless
-> bee-counter category is likewise captured for a future build.
+> Every sensor type in the catalog above is read by the current firmware. The
+> separate `ENABLE_WIRELESS_SCALE` flag (written when you add a *scale*-category
+> sensor) is still captured for a future build — but the beehivemonitoring.com
+> HiveScale weight itself is already decoded over GATT via `ENABLE_BEEHIVE_GATT`.
