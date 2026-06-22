@@ -182,6 +182,19 @@
 #define HIVEINSIDE_GATT_CONNECT_TIMEOUT_S 5
 #endif
 
+// Seconds before HiveScale's next scan that HiveInside should already be awake
+// and listening. Written to the wake-sync characteristic each cycle as
+// (sendInterval - lead). HiveScale holds a fixed boot-to-boot cadence (see
+// enterDeepSleepUntilNextCycle in storage_power.cpp), so this lead need only
+// cover the small in-cycle scan offset plus one interval of HiveInside RC-timer
+// drift in the "HiveInside wakes late" direction; the "wakes early" direction is
+// absorbed by HiveInside's SYNC_LISTEN_MS. Balanced default: 60 s lead paired
+// with HiveInside SYNC_LISTEN_MS = 150 s. Raise both together for more drift
+// tolerance at the cost of HiveInside awake time.
+#ifndef HIVEINSIDE_SYNC_LEAD_S
+#define HIVEINSIDE_SYNC_LEAD_S 60
+#endif
+
 // ==============================
 // HIVEINSIDE FIRMWARE-OVER-BLE (OTA relay)
 // ==============================

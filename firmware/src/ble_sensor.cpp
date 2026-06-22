@@ -450,9 +450,13 @@ static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
     // Non-fatal if the characteristic is absent (HiveInside firmware too old).
     NimBLERemoteCharacteristic* chrSync = svc->getCharacteristic(HIVEINSIDE_GATT_SYNC);
     if (chrSync && chrSync->canWrite()) {
-      static const uint32_t HIVEINSIDE_SYNC_LEAD_S = 30;
+      // Lead is HIVEINSIDE_SYNC_LEAD_S (config.h). HiveScale now holds a fixed
+      // boot-to-boot cadence (enterDeepSleepUntilNextCycle), so this lead only has
+      // to cover the in-cycle offset between this write and the next boot's scan,
+      // plus one interval of RC-oscillator drift; HiveInside's SYNC_LISTEN_MS
+      // absorbs the remainder of the drift on the other side.
       uint32_t sec = (uint32_t)(sendIntervalMs / 1000UL);
-      if (sec > HIVEINSIDE_SYNC_LEAD_S) sec -= HIVEINSIDE_SYNC_LEAD_S;
+      if (sec > (uint32_t)HIVEINSIDE_SYNC_LEAD_S) sec -= (uint32_t)HIVEINSIDE_SYNC_LEAD_S;
       uint8_t buf[4] = {
         (uint8_t)(sec         & 0xFF),
         (uint8_t)((sec >>  8) & 0xFF),
@@ -460,7 +464,10 @@ static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
         (uint8_t)((sec >> 24) & 0xFF),
       };
       if (chrSync->writeValue(buf, sizeof(buf), /*response=*/true)) {
-        Serial.printf("[BLE] GATT: wake-sync written: sleep %us\n", (unsigned)sec);
+        // boot+millis() lets you compare this write time against the next boot's
+        // "[BLE] Scanning ... at boot+" line to measure the real rendezvous gap.
+        Serial.printf("[BLE] GATT: wake-sync written: sleep %us (lead %ds, at boot+%lums)\n",
+                      (unsigned)sec, (int)HIVEINSIDE_SYNC_LEAD_S, millis());
       } else {
         Serial.println("[BLE] GATT: wake-sync write failed (non-fatal)");
       }
@@ -577,10 +584,11 @@ void scanPairedSensors(const String& mac0, const String& mac1,
   g_slot[1] = Accumulator{}; g_slot[1].mac = m1;
   g_discover = nullptr;
 
-  Serial.printf("[BLE] Scanning %us for paired sensors (slot1=%s slot2=%s)\n",
+  Serial.printf("[BLE] Scanning %us for paired sensors (slot1=%s slot2=%s) at boot+%lums\n",
                 (unsigned)HOLYIOT_BLE_SCAN_SECONDS,
                 m0.length() ? m0.c_str() : "-",
-                m1.length() ? m1.c_str() : "-");
+                m1.length() ? m1.c_str() : "-",
+                millis());
 
   ScanCallbacks cb;
   NimBLEScan* scan = startScan(cb, HOLYIOT_BLE_SCAN_SECONDS);

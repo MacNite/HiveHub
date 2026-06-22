@@ -182,6 +182,26 @@ void enterDeepSleep(unsigned long sleepMs) {
   esp_deep_sleep_start();
 }
 
+// Deep sleep until the next cycle boundary measured from THIS boot, rather than
+// for a full interval measured from the (variable-length) end of the cycle. The
+// in-hive BLE rendezvous scan happens near the start of each boot, so anchoring
+// the sleep to boot keeps that scan on a stable cadence no matter how long the
+// WiFi upload / cache replay / remote-config / OTA-check tail took this cycle.
+// That removes the dominant source of wake-window misalignment with HiveInside.
+//
+// millis() has its origin at this boot, so it is the elapsed cycle time. We never
+// pass less than MIN_DEEP_SLEEP_MS (enterDeepSleep would otherwise refuse to
+// sleep); if the cycle ran long we just take the floor and re-align next boot.
+void enterDeepSleepUntilNextCycle(unsigned long intervalMs) {
+  unsigned long elapsed = millis();
+  unsigned long sleepMs = (elapsed + MIN_DEEP_SLEEP_MS < intervalMs)
+                            ? (intervalMs - elapsed)
+                            : MIN_DEEP_SLEEP_MS;
+  Serial.printf("[SLEEP] Cycle took %lums; sleeping %lums to hold a %lums cadence\n",
+                elapsed, sleepMs, intervalMs);
+  enterDeepSleep(sleepMs);
+}
+
 void preparePowerMonitorsForSleep() {
 #if ENABLE_INA219_SOLAR
   if (solarMonitorOk) solarMonitor.powerSave(true);

@@ -161,7 +161,10 @@ void setup() {
     return;
   }
 
-  enterDeepSleep(sendIntervalMs);
+  // Anchor the next wake to THIS boot (not to the end of this variable-length
+  // cycle) so the in-hive BLE rendezvous scan recurs on a stable cadence and
+  // stays aligned with the wake-sync schedule we just handed HiveInside.
+  enterDeepSleepUntilNextCycle(sendIntervalMs);
 }
 
 void loop() {

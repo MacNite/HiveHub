@@ -22,6 +22,7 @@ void shutdownWifiAndBt();
 void configureButtonWake();
 void preparePowerMonitorsForSleep();
 void enterDeepSleep(unsigned long sleepMs);
+void enterDeepSleepUntilNextCycle(unsigned long intervalMs);
 
 // ---- SD card lifecycle ----------------------------------------------------
 bool initSdCard();
