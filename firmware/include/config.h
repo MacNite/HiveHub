@@ -7,6 +7,23 @@
 
 #include "secrets.h"
 
+// ==============================
+// XIAO ESP32-C6 — UNSUPPORTED WIRED SENSORS
+// ==============================
+// The C6 variant only breaks out the 11 front-header pins (D0–D10), with no
+// room for the wired in-hive sensors, so it has no ONE_WIRE_PIN / INMP441 pins
+// defined below. Force these flags off for that target — overriding whatever a
+// secrets.h carried over from an ESP32 build (or the default of 1) may set — so
+// their drivers (OneWire/DallasTemperature, the I2S mic path) are never compiled
+// in and the build doesn't fail looking for libraries this env omits. Use
+// wireless BLE in-hive sensors on the C6 instead.
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+#undef ENABLE_DS18B20_HIVE_TEMP
+#define ENABLE_DS18B20_HIVE_TEMP 0
+#undef ENABLE_INMP441_MICS
+#define ENABLE_INMP441_MICS 0
+#endif
+
 #ifndef CLAIM_CODE
 #define CLAIM_CODE ""
 #endif
