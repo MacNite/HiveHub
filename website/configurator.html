@@ -40,6 +40,24 @@
       <form id="cfg" autocomplete="off">
 
         <fieldset>
+          <legend>Hardware</legend>
+          <div class="field">
+            <label for="mcu">MCU / board <span class="hint">— selects the PlatformIO environment and pin map</span></label>
+            <select id="mcu">
+              <option value="esp32dev">30-pin ESP32 DevKit (original)</option>
+              <option value="xiao_esp32c6">XIAO ESP32-C6 (compact, BLE sensors only)</option>
+            </select>
+          </div>
+          <div id="antenna-row" style="display:none; margin-top:.6rem">
+            <label class="toggle">
+              <input type="checkbox" id="ext_antenna" />
+              <span><span class="t-title">📡 External u.FL antenna</span>
+              <span class="t-desc">Drives GPIO3 HIGH to enable the u.FL connector. Default: built-in ceramic patch antenna. Sets <code>XIAO_C6_USE_EXTERNAL_ANTENNA 1</code>.</span></span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
           <legend>Device identity</legend>
           <div class="field">
             <label for="device_id">Device ID <span class="hint">— unique per device</span></label>
@@ -86,6 +104,12 @@
             Toggle on only what you fitted. Each enabled sensor is compiled into the firmware
             for this device.
           </p>
+
+          <div id="c6-wired-notice" class="note warn" style="display:none; margin-bottom:.8rem">
+            ⚠ <strong>XIAO ESP32-C6 selected</strong> — wired sensors (DS18B20, INMP441 mics,
+            accelerometer) are <strong>not supported</strong> on this board. Use wireless BLE
+            in-hive sensors instead.
+          </div>
 
           <!-- DS18B20 -->
           <div class="sensor" data-sensor="ds18b20">
@@ -263,7 +287,7 @@
         <pre id="preview" class="mono"></pre>
         <div class="note info" style="margin-top:.8rem">
           Save this as <code>firmware/include/secrets.h</code> (it is gitignored — never commit it),
-          then build with <code>pio run --target upload</code>.
+          then build with <code>pio run -e <span id="pio-env">esp32dev</span> --target upload</code>.
         </div>
       </div>
 

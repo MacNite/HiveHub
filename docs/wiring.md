@@ -1,10 +1,92 @@
 # HiveScale wiring reference
 
-This document describes the current ESP32 firmware pin mapping and the wiring for the core HiveScale hardware plus the optional off-grid modules.
+This document covers wiring for both supported hardware variants:
+
+- **30-pin ESP32 DevKit** — original board, full sensor suite
+- **XIAO ESP32-C6** — compact RISC-V module, wireless-sensor-only variant
 
 ---
 
-## Current firmware pin mapping
+## XIAO ESP32-C6 variant
+
+> **Wired in-hive sensors are NOT supported on this board.**
+> The XIAO ESP32-C6 uses only the 11 front-header pins (D0–D10), which are fully
+> occupied by the two HX711 amplifiers, the SD card, I2C bus, and the setup button.
+> There are no spare pins for DS18B20 probes or INMP441 microphones.
+> **Use wireless BLE in-hive sensors** (HolyIot 25015, RuuviTag, or HiveInside
+> ESP32-C6) to obtain in-hive temperature, humidity, acoustics, and vibration data.
+
+### PlatformIO target
+
+```
+pio run -e xiao_esp32c6
+```
+
+### Pin mapping — XIAO ESP32-C6 (D0–D10 only)
+
+| Signal | XIAO pin | GPIO | Notes |
+|---|---|---|---|
+| HX711 #1 DOUT | D6 | 16 | Scale 1 data |
+| HX711 #1 SCK | D7 | 17 | Scale 1 clock |
+| HX711 #2 DOUT | D0 | 0 | Scale 2 data |
+| HX711 #2 SCK | D1 | 1 | Scale 2 clock |
+| I2C SDA | D4 | 22 | RTC, SHT4x, optional INA219/MAX17048 |
+| I2C SCL | D5 | 23 | RTC, SHT4x, optional INA219/MAX17048 |
+| SD CS | D3 | 21 | SD card chip select |
+| SD SCK | D8 | 19 | SPI clock (XIAO default SCK) |
+| SD MISO | D9 | 20 | SPI MISO (XIAO default MISO) |
+| SD MOSI | D10 | 18 | SPI MOSI (XIAO default MOSI) |
+| Setup button | D2 | 2 | Button to GND, INPUT_PULLUP |
+
+Power the board from its USB-C connector (programming + serial via native USB-CDC)
+or from the 5 V / 3 V3 header pins. All sensors connect to 3 V3.
+
+### Antenna selection
+
+The XIAO ESP32-C6 has a built-in ceramic patch antenna and a u.FL connector for
+an external antenna. Selection uses the on-board FM8625H RF switch, driven by two
+internal-trace GPIOs (not exposed on the headers):
+
+- **GPIO3 (RF_SWITCH_EN)** — driven LOW at boot to enable the RF switch; required
+  for either antenna.
+- **GPIO14 (RF_ANT_SELECT)** — LOW selects the built-in ceramic antenna, HIGH
+  selects the external u.FL antenna.
+
+Firmware defaults to the built-in antenna.
+
+To switch to the external u.FL antenna, add to `secrets.h`:
+
+```cpp
+#define XIAO_C6_USE_EXTERNAL_ANTENNA 1
+```
+
+The firmware logs the active antenna selection on every boot:
+
+```
+[ANT] XIAO C6: external antenna (EN GPIO3=LOW, SEL GPIO14=HIGH)
+```
+
+### What works / what does not
+
+| Feature | Status |
+|---|---|
+| 2× HX711 weight cells | ✅ |
+| SD card (cache + backup) | ✅ |
+| DS3231 RTC | ✅ |
+| SHT4x ambient temp/humidity | ✅ |
+| BLE wireless in-hive sensors (HolyIot, RuuviTag, HiveInside) | ✅ |
+| OTA firmware update over WiFi | ✅ |
+| WiFi provisioning portal | ✅ |
+| Optional INA219 solar monitor | ✅ (I2C) |
+| Optional MAX17048 fuel gauge | ✅ (I2C) |
+| DS18B20 wired in-hive probes | ❌ no pins available |
+| INMP441 wired microphones | ❌ no pins available |
+| Deep-sleep timer wake | ✅ |
+| Deep-sleep button wake | ✅ (GPIO wake, D2) |
+
+---
+
+## 30-pin ESP32 DevKit — pin mapping
 
 The firmware pin definitions live in `firmware/include/config.h` (with optional per-device overrides in `secrets.h`). Keep this table aligned with those definitions whenever pins change.
 

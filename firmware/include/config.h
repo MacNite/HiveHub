@@ -5,7 +5,39 @@
 // pin choices, sample rates) take effect before the defaults below.
 #pragma once
 
+// This header is included before <Arduino.h> (globals.h pulls config.h in first
+// so feature flags resolve before the conditional driver includes). It therefore
+// cannot rely on Arduino transitively providing the fixed-width / size types it
+// uses for the constants at the bottom of this file — include them explicitly.
+#include <stdint.h>
+#include <stddef.h>
+
 #include "secrets.h"
+
+// ==============================
+// XIAO ESP32-C6 — UNSUPPORTED WIRED SENSORS
+// ==============================
+// The C6 variant only breaks out the 11 front-header pins (D0–D10), with no
+// room for the wired in-hive sensors, so it has no ONE_WIRE_PIN / INMP441 pins
+// defined below. Force these flags off for that target — overriding whatever a
+// secrets.h carried over from an ESP32 build (or the default of 1) may set — so
+// their drivers (OneWire/DallasTemperature, the I2S mic path) are never compiled
+// in and the build doesn't fail looking for libraries this env omits. Use
+// wireless BLE in-hive sensors on the C6 instead.
+//
+// Two guards for the same condition:
+//   HIVESCALE_BOARD_XIAO_C6  — set by [env:xiao_esp32c6] build_flags; available
+//                               before any header is included (plain -D flag).
+//   CONFIG_IDF_TARGET_ESP32C6 — from sdkconfig.h via Arduino.h; only valid in
+//                               files that include Arduino.h first.
+// Using both ensures this block fires even though config.h is included before
+// Arduino.h (e.g. as the first thing in globals.h).
+#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#undef ENABLE_DS18B20_HIVE_TEMP
+#define ENABLE_DS18B20_HIVE_TEMP 0
+#undef ENABLE_INMP441_MICS
+#define ENABLE_INMP441_MICS 0
+#endif
 
 #ifndef CLAIM_CODE
 #define CLAIM_CODE ""
@@ -334,24 +366,77 @@
 #endif
 
 // ==============================
-// PIN MAP
+// PIN MAP — 30-pin ESP32 DevKit (original board)
 // ==============================
-#define HX1_DOUT 16
-#define HX1_SCK  17
-#define HX2_DOUT 32
-#define HX2_SCK  33
-#define ONE_WIRE_PIN 4
-#define I2C_SDA 21
-#define I2C_SCL 22
-#define SD_CS   5
-#define SD_SCK  18
-#define SD_MISO 23
-#define SD_MOSI 19
-
+#if !defined(HIVESCALE_BOARD_XIAO_C6) && !defined(CONFIG_IDF_TARGET_ESP32C6)
+#define HX1_DOUT     16
+#define HX1_SCK      17
+#define HX2_DOUT     32
+#define HX2_SCK      33
+#define ONE_WIRE_PIN  4
+#define I2C_SDA      21
+#define I2C_SCL      22
+#define SD_CS         5
+#define SD_SCK       18
+#define SD_MISO      23
+#define SD_MOSI      19
 // External button. Wire button between this pin and GND. Uses INPUT_PULLUP.
 // Short press: start WiFi provisioning AP.
 // Long press: reset Preferences and reboot.
+// GPIO27 is RTC-capable so it can wake the ESP32 from deep sleep via EXT0.
 #define SETUP_BUTTON_PIN 27
+#endif // !(HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6)
+
+// ==============================
+// PIN MAP — XIAO ESP32-C6 (compact RISC-V variant)
+// ==============================
+// Only the 11 front-header pins D0–D10 are used. DS18B20 and INMP441 wired
+// sensors are not supported on this board; pair BLE in-hive sensors instead.
+// Deep-sleep button wake uses esp_deep_sleep_enable_gpio_wakeup() (no RTC GPIO
+// subsystem on C6); see storage_power.cpp for the platform-specific guard.
+#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#define HX1_DOUT        16   // D6
+#define HX1_SCK         17   // D7
+#define HX2_DOUT         0   // D0
+#define HX2_SCK          1   // D1
+#define I2C_SDA         22   // D4 (XIAO SDA label)
+#define I2C_SCL         23   // D5 (XIAO SCL label)
+#define SD_CS           21   // D3
+#define SD_SCK          19   // D8 (XIAO SCK label)
+#define SD_MISO         20   // D9 (XIAO MISO label)
+#define SD_MOSI         18   // D10 (XIAO MOSI label)
+// D2 is the setup button; button-to-GND, INPUT_PULLUP.
+#define SETUP_BUTTON_PIN 2   // D2
+#endif // HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
+
+// ==============================
+// XIAO ESP32-C6 ANTENNA SELECTION
+// ==============================
+// The XIAO ESP32-C6 has both a built-in ceramic patch antenna and a u.FL
+// connector for an external antenna. Selection uses the on-board FM8625H RF
+// switch, driven by TWO internal-trace GPIOs (not broken out on the headers):
+//   GPIO3  (RF_SWITCH_EN)  — must be driven LOW to ENABLE the RF switch. This
+//                            is required for EITHER antenna; leaving it HIGH
+//                            disables the switch and cripples the radio.
+//   GPIO14 (RF_ANT_SELECT) — LOW  → built-in ceramic antenna (default)
+//                            HIGH → external u.FL antenna
+// To use an external antenna, add to secrets.h:
+//   #define XIAO_C6_USE_EXTERNAL_ANTENNA 1
+#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#ifndef XIAO_C6_USE_EXTERNAL_ANTENNA
+#define XIAO_C6_USE_EXTERNAL_ANTENNA 0
+#endif
+// GPIO3: RF switch enable (active-low). Driven LOW at boot to power the switch.
+#ifndef XIAO_C6_RF_SWITCH_EN_GPIO
+#define XIAO_C6_RF_SWITCH_EN_GPIO 3
+#endif
+// GPIO14: antenna select (LOW = internal ceramic, HIGH = external u.FL).
+#ifndef XIAO_C6_ANTENNA_SELECT_GPIO
+#define XIAO_C6_ANTENNA_SELECT_GPIO 14
+#endif
+#endif // HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
+
+// External button shared constants (both board variants)
 static const unsigned long BUTTON_DEBOUNCE_MS = 50;
 static const unsigned long BUTTON_LONG_PRESS_MS = 10000;
 
