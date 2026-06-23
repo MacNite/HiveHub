@@ -17,7 +17,15 @@
 // their drivers (OneWire/DallasTemperature, the I2S mic path) are never compiled
 // in and the build doesn't fail looking for libraries this env omits. Use
 // wireless BLE in-hive sensors on the C6 instead.
-#ifdef CONFIG_IDF_TARGET_ESP32C6
+//
+// Two guards for the same condition:
+//   HIVESCALE_BOARD_XIAO_C6  — set by [env:xiao_esp32c6] build_flags; available
+//                               before any header is included (plain -D flag).
+//   CONFIG_IDF_TARGET_ESP32C6 — from sdkconfig.h via Arduino.h; only valid in
+//                               files that include Arduino.h first.
+// Using both ensures this block fires even though config.h is included before
+// Arduino.h (e.g. as the first thing in globals.h).
+#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
 #undef ENABLE_DS18B20_HIVE_TEMP
 #define ENABLE_DS18B20_HIVE_TEMP 0
 #undef ENABLE_INMP441_MICS
@@ -353,7 +361,7 @@
 // ==============================
 // PIN MAP — 30-pin ESP32 DevKit (original board)
 // ==============================
-#ifndef CONFIG_IDF_TARGET_ESP32C6
+#if !defined(HIVESCALE_BOARD_XIAO_C6) && !defined(CONFIG_IDF_TARGET_ESP32C6)
 #define HX1_DOUT     16
 #define HX1_SCK      17
 #define HX2_DOUT     32
@@ -370,7 +378,7 @@
 // Long press: reset Preferences and reboot.
 // GPIO27 is RTC-capable so it can wake the ESP32 from deep sleep via EXT0.
 #define SETUP_BUTTON_PIN 27
-#endif // !CONFIG_IDF_TARGET_ESP32C6
+#endif // !(HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6)
 
 // ==============================
 // PIN MAP — XIAO ESP32-C6 (compact RISC-V variant)
@@ -379,7 +387,7 @@
 // sensors are not supported on this board; pair BLE in-hive sensors instead.
 // Deep-sleep button wake uses esp_deep_sleep_enable_gpio_wakeup() (no RTC GPIO
 // subsystem on C6); see storage_power.cpp for the platform-specific guard.
-#ifdef CONFIG_IDF_TARGET_ESP32C6
+#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
 #define HX1_DOUT        16   // D6
 #define HX1_SCK         17   // D7
 #define HX2_DOUT         0   // D0
@@ -392,7 +400,7 @@
 #define SD_MOSI         18   // D10 (XIAO MOSI label)
 // D2 is the setup button; button-to-GND, INPUT_PULLUP.
 #define SETUP_BUTTON_PIN 2   // D2
-#endif // CONFIG_IDF_TARGET_ESP32C6
+#endif // HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
 
 // ==============================
 // XIAO ESP32-C6 ANTENNA SELECTION
@@ -407,7 +415,7 @@
 //                            HIGH → external u.FL antenna
 // To use an external antenna, add to secrets.h:
 //   #define XIAO_C6_USE_EXTERNAL_ANTENNA 1
-#ifdef CONFIG_IDF_TARGET_ESP32C6
+#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
 #ifndef XIAO_C6_USE_EXTERNAL_ANTENNA
 #define XIAO_C6_USE_EXTERNAL_ANTENNA 0
 #endif
@@ -419,7 +427,7 @@
 #ifndef XIAO_C6_ANTENNA_SELECT_GPIO
 #define XIAO_C6_ANTENNA_SELECT_GPIO 14
 #endif
-#endif // CONFIG_IDF_TARGET_ESP32C6
+#endif // HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
 
 // External button shared constants (both board variants)
 static const unsigned long BUTTON_DEBOUNCE_MS = 50;
