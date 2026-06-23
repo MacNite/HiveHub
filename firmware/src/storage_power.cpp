@@ -32,7 +32,12 @@ String wakeReasonName(uint32_t wakeCauses) {
 }
 
 void releaseSleepPinHolds() {
+#ifndef CONFIG_IDF_TARGET_ESP32C6
+  // On classic ESP32/S2/S3/C3 the deep-sleep hold is a separate global switch;
+  // disable it before releasing individual pin holds. The C6 has no such switch —
+  // gpio_hold_en/dis() handle hold state for each pin individually.
   gpio_deep_sleep_hold_dis();
+#endif
   gpio_hold_dis((gpio_num_t)HX1_SCK);
   gpio_hold_dis((gpio_num_t)HX2_SCK);
   gpio_hold_dis((gpio_num_t)SD_CS);
@@ -197,7 +202,12 @@ void enterDeepSleep(unsigned long sleepMs) {
   esp_sleep_enable_timer_wakeup((uint64_t)sleepMs * US_PER_MS);
   configureButtonWake();
 
+#ifndef CONFIG_IDF_TARGET_ESP32C6
+  // Enable the global deep-sleep GPIO hold switch (classic ESP32/S2/S3/C3 only).
+  // On C6, gpio_hold_en() already preserves pin state across deep sleep — no
+  // separate global enable is needed or available.
   gpio_deep_sleep_hold_en();
+#endif
 
   Serial.flush();
   esp_deep_sleep_start();
