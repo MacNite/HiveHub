@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Insights — rule-based colony detection — HiveScale</title>
+<meta name="description" content="How the HiveScale Insights module turns weight, temperature, sound, entrance traffic and comb vibration into rule-based colony alerts: twelve detectors for swarming, queenlessness, robbing, foraging, winter risk and harvest timing." />
+<link rel="stylesheet" href="assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+
+<header class="site-nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="logo">🐝</span> HiveScale</a>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="#detectors">Detectors</a>
+      <a href="#severities">Severities</a>
+      <a href="#science">Science</a>
+      <a href="configurator.html">secrets.h tool</a>
+      <a href="https://github.com/MacNite/HiveScale">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<a id="top"></a>
+<section class="hero" style="border-top:none; padding-bottom:2rem">
+  <div class="wrap">
+    <span class="badge">🔬 Preview — the rules exist; evaluation &amp; tuning are work in progress</span>
+    <h1>From raw sensors<br>to colony insights.</h1>
+    <p class="lead">
+      The Insights module turns the time-series your HiveScale already records — weight,
+      hive temperature, ambient conditions, in-hive sound, entrance traffic and comb
+      vibration — into a ranked list of plain-language alerts. Twelve rule-based detectors,
+      each watching one colony behaviour, computed independently for both hives.
+    </p>
+    <div class="cta">
+      <a class="btn" href="#detectors">🧠 See the detectors</a>
+      <a class="btn ghost" href="https://github.com/MacNite/HiveScale/blob/main/docs/insights.md">📄 Full reference</a>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="sub">
+      Insights are computed in <code>server/insights.py</code> — pure Python, no database
+      access — and served from <code>/api/v1/devices/{id}/insights</code>. HivePal renders
+      them in the <strong>HiveScale → Insights</strong> card and caches them for five minutes.
+    </p>
+    <div class="grid">
+      <div class="card"><div class="ico">🧮</div><h3>Rule-based &amp; transparent</h3><p>Every alert traces back to one detector function and one documented threshold — no black box. You can read exactly why it fired.</p></div>
+      <div class="card"><div class="ico">📅</div><h3>Up to 14 days lookback</h3><p>Each call compares recent readings against a rolling baseline. The window is configurable with the <code>lookback_days</code> query parameter.</p></div>
+      <div class="card"><div class="ico">⚖️</div><h3>Per channel</h3><p>Every detector runs separately for scale 1 and scale 2, so two colonies on one device are assessed independently.</p></div>
+      <div class="card"><div class="ico">📊</div><h3>Ranked output</h3><p>A flat list of alerts sorted by severity then time. Each carries a category, a confidence score and a human-readable description.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="severities">
+  <div class="wrap">
+    <h2>Four severities</h2>
+    <p class="sub">
+      Every alert is tagged with one of four levels. HivePal uses them to colour-code the
+      alert rows and the per-hive badge on the latest-value panel — which always shows the
+      <strong>highest</strong> active severity (<code>critical &gt; warning &gt; watch &gt; info</code>).
+    </p>
+    <div class="sev-legend">
+      <div class="card"><div><span class="sev info">info</span></div><p>Informational classification — no action required.</p></div>
+      <div class="card"><div><span class="sev watch">watch</span></div><p>A trend worth monitoring — inspect on your next routine visit.</p></div>
+      <div class="card"><div><span class="sev warning">warning</span></div><p>Something is happening now — investigate within hours.</p></div>
+      <div class="card"><div><span class="sev critical">critical</span></div><p>An acute event — immediate attention recommended.</p></div>
+    </div>
+    <p class="muted" style="margin-top:1rem">
+      A single detector can change level with context — a swarm departure is
+      <span class="sev critical">critical</span> during the day but
+      <span class="sev warning">warning</span> at night.
+    </p>
+  </div>
+</section>
+
+<section id="detectors">
+  <div class="wrap">
+    <h2>The detector catalogue</h2>
+    <p class="sub">
+      Twelve detectors, each a single function in <code>insights.py</code> with one documented
+      rule. They are grouped here by what they watch for; the number matches the reference doc.
+    </p>
+
+    <!-- ── Swarming ────────────────────────────────────────────── -->
+    <div class="group-title"><span class="ico">🐝</span><h3>Swarming</h3></div>
+    <div class="detectors">
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">1</span><h3>Pre-swarm watch</h3><span class="sev watch">watch</span></div>
+        <div class="fires"><b>Fires when</b> the 24 h hive-temperature std-dev is ≥ <b>1.5×</b> the 7-day baseline std-dev.</div>
+        <p>Thermoregulation loosens hours-to-days before a swarm. <b>Tells you:</b> inspect for queen cells in the next 24–48 h.</p>
+        <div class="d-meta">Input: hive temperature · Source: spec Phase 1, MSPB
+          <span class="fusion">🔊📳 Boosted by the mic piping band (300–550 Hz) and the ~20 Hz night vibration band when present.</span>
+        </div>
+      </div>
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">2</span><h3>Imminent swarm</h3><span class="sev warning">warning</span></div>
+        <div class="fires"><b>Fires when</b> all three hold: temp − 4 h baseline ≥ <b>1.5 °C</b>, still rising at ≥ <b>0.5 °C/h</b>, and absolute temp &gt; <b>36.5 °C</b>.</div>
+        <p>In the final ~10–30 minutes the cluster gathers near the entrance and the upper hive spikes. <b>Tells you:</b> a swarm may leave within the half hour — ready a swarm box.</p>
+        <div class="d-meta">Input: hive temperature · Source: spec Phase 2, Stalidzans &amp; Berzonis (2013)</div>
+      </div>
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">3</span><h3>Swarm event</h3><span class="sev critical">critical</span><span class="sev warning">warning</span></div>
+        <div class="fires"><b>Fires when</b> weight drops ≥ <b>1.5 kg</b> within ≤ <b>30 min</b>. <span class="sev critical">critical</span> in daylight (09:00–17:00), otherwise <span class="sev warning">warning</span>.</div>
+        <p>A departing swarm takes 50–70% of the adult bees in minutes — a near-step drop on the scale. <b>Tells you:</b> a swarm has very likely just left; check the hive.</p>
+        <div class="d-meta">Input: weight · Source: spec Phase 3
+          <span class="fusion">🐝 BeeCounter: matching asymmetric outflow raises confidence and promotes a night-time warning to critical.</span>
+        </div>
+      </div>
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">11</span><h3>Pre-swarm vibration rising</h3><span class="sev watch">watch</span></div>
+        <div class="fires"><b>Fires when</b> the recent (2-day) night-time mean of the 8–30 Hz swarm band is ≥ <b>2.0×</b> its ~8-day night baseline, both above the noise floor.</div>
+        <p>A ~20 Hz comb vibration builds in the days-to-weeks before swarming and is clearest at night — below what hive microphones can hear. <b>Tells you:</b> plan swarm control.</p>
+        <div class="d-meta">Input: accelerometer swarm band, night, active season · Source: Ramsey (2020), Bencsik (2011), Uthoff (2023)
+          <span class="fusion">📳 Degrades to nothing without an accelerometer; also boosts detector 1.</span>
+        </div>
+      </div>
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">12</span><h3>Pre-swarm movement rising</h3><span class="sev watch">watch</span></div>
+        <div class="fires"><b>Fires when</b> the recent night-time mean of a passive BLE beacon's broadband magnitude is ≥ <b>1.8×</b> its baseline. Defers to detector 11 where real FFT bands exist.</div>
+        <p>A low-rate beacon (HolyIot / RuuviTag) can't compute the FFT band, so this trends its coarse night-time movement instead — deliberately lower confidence.</p>
+        <div class="d-meta">Input: low-rate accelerometer magnitude, night, active season · Source: Bencsik (2011), Ramsey (2020) — low-rate proxy</div>
+      </div>
+
+    </div>
+
+    <!-- ── Queen & brood ───────────────────────────────────────── -->
+    <div class="group-title"><span class="ico">👑</span><h3>Queen &amp; brood health</h3></div>
+    <div class="detectors">
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">4</span><h3>Queenlessness</h3><span class="sev warning">warning</span></div>
+        <div class="fires"><b>Fires when</b> (active season, Mar–Sep) the 7-day hive-temp std-dev is &gt; <b>1.0 °C</b> <em>and</em> the 7-day net weight change is ≤ <b>0.2 kg</b> (stagnant).</div>
+        <p>Without a queen, brood rearing stops, thermoregulation loosens and the weight curve stalls in season. <b>Tells you:</b> inspect for eggs and brood; plan a queen introduction.</p>
+        <div class="d-meta">Inputs: hive temperature + weight · Source: spec (2-of-3, no audio)
+          <span class="fusion">🐝 BeeCounter: a sustained ≥ 5%/day forager decline adds confidence (corroborative only).</span>
+        </div>
+      </div>
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">7</span><h3>Brood cycle / colony state</h3><span class="sev watch">watch</span><span class="sev info">info</span></div>
+        <div class="fires"><b>Fires when</b> the 24 h std-dev is &lt; <b>0.5 °C</b> with a mean of 34–36.5 °C → active brood <span class="sev info">info</span>; or &gt; <b>2.0 °C</b> → broodless / weak <span class="sev watch">watch</span>.</div>
+        <p>Brood needs tight thermoregulation, so a narrow band around 34–35 °C confirms active rearing. <b>Tells you:</b> a quick health check — a watch warrants an inspection.</p>
+        <div class="d-meta">Input: hive temperature · Source: project spec</div>
+      </div>
+
+    </div>
+
+    <!-- ── Activity, foraging & harvest ────────────────────────── -->
+    <div class="group-title"><span class="ico">📈</span><h3>Activity, foraging &amp; harvest</h3></div>
+    <div class="detectors">
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">5</span><h3>Robbing</h3><span class="sev warning">warning</span><span class="sev watch">watch</span></div>
+        <div class="fires"><b>Fires when</b> weight loss is ≥ <b>0.4 kg/h</b> sustained over ≥ <b>30 min</b> and does not match the swarm signature. <span class="sev warning">warning</span> in the late-afternoon peak (15:00–19:00), otherwise <span class="sev watch">watch</span>.</div>
+        <p>A robbed hive loses honey far faster than normal foraging swings. <b>Tells you:</b> reduce the entrance, or close / move the colony if it is sustained.</p>
+        <div class="d-meta">Input: weight · Source: project spec
+          <span class="fusion">🐝 BeeCounter: an incoming spike with low outflow (≥ 200 bees/h, asymmetry ≥ 0.4) upgrades watch → warning.</span>
+        </div>
+      </div>
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">6</span><h3>Foraging intensity</h3><span class="sev watch">watch</span><span class="sev info">info</span></div>
+        <div class="fires"><b>Fires when</b> the 24 h weight delta is ≥ <b>+1.0 kg</b> (strong) or ≥ <b>+0.2 kg</b> (moderate) → <span class="sev info">info</span>; or ≤ <b>−0.2 kg</b> → <span class="sev watch">watch</span>.</div>
+        <p>Daily weight delta is the classic nectar-flow proxy. <b>Tells you:</b> strong flow → consider a super; a negative delta → check for dearth, disease, robbing or queen problems.</p>
+        <div class="d-meta">Input: weight · Source: spec, Meikle et al. (2008)
+          <span class="fusion">🐝 BeeCounter cross-check: gain without outbound traffic lowers confidence (a suspect reading); active traffic raises it.</span>
+        </div>
+      </div>
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">10</span><h3>Harvest window</h3><span class="sev info">info</span></div>
+        <div class="fires"><b>Fires when</b> the 7-day weight delta falls from &gt; <b>2.0 kg/week</b> to &lt; <b>0.3 kg/week</b> and the plateau lasts ≥ <b>4 days</b>.</div>
+        <p>Honey flows climb fast then plateau; harvesting at the top of the plateau maximises yield. <b>Tells you:</b> the flow looks finished — supers may be ready. Confirm by inspection.</p>
+        <div class="d-meta">Input: weight · Source: project spec</div>
+      </div>
+
+    </div>
+
+    <!-- ── Decline & overwintering ─────────────────────────────── -->
+    <div class="group-title"><span class="ico">❄️</span><h3>Decline &amp; overwintering</h3></div>
+    <div class="detectors">
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">8</span><h3>Absconding / collapse trend</h3><span class="sev watch">watch</span></div>
+        <div class="fires"><b>Fires when</b> both hold over 14 days: weight loss &gt; <b>100 g/day</b> sustained <em>and</em> a positive regression slope on the daily std-dev (variance widening).</div>
+        <p>A colony in slow decline bleeds weight while its thermoregulation deteriorates. <b>Tells you:</b> inspect within the next routine cycle for disease, queen status and stressors.</p>
+        <div class="d-meta">Inputs: hive temperature + weight · Source: spec (2-of-3)
+          <span class="fusion">🐝 BeeCounter: a ≥ 3%/day forager decline makes it 3-of-3 and auto-promotes watch → warning.</span>
+        </div>
+      </div>
+
+      <div class="detector">
+        <div class="d-head"><span class="d-num">9</span><h3>Winter survival risk</h3><span class="sev warning">warning</span><span class="sev watch">watch</span></div>
+        <div class="fires"><b>Fires when</b> (Oct–Feb) at least one holds: min hive temp 7d &lt; mean ambient 7d + <b>2.0 °C</b> (weak cluster), or weight loss &gt; <b>300 g/week</b> (high consumption). Both → <span class="sev warning">warning</span>.</div>
+        <p>A strong cluster stays well above ambient and burns stores predictably. <b>Tells you:</b> verify food on the next mild day; consider emergency fondant.</p>
+        <div class="d-meta">Inputs: hive temp, ambient temp, weight · Source: project spec
+          <span class="fusion">🐝 BeeCounter: a cleansing flight (≥ 50 bees out) is positive evidence the cluster is alive and softens the alert.</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="fusion">
+  <div class="wrap">
+    <h2>Sensor fusion, with graceful degradation</h2>
+    <p class="sub">
+      Weight and hive temperature are the always-present base signals. Every other input is
+      optional — when a sensor is fitted it <em>raises confidence</em> or <em>promotes
+      severity</em>; when it is absent the detector quietly falls back to its
+      weight/temperature rule. No detector ever <em>requires</em> an optional sensor.
+    </p>
+    <div class="grid">
+      <div class="card"><div class="ico">🔊</div><h3>Microphone (FFT bands)</h3><p>Piping / tooting confirms pre-swarm, an agitated spectrum supports robbing, and the acoustic signature supports queenlessness. <strong>Integrated.</strong></p></div>
+      <div class="card"><div class="ico">🐝</div><h3>Entrance counter (BeeCounter)</h3><p>Asymmetric outflow confirms swarming, incoming spikes flag robbing, and forager decline supports queenlessness, absconding and winter checks. <strong>Integrated.</strong></p></div>
+      <div class="card"><div class="ico">📳</div><h3>In-hive vibration</h3><p>The ~20 Hz night-time comb signal microphones can't reach — fires the standalone pre-swarm detectors and boosts the temperature watch. <strong>Integrated.</strong></p></div>
+    </div>
+    <div class="note info" style="margin-top:1rem">
+      Example: a night-time swarm <span class="sev warning">warning</span> from the weight drop
+      is promoted to <span class="sev critical">critical</span> once the BeeCounter shows the
+      matching asymmetric outflow — the entrance traffic rules out a measurement artefact.
+    </div>
+  </div>
+</section>
+
+<section id="science">
+  <div class="wrap">
+    <h2>Grounded in the literature</h2>
+    <p class="sub">
+      The thresholds are starting values calibrated against a project spec and the public
+      research below. A one-paragraph TL;DR of each lives in
+      <a href="https://github.com/MacNite/HiveScale/blob/main/docs/insights-sources-tldr.md">insights-sources-tldr.md</a>.
+    </p>
+    <div class="grid">
+      <div class="card"><h3>Seeley (2010)</h3><p><em>Honeybee Democracy.</em> The behavioural basis — swarming is a deliberate, days-long preparation, not a sudden event.</p></div>
+      <div class="card"><h3>Stalidzans &amp; Berzonis (2013)</h3><p>A persistent temperature rise above the brood nest precedes swarming — the basis for the pre-swarm temperature detectors.</p></div>
+      <div class="card"><h3>Meikle et al. (2008)</h3><p>Within-day hive-weight variation as a measure of colony activity — the day/night weight-delta foraging method.</p></div>
+      <div class="card"><h3>Kulkarni &amp; Murphy</h3><p>A multi-sensor benchmark (weight + in-hive temp + entrance traffic) — the closest match to the HiveScale stack for validation.</p></div>
+      <div class="card"><h3>MSPB dataset (2023)</h3><p>53 hives, one year of audio + temperature + humidity — validation for the temperature-only queenlessness fallback.</p></div>
+      <div class="card"><h3>Ramsey et al. (2020)</h3><p>A rising ~20 Hz night-time comb vibration predicted &gt; 90% of swarms and never misfired — the basis for the vibration detector.</p></div>
+      <div class="card"><h3>Bencsik et al. (2011)</h3><p>Comb vibration diverges from baseline days ahead of swarming — justifies a trend / baseline comparison over a fixed threshold.</p></div>
+      <div class="card"><h3>Uthoff et al. (2023)</h3><p>A review recommending a low-frequency accelerometer to capture the ~20 Hz signal microphones miss — why HiveScale added one.</p></div>
+    </div>
+
+    <h3 style="margin-top:1.8rem">What the research agrees on</h3>
+    <ul class="agree">
+      <li>Swarming is <b>predictable</b> — colonies show precursor signals days in advance.</li>
+      <li>Temperature is a strong <b>early</b> indicator of swarm preparation, queenlessness and stress.</li>
+      <li>Continuous weight encodes foraging, nectar flow, swarm departures and population change.</li>
+      <li><b>Multi-modal</b> sensing beats any single sensor.</li>
+      <li><b>Trend deviations from a baseline</b> beat absolute thresholds — which is why most detectors compare against a rolling baseline rather than a fixed number.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="tuning">
+  <div class="wrap">
+    <h2>Tune it to your apiary</h2>
+    <p class="sub">
+      All thresholds are constants near the top of <code>server/insights.py</code>. The defaults
+      are sensible starting points — re-tune them against your own history, especially the
+      swarm-drop weight, the winter consumption rate and the foraging deltas, which all depend
+      on box size, climate and regional flow strength.
+    </p>
+    <pre>SWARM_WEIGHT_DROP_KG            = 1.5
+SWARM_WEIGHT_WINDOW_MIN         = 30
+PRE_SWARM_STD_MULTIPLIER        = 1.5
+ROBBING_WEIGHT_LOSS_KG_PER_HOUR = 0.4
+QUEENLESS_TEMP_STDDEV_C         = 1.0
+WINTER_WEIGHT_LOSS_G_PER_WEEK   = 300
+HARVEST_FLOW_KG_PER_WEEK        = 2.0
+# … plus the per-sensor fusion thresholds</pre>
+    <p class="muted" style="margin-top:1rem">
+      Planned: expose these per device via <code>/api/v1/devices/{id}/config</code> so you can
+      tune without redeploying the backend.
+    </p>
+  </div>
+</section>
+
+<section id="more">
+  <div class="wrap">
+    <h2>Read more</h2>
+    <div class="grid">
+      <div class="card"><h3>📄 Insights reference</h3><p>The authoritative detector catalogue with every threshold and source.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/insights.md">docs/insights.md →</a></p></div>
+      <div class="card"><h3>📚 Sources TL;DR</h3><p>One-paragraph summaries of every paper behind the rules.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/insights-sources-tldr.md">insights-sources-tldr.md →</a></p></div>
+      <div class="card"><h3>📳 Accelerometer</h3><p>The ~20 Hz pre-swarm vibration signal and the hardware behind detectors 11 &amp; 12.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
+      <div class="card"><h3>🐍 insights.py</h3><p>The implementation — pure Python, one function per detector.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/server/insights.py">server/insights.py →</a></p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
+    <span>🐝 HiveScale — MIT © 2026 Maximilian Nitschke</span>
+    <span><a href="index.html">Home</a> · <a href="https://github.com/MacNite/HiveScale">GitHub</a> · <a href="configurator.html">secrets.h tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

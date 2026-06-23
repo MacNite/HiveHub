@@ -4,6 +4,11 @@ A small, dependency-free static site for HiveScale:
 
 - **`index.html`** — landing page describing the features and a step-by-step
   "set up your own HiveScale" guide.
+- **`insights.html`** — a page explaining the rule-based Insights module: the
+  four severities, the twelve-detector catalogue (grouped by swarming, queen /
+  brood, activity and overwintering), how optional sensors are fused in, and the
+  research the thresholds are based on. Mirrors `docs/insights.md` and
+  `docs/insights-sources-tldr.md`.
 - **`configurator.html`** — an in-browser tool that builds a firmware
   `secrets.h` from a form (device identity, Wi-Fi, sensors, BLE/GATT options,
   off-grid power modules) and lets you copy or download it. Everything runs

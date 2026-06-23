@@ -189,3 +189,54 @@ fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
 
 .muted { color: var(--ink-soft); }
 .mono { font-family: var(--mono); }
+
+/* ── Insights page ────────────────────────────────────────────── */
+/* Severity pills — mirror the four levels HivePal renders. */
+.sev {
+  display: inline-block; font-size: .72rem; font-weight: 800;
+  padding: .12rem .55rem; border-radius: 999px; border: 1px solid;
+  text-transform: uppercase; letter-spacing: .03em; line-height: 1.5;
+}
+.sev.info     { color: #1565c0;      border-color: #bcd6f5; background: #eaf2fd; }
+.sev.watch    { color: #7a5e00;      border-color: #ecd98a; background: #fdf6dc; }
+.sev.warning  { color: var(--warn);  border-color: #e7c98a; background: #fff4dd; }
+.sev.critical { color: var(--danger); border-color: #f0c2cb; background: #fdecef; }
+
+/* Severity legend cards */
+.sev-legend { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.sev-legend .card { display: flex; gap: .7rem; align-items: flex-start; }
+.sev-legend .card p { margin: 0; }
+
+/* Detector group headings */
+.group-title { display: flex; align-items: center; gap: .6rem; margin: 2.2rem 0 1rem; }
+.group-title .ico { font-size: 1.4rem; }
+.group-title h3 { margin: 0; font-size: 1.2rem; }
+
+/* Detector cards */
+.detectors { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.detector {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 1.1rem 1.2rem; box-shadow: var(--shadow); display: flex; flex-direction: column;
+}
+.detector .d-head { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.detector .d-head h3 { margin: 0; font-size: 1.05rem; flex: 1 1 auto; }
+.detector .d-num {
+  width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--comb);
+  border: 1px solid var(--line); display: grid; place-items: center;
+  font-weight: 800; font-size: .8rem; color: var(--ink-soft);
+}
+.detector .fires {
+  background: var(--comb); border: 1px solid var(--line); border-radius: 9px;
+  padding: .5rem .7rem; font-size: .86rem; margin: 0 0 .6rem;
+}
+.detector > p { margin: 0 0 .6rem; color: var(--ink-soft); font-size: .92rem; }
+.detector .d-meta {
+  margin-top: auto; font-size: .8rem; color: var(--ink-soft);
+  border-top: 1px solid var(--line); padding-top: .6rem;
+}
+.detector .d-meta .fusion { display: block; margin-top: .35rem; }
+
+/* "What the research agrees on" list */
+ul.agree { margin: .5rem 0 0; padding-left: 1.2rem; color: var(--ink-soft); max-width: 72ch; }
+ul.agree li { margin: .35rem 0; }
+ul.agree b { color: var(--ink); }
