@@ -44,8 +44,15 @@ or from the 5 V / 3 V3 header pins. All sensors connect to 3 V3.
 ### Antenna selection
 
 The XIAO ESP32-C6 has a built-in ceramic patch antenna and a u.FL connector for
-an external antenna. The RF switch is controlled by GPIO3 (internal PCB trace,
-not exposed on headers). Firmware defaults to the built-in antenna.
+an external antenna. Selection uses the on-board FM8625H RF switch, driven by two
+internal-trace GPIOs (not exposed on the headers):
+
+- **GPIO3 (RF_SWITCH_EN)** — driven LOW at boot to enable the RF switch; required
+  for either antenna.
+- **GPIO14 (RF_ANT_SELECT)** — LOW selects the built-in ceramic antenna, HIGH
+  selects the external u.FL antenna.
+
+Firmware defaults to the built-in antenna.
 
 To switch to the external u.FL antenna, add to `secrets.h`:
 
@@ -56,7 +63,7 @@ To switch to the external u.FL antenna, add to `secrets.h`:
 The firmware logs the active antenna selection on every boot:
 
 ```
-[ANT] XIAO C6: external antenna (GPIO3=HIGH)
+[ANT] XIAO C6: external antenna (EN GPIO3=LOW, SEL GPIO14=HIGH)
 ```
 
 ### What works / what does not

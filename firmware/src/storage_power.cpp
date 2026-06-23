@@ -401,15 +401,22 @@ bool appendCacheLine(const String& line) {
 
 void configureC6Antenna() {
 #ifdef CONFIG_IDF_TARGET_ESP32C6
-  // Drive the RF switch on the XIAO ESP32-C6 PCB (GPIO3, internal trace):
-  //   LOW  → built-in ceramic patch antenna
-  //   HIGH → external u.FL antenna
-  // Controlled by XIAO_C6_USE_EXTERNAL_ANTENNA in secrets.h (default 0 = internal).
-  pinMode(XIAO_C6_ANTENNA_GPIO, OUTPUT);
-  digitalWrite(XIAO_C6_ANTENNA_GPIO, XIAO_C6_USE_EXTERNAL_ANTENNA ? HIGH : LOW);
-  Serial.printf("[ANT] XIAO C6: %s antenna (GPIO%d=%s)\n",
+  // The XIAO ESP32-C6 routes the radio through an on-board FM8625H RF switch
+  // controlled by two internal-trace GPIOs:
+  //   GPIO3  (RF_SWITCH_EN)  — drive LOW to ENABLE the switch (required for
+  //                            either antenna).
+  //   GPIO14 (RF_ANT_SELECT) — LOW = built-in ceramic, HIGH = external u.FL.
+  // Selection is controlled by XIAO_C6_USE_EXTERNAL_ANTENNA in secrets.h
+  // (default 0 = internal).
+  pinMode(XIAO_C6_RF_SWITCH_EN_GPIO, OUTPUT);
+  digitalWrite(XIAO_C6_RF_SWITCH_EN_GPIO, LOW);   // enable RF switch
+  pinMode(XIAO_C6_ANTENNA_SELECT_GPIO, OUTPUT);
+  digitalWrite(XIAO_C6_ANTENNA_SELECT_GPIO,
+               XIAO_C6_USE_EXTERNAL_ANTENNA ? HIGH : LOW);
+  Serial.printf("[ANT] XIAO C6: %s antenna (EN GPIO%d=LOW, SEL GPIO%d=%s)\n",
       XIAO_C6_USE_EXTERNAL_ANTENNA ? "external" : "internal",
-      (int)XIAO_C6_ANTENNA_GPIO,
+      (int)XIAO_C6_RF_SWITCH_EN_GPIO,
+      (int)XIAO_C6_ANTENNA_SELECT_GPIO,
       XIAO_C6_USE_EXTERNAL_ANTENNA ? "HIGH" : "LOW");
 #endif
 }

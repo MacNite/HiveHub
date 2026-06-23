@@ -381,18 +381,26 @@
 // XIAO ESP32-C6 ANTENNA SELECTION
 // ==============================
 // The XIAO ESP32-C6 has both a built-in ceramic patch antenna and a u.FL
-// connector for an external antenna. The RF switch is driven by GPIO3 (internal
-// board trace, not broken out on the headers):
-//   GPIO3 LOW  → built-in ceramic antenna (default)
-//   GPIO3 HIGH → external u.FL antenna
+// connector for an external antenna. Selection uses the on-board FM8625H RF
+// switch, driven by TWO internal-trace GPIOs (not broken out on the headers):
+//   GPIO3  (RF_SWITCH_EN)  — must be driven LOW to ENABLE the RF switch. This
+//                            is required for EITHER antenna; leaving it HIGH
+//                            disables the switch and cripples the radio.
+//   GPIO14 (RF_ANT_SELECT) — LOW  → built-in ceramic antenna (default)
+//                            HIGH → external u.FL antenna
 // To use an external antenna, add to secrets.h:
 //   #define XIAO_C6_USE_EXTERNAL_ANTENNA 1
 #ifdef CONFIG_IDF_TARGET_ESP32C6
 #ifndef XIAO_C6_USE_EXTERNAL_ANTENNA
 #define XIAO_C6_USE_EXTERNAL_ANTENNA 0
 #endif
-#ifndef XIAO_C6_ANTENNA_GPIO
-#define XIAO_C6_ANTENNA_GPIO 3
+// GPIO3: RF switch enable (active-low). Driven LOW at boot to power the switch.
+#ifndef XIAO_C6_RF_SWITCH_EN_GPIO
+#define XIAO_C6_RF_SWITCH_EN_GPIO 3
+#endif
+// GPIO14: antenna select (LOW = internal ceramic, HIGH = external u.FL).
+#ifndef XIAO_C6_ANTENNA_SELECT_GPIO
+#define XIAO_C6_ANTENNA_SELECT_GPIO 14
 #endif
 #endif // CONFIG_IDF_TARGET_ESP32C6
 
