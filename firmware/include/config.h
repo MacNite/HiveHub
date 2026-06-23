@@ -5,6 +5,13 @@
 // pin choices, sample rates) take effect before the defaults below.
 #pragma once
 
+// This header is included before <Arduino.h> (globals.h pulls config.h in first
+// so feature flags resolve before the conditional driver includes). It therefore
+// cannot rely on Arduino transitively providing the fixed-width / size types it
+// uses for the constants at the bottom of this file — include them explicitly.
+#include <stdint.h>
+#include <stddef.h>
+
 #include "secrets.h"
 
 // ==============================
