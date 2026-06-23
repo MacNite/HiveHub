@@ -31,6 +31,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from insights import compute_insights, summarize
+from mqtt_publisher import publisher as mqtt_publisher
 from sd_import import split_new_and_duplicate
 from tempcomp import (
     VALID_TEMP_SOURCES,
@@ -1115,11 +1116,13 @@ def startup():
     FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
     start_insight_reconciler()
+    mqtt_publisher.start()
 
 
 @app.on_event("shutdown")
 def shutdown():
     stop_insight_reconciler()
+    mqtt_publisher.stop()
     db_pool.close()
 
 
@@ -1395,6 +1398,13 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
             )
             new_id = cur.fetchone()[0]
             conn.commit()
+    # Mirror the reading to MQTT (Home Assistant etc.) when the bridge is enabled.
+    # This is purely additive and fail-soft — it never affects the stored result.
+    mqtt_publisher.publish_measurement(
+        payload.device_id,
+        payload.model_dump(mode="json", exclude_none=True, exclude={"claim_code"}),
+        measured_at,
+    )
     return {"status": "ok", "id": new_id, "measured_at": measured_at.isoformat()}
 
 

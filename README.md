@@ -36,6 +36,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Optional off-grid mode** — solar/LiPo charging with INA219 solar telemetry and MAX17048 LiPo telemetry.
 - **Optional entrance bee counters** — wired [BeeCounter](https://github.com/MacNite/2026-easy-bee-counter) (I2C) or wireless HiveTraffic (BLE/GATT).
 - **[HivePal](https://github.com/martinhrvn/hive-pal) integration** — dedicated `/api/v1/app/...` endpoints using a HivePal service key, per-user JWTs, and per-user access roles.
+- **Optional MQTT bridge** — mirror every reading to an MQTT broker (Home Assistant, Node-RED, openHAB…) with Home Assistant auto-discovery, alongside the built-in PostgreSQL store. Off by default; see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration).
 - **Breakout PCB design** — KiCad Scale Module + Power Module with fabrication outputs.
 - **Docker Compose deployment** — the API and PostgreSQL database.
 
@@ -262,9 +263,55 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `RATE_LIMIT_ENABLED` / `RATE_LIMIT_DEFAULT` | Optional | Per-client-IP rate limit (default on, `120/minute`) |
 | `MAX_BODY_BYTES` / `MAX_FIRMWARE_BYTES` | Optional | Request-body and firmware-upload size caps (default 256 KiB / 16 MiB) |
 | `INSIGHTS_RECONCILE_*` | Optional | Background insight-history reconciliation (see `server/.env.example`) |
+| `MQTT_*` | Optional | MQTT bridge to Home Assistant / Node-RED / openHAB (off by default — see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration)) |
 | `TZ` | Optional | Server timezone, for example `Europe/Berlin` |
 
 The backend auto-creates tables and runs idempotent `ALTER TABLE` statements on startup; the SQL files in `server/migrations/` can also be applied manually.
+
+---
+
+## MQTT / Home Assistant integration
+
+The backend can **optionally** mirror every measurement to an MQTT broker in
+addition to storing it in PostgreSQL — so HiveScale data flows into
+[Home Assistant](https://www.home-assistant.io/), Node-RED, openHAB or any MQTT
+consumer. It is **off by default** and purely additive: the bridge runs in a
+background thread and is fail-soft, so a broker outage never affects ingestion
+or the API.
+
+Enable it by setting `MQTT_ENABLED=true` and pointing `MQTT_HOST` at your broker
+(see `server/.env.example` / `docker/env.example` for the full list):
+
+```bash
+MQTT_ENABLED=true
+MQTT_HOST=192.168.1.10        # your broker (e.g. the Mosquitto add-on)
+MQTT_PORT=1883
+MQTT_USERNAME=hivescale       # optional
+MQTT_PASSWORD=...             # optional
+MQTT_HA_DISCOVERY=true        # auto-create Home Assistant entities
+```
+
+### Topics
+
+With `MQTT_BASE_TOPIC=hivescale` (the default):
+
+| Topic | Payload |
+|---|---|
+| `hivescale/bridge/availability` | `online` / `offline` (bridge last-will) |
+| `hivescale/<device_id>/availability` | `online` / `offline` (per device) |
+| `hivescale/<device_id>/state` | Retained JSON of the latest reading (every non-null measurement field) |
+
+### Home Assistant
+
+When `MQTT_HA_DISCOVERY=true`, the bridge publishes
+[MQTT-discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+configs the first time it sees each device. Home Assistant then automatically
+creates one device per scale with a curated set of sensors — scale weights,
+hive/ambient temperature & humidity, battery voltage/charge, solar power, Wi-Fi
+signal, and bee-counter totals. All other fields remain available in the raw
+`state` JSON for custom templated sensors. Just make sure the
+[MQTT integration](https://www.home-assistant.io/integrations/mqtt/) is set up
+and pointed at the same broker.
 
 ---
 
