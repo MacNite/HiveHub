@@ -239,6 +239,17 @@ void loadHiveConfig() {
 
   Serial.printf("[HIVECFG] Loaded %u hive(s), %u scale channel(s)\n",
                 gHiveCount, totalScaleChannels());
+  // Per-hive sensor dump — confirms exactly which type/MAC is stored for each
+  // hive (so a "sensor reverted to the wrong type" report can be checked against
+  // what is actually in NVS rather than what the portal happens to render).
+  for (uint8_t h = 0; h < gHiveCount; h++) {
+    const Hive& hive = gHives[h];
+    Serial.printf("[HIVECFG]   hive %u \"%s\": %u scale(s), %u BLE sensor(s)\n",
+                  hive.index, hive.name.c_str(), hive.scaleCount, hive.bleCount);
+    for (uint8_t b = 0; b < hive.bleCount; b++)
+      Serial.printf("[HIVECFG]     ble[%u] type=%s mac=%s\n",
+                    b, hive.ble[b].type.c_str(), hive.ble[b].mac.c_str());
+  }
 }
 
 void saveHiveConfig() {

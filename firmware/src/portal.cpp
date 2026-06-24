@@ -318,7 +318,7 @@ void handleBleScan() {
   std::vector<blesensor::Discovered> found = blesensor::discover(HOLYIOT_BLE_SCAN_SECONDS);
 
   String html;
-  html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
   html += "<title>BLE scan</title>";
   html += "<style>"
           ":root{--bg:#f6f7f8;--card:#fff;--fg:#1a1d23;--muted:#667085;--border:#e4e7ec;--accent:#f59e0b;--link:#b46b00}"
@@ -345,7 +345,7 @@ void handleBleScan() {
     html += "<p><a href='/ble/scan'>Scan again</a></p>";
   }
   html += "</div></body></html>";
-  setupServer.send(200, "text/html", html);
+  setupServer.send(200, "text/html; charset=utf-8", html);
 }
 #endif
 
@@ -444,7 +444,7 @@ static String initialHivesJs() {
 void handleI2cScan() {
   sendNoCacheHeaders();
   String html;
-  html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
   html += "<title>I2C scan</title></head><body style='font-family:system-ui;margin:24px'>";
   html += "<h1>I2C scale scan</h1>";
 #if ENABLE_I2C_MUX
@@ -471,7 +471,7 @@ void handleI2cScan() {
   html += "</ul>";
 #endif
   html += "<p><a href='/'>Back to setup</a></p></body></html>";
-  setupServer.send(200, "text/html", html);
+  setupServer.send(200, "text/html; charset=utf-8", html);
 }
 
 // ── Local scale calibration (offline, inside the captive portal) ─────────────
@@ -581,7 +581,7 @@ static void handleCalibrateSet() {
 static void handleCalibratePage() {
   sendNoCacheHeaders();
   String html;
-  html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
   html += "<title>Scale calibration</title><style>"
           "body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;margin:0;padding:20px;background:#f6f7f8;color:#1a1d23;line-height:1.5}"
           ".wrap{max-width:680px;margin:0 auto}h1{font-size:1.5rem;margin:0 0 6px}"
@@ -624,14 +624,14 @@ fetch('/calibrate/set',{method:'POST',headers:{'Content-Type':'application/x-www
 poll();
 </script>)CAL";
   html += "</div></body></html>";
-  setupServer.send(200, "text/html", html);
+  setupServer.send(200, "text/html; charset=utf-8", html);
 }
 
 void handleSetupRoot() {
   sendNoCacheHeaders();
 
   String html;
-  html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
   html += "<title>HiveScale Setup</title>";
   // Self-contained inline theme (no external fonts/CSS/JS so it works on the
   // offline captive portal). Brand accent matches Hive Pal (amber #f59e0b).
@@ -747,19 +747,19 @@ var sc=c.querySelector("[data-scales]");
 h.s.forEach(function(o,si){var row=document.createElement("p");row.className="wnote";
 row.innerHTML="<select data-sc>"+scaleOpts(o)+"</select> <button type='button' class='button' data-rm>Remove</button>";
 sc.appendChild(row);
-row.querySelector("[data-sc]").addEventListener("change",function(){var n=findScale(this.value);if(n){n.off=o.off||0;n.fac=o.fac||-7050;h.s[si]=n;}render();});
+var scs=row.querySelector("[data-sc]");scs.value=scaleKey(o);scs.addEventListener("change",function(){var n=findScale(scs.value);if(n){n.off=o.off||0;n.fac=o.fac||-7050;h.s[si]=n;}render();});
 row.querySelector("[data-rm]").addEventListener("click",function(){h.s.splice(si,1);render();});});
 c.querySelector("[data-addscale]").addEventListener("click",function(){if(h.s.length<MAX_SCALES_PER_HIVE){h.s.push(nextScale());render();}});
 var sn=c.querySelector("[data-sensors]");
 if(h.ds){var row=document.createElement("p");row.className="wnote";
 row.innerHTML="<b>Wired DS18B20</b> <select data-ds>"+probeOpts(h.ds)+"</select> <button type='button' class='button' data-rm>Remove</button>";
 sn.appendChild(row);
-row.querySelector("[data-ds]").addEventListener("change",function(){h.ds=this.value;});
+var dss=row.querySelector("[data-ds]");dss.value=h.ds;dss.addEventListener("change",function(){h.ds=dss.value;});
 row.querySelector("[data-rm]").addEventListener("click",function(){h.ds=null;render();});}
 h.bl.forEach(function(b,bi){var row=document.createElement("p");row.className="wnote";
 row.innerHTML="<select data-bt>"+typeOpts(b.t)+"</select> <input data-bm placeholder='AA:BB:CC:DD:EE:FF'> <button type='button' class='button' data-rm>Remove</button>";
 sn.appendChild(row);
-row.querySelector("[data-bt]").addEventListener("change",function(){b.t=this.value;});
+var bt=row.querySelector("[data-bt]");bt.value=b.t;bt.addEventListener("change",function(){b.t=bt.value;});
 var mi=row.querySelector("[data-bm]");mi.value=b.m||"";mi.addEventListener("input",function(){b.m=this.value;});
 row.querySelector("[data-rm]").addEventListener("click",function(){h.bl.splice(bi,1);render();});});
 c.querySelector("[data-addble]").addEventListener("click",function(){if(h.bl.length<MAX_BLE){h.bl.push({t:"holyiot",m:""});render();}});
@@ -795,7 +795,7 @@ render();
   html += "<button class='primary' type='submit'>Save and reboot</button></form>";
   html += "<form method='POST' action='/reset' onsubmit='return confirm(\"Reset all Preferences?\")'><button class='danger' type='submit'>Factory reset Preferences</button></form>";
   html += "</div></body></html>";
-  setupServer.send(200, "text/html", html);
+  setupServer.send(200, "text/html; charset=utf-8", html);
 }
 
 void handleSetupSave() {
