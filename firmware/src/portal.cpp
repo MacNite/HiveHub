@@ -89,6 +89,36 @@ String htmlEscape(String s) {
   return s;
 }
 
+// Quote + escape a string as a strict JSON string literal ("...") — which is also
+// a valid JavaScript string. Use this (not htmlEscape) wherever a user-supplied
+// value such as a hive name goes into a JSON body or an inline JS literal:
+// htmlEscape targets HTML-attribute context (it turns " into &quot;, mangling the
+// value, and leaves '\' untouched), so a name containing " \ or a control char
+// would corrupt /calibrate/read JSON or break the setup-page script.
+static String jsonQuote(const String& s) {
+  String out = "\"";
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    switch (c) {
+      case '"':  out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\n': out += "\\n";  break;
+      case '\r': out += "\\r";  break;
+      case '\t': out += "\\t";  break;
+      default:
+        if ((uint8_t)c < 0x20) {
+          char u[7];
+          snprintf(u, sizeof(u), "\\u%04x", (unsigned)(uint8_t)c);
+          out += u;
+        } else {
+          out += c;
+        }
+    }
+  }
+  out += "\"";
+  return out;
+}
+
 IPAddress provisioningPortalIp() {
   return IPAddress(192, 168, 4, 1);
 }
@@ -384,7 +414,7 @@ static String initialHivesJs() {
     const hivecfg::Hive& hive = hivecfg::gHives[h];
     if (h) js += ",";
     js += "{i:"; js += String(hive.index);
-    js += ",n:'"; js += htmlEscape(hive.name); js += "',s:[";
+    js += ",n:"; js += jsonQuote(hive.name); js += ",s:[";
     for (uint8_t s = 0; s < hive.scaleCount; s++) {
       const hivecfg::ScaleChannel& c = hive.scales[s];
       if (s) js += ",";
@@ -494,8 +524,8 @@ static void handleCalibrateRead() {
       first = false;
       String nm = hive.name.length() ? hive.name : (String("Hive ") + hive.index);
       js += "{\"h\":" + String(hive.index) + ",\"s\":" + String(s);
-      js += ",\"name\":\"" + htmlEscape(nm) + "\"";
-      js += ",\"label\":\"" + htmlEscape(calChannelLabel(ch)) + "\"";
+      js += ",\"name\":" + jsonQuote(nm);
+      js += ",\"label\":" + jsonQuote(calChannelLabel(ch));
       js += ",\"raw\":" + String(raw);
       js += ",\"kg\":" + (isnan(kg) ? String("null") : String(kg, 3));
       js += ",\"off\":" + String(ch.offset) + ",\"fac\":" + String(ch.factor, 2) + "}";

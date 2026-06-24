@@ -279,7 +279,12 @@ class MqttPublisher:
         except Exception:
             logger.debug("Could not publish bridge availability", exc_info=True)
         # Re-publish discovery after a reconnect so HA recovers its entities.
+        # Both the device-level and per-hive discovery state must be cleared —
+        # otherwise hives already seen this process keep their entry in
+        # _discovered_hives and their per-hive sensors are never re-announced
+        # after a broker restart that dropped the retained discovery configs.
         self._discovered.clear()
+        self._discovered_hives.clear()
 
     def _on_disconnect(self, client, userdata, *args) -> None:
         self._connected = False

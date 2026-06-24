@@ -12,7 +12,19 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "secrets.h"
+// Per-device secrets live in secrets.h (gitignored). Fall back to the tracked
+// example so a fresh clone / CI still compiles with placeholder values — real
+// builds must provide their own secrets.h. (__has_include is C++17, which this
+// project already targets; the defined() guard keeps older toolchains safe.)
+#if defined(__has_include)
+#  if __has_include("secrets.h")
+#    include "secrets.h"
+#  else
+#    include "secrets.example.h"
+#  endif
+#else
+#  include "secrets.h"
+#endif
 
 // ==============================
 // XIAO ESP32-C6 — BOARD-SPECIFIC SENSOR SET

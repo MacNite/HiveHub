@@ -49,10 +49,18 @@ void muxDisableAll() {
 }
 
 // Route the bus to the chip that owns `ch`: enable its mux channel, or open all
-// channels for a chip wired directly on the main bus.
-static void routeTo(const ScaleChannel& ch) {
-  if (ch.muxChannel >= 0) muxSelect((uint8_t)ch.muxChannel);
-  else                    muxDisableAll();
+// channels for a chip wired directly on the main bus. Returns false (fail closed)
+// when the channel sits behind a TCA9548A that was not detected — without this a
+// mux-configured hive would silently fall through to a direct NAU7802 on the main
+// bus and report another chip's weight as its own.
+static bool routeTo(const ScaleChannel& ch) {
+  if (ch.muxChannel >= 0) {
+    if (!gMuxPresent) return false;
+    muxSelect((uint8_t)ch.muxChannel);
+    return true;
+  }
+  muxDisableAll();
+  return true;
 }
 
 #if ENABLE_NAU7802
@@ -103,7 +111,10 @@ void begin() {
       if (ch.backend != ScaleBackend::NAU7802) continue;
       int key = chipKey(ch);
       if (gNauInited[key]) continue;
-      routeTo(ch);
+      if (!routeTo(ch)) {
+        Serial.printf("[SCALEBUS] NAU7802 mux=%d UNREACHABLE (TCA9548A absent)\n", ch.muxChannel);
+        continue;
+      }
       bool ok = nauConfigure();
       gNauInited[key] = ok;
       Serial.printf("[SCALEBUS] NAU7802 mux=%d %s\n", ch.muxChannel, ok ? "OK" : "MISSING");
@@ -128,7 +139,7 @@ long readRaw(const ScaleChannel& ch) {
 #if ENABLE_NAU7802
   if (ch.backend == ScaleBackend::NAU7802) {
     int key = chipKey(ch);
-    routeTo(ch);
+    if (!routeTo(ch)) return 0;  // mux channel but no TCA9548A — fail closed
     if (!gNauInited[key]) {
       // Lazy (re)configure if begin() missed it (e.g. chip hot-plugged).
       gNauInited[key] = nauConfigure();
@@ -155,7 +166,7 @@ void powerDownAllForSleep() {
       int key = chipKey(ch);
       if (done[key]) continue;
       done[key] = true;
-      routeTo(ch);
+      if (!routeTo(ch)) continue;  // unreachable mux channel — nothing to power down
       nau.powerDown();   // clears PU_CTRL PUD/PUA — ~microamp standby
     }
   }
