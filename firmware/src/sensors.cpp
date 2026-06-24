@@ -109,6 +109,7 @@ void syncTime() {
   timeSource = "invalid";
 }
 
+#if ENABLE_HX711
 long readAverageRaw(HX711& scale, int samples) {
   if (!scale.wait_ready_timeout(2000)) {
     Serial.println("[HX711] Not ready");
@@ -116,6 +117,7 @@ long readAverageRaw(HX711& scale, int samples) {
   }
   return scale.read_average(samples);
 }
+#endif
 
 float weightFromRaw(long raw, long offset, float factor) {
   if (factor == 0.0f) return NAN;

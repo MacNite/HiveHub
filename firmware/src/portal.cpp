@@ -348,8 +348,11 @@ static String detectedScalesJs() {
     scalebus::muxDisableAll();
   }
 #endif
+#if ENABLE_HX711
+  // The two HX711 pin channels are always offered on boards that have them.
   if (!first) js += ",";
   js += "{b:'hx',hx:0,label:'HX711 #1 (pins)'},{b:'hx',hx:1,label:'HX711 #2 (pins)'}";
+#endif
   js += "]";
   return js;
 }
@@ -516,7 +519,15 @@ void handleSetupRoot() {
   html += "var DETECTED_PROBES=" + detectedProbesJs() + ";";
   html += "var INITIAL_HIVES=" + initialHivesJs() + ";";
   html += "var MAX_HIVES=" + String(MAX_HIVES) + ";var MAX_BLE=" + String(hivecfg::MAX_BLE_PER_HIVE) + ";";
-  html += "var MAX_SCALES_PER_HIVE=" + String(hivecfg::MAX_SCALES_PER_HIVE) + ";</script>";
+  html += "var MAX_SCALES_PER_HIVE=" + String(hivecfg::MAX_SCALES_PER_HIVE) + ";";
+  // Fallback channel used by "Add scale" when the bus probe found nothing.
+#if ENABLE_HX711
+  html += "var DEFAULT_SCALE={b:'hx',hx:0,label:'HX711 #1'};";
+#else
+  html += "var DEFAULT_SCALE={b:'nau',mux:-1,adc:1,addr:" + String((int)NAU7802_I2C_ADDRESS) +
+          ",label:'NAU7802 main bus CH1'};";
+#endif
+  html += "</script>";
 
   // Inline controller (no external assets — works on the offline captive portal).
   html += R"HVJS(<script>(function(){
@@ -527,7 +538,7 @@ var HIVES=(INITIAL_HIVES||[]).map(function(h){return {i:h.i,n:h.n||"",s:(h.s||[]
 function scaleKey(o){return o.b=="nau"?("nau:"+o.mux+":"+o.adc):("hx:"+o.hx);}
 function usedScales(){var u={};HIVES.forEach(function(h){h.s.forEach(function(o){u[scaleKey(o)]=1;});});return u;}
 function usedProbes(){var u={};HIVES.forEach(function(h){if(h.ds)u[h.ds]=1;});return u;}
-function nextScale(){var u=usedScales();for(var i=0;i<DETECTED_SCALES.length;i++){if(!u[scaleKey(DETECTED_SCALES[i])])return clone(DETECTED_SCALES[i]);}return DETECTED_SCALES.length?clone(DETECTED_SCALES[0]):{b:"hx",hx:0,label:"HX711 #1"};}
+function nextScale(){var u=usedScales();for(var i=0;i<DETECTED_SCALES.length;i++){if(!u[scaleKey(DETECTED_SCALES[i])])return clone(DETECTED_SCALES[i]);}return DETECTED_SCALES.length?clone(DETECTED_SCALES[0]):clone(DEFAULT_SCALE);}
 function nextProbe(){var u=usedProbes();for(var i=0;i<DETECTED_PROBES.length;i++){if(!u[DETECTED_PROBES[i]])return DETECTED_PROBES[i];}return DETECTED_PROBES[0]||"";}
 function nextIndex(){var m=0;HIVES.forEach(function(h){if(h.i>m)m=h.i;});return m+1;}
 function findScale(k){for(var i=0;i<DETECTED_SCALES.length;i++)if(scaleKey(DETECTED_SCALES[i])==k)return clone(DETECTED_SCALES[i]);return null;}

@@ -4,7 +4,9 @@
 #include "config.h"
 
 #include <Wire.h>
+#if ENABLE_HX711
 #include <HX711.h>
+#endif
 
 #if ENABLE_NAU7802
 #include "SparkFun_Qwiic_Scale_NAU7802_Arduino_Library.h"
@@ -112,6 +114,7 @@ void begin() {
 }
 
 long readRaw(const ScaleChannel& ch) {
+#if ENABLE_HX711
   if (ch.backend == ScaleBackend::HX711) {
     HX711& hx = (ch.hxIndex == 0) ? scale1 : scale2;
     if (!hx.wait_ready_timeout(2000)) {
@@ -120,6 +123,7 @@ long readRaw(const ScaleChannel& ch) {
     }
     return hx.read_average(15);
   }
+#endif
 
 #if ENABLE_NAU7802
   if (ch.backend == ScaleBackend::NAU7802) {

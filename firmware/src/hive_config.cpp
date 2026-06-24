@@ -98,10 +98,22 @@ bool hiveFromJson(const String& json, Hive& out) {
       c.muxChannel = (int8_t)(o["mux"] | -1);
       c.adcChannel = (uint8_t)(o["adc"] | 1);
       c.i2cAddr    = (uint8_t)(o["addr"] | NAU7802_I2C_ADDRESS);
-    } else {
+    }
+#if ENABLE_HX711
+    else {
       c.backend = ScaleBackend::HX711;
       c.hxIndex = (uint8_t)(o["hx"] | 0);
     }
+#else
+    else {
+      // No HX711 on this build (XIAO C6): treat any legacy/unknown "hx" channel
+      // as a direct NAU7802 (CH1) so the hive still reads instead of returning 0.
+      c.backend    = ScaleBackend::NAU7802;
+      c.muxChannel = -1;
+      c.adcChannel = 1;
+      c.i2cAddr    = NAU7802_I2C_ADDRESS;
+    }
+#endif
     c.offset = (long)(o["off"] | 0);
     c.factor = (float)(o["fac"] | -7050.0);
     out.scaleCount++;
@@ -138,8 +150,18 @@ static void migrateLegacy(Preferences& p) {
     h = Hive{};
     h.index = i + 1;
     h.scaleCount = 1;
+#if ENABLE_HX711
     h.scales[0].backend = ScaleBackend::HX711;
     h.scales[0].hxIndex = i;
+#else
+    // No HX711 on this build (XIAO C6): map the two legacy hives onto the single
+    // direct NAU7802's two inputs (hive 1 -> CH1, hive 2 -> CH2). Matches the
+    // V0.4 breakout, where one NAU7802 on the main I2C bus carries both cells.
+    h.scales[0].backend    = ScaleBackend::NAU7802;
+    h.scales[0].muxChannel = -1;
+    h.scales[0].adcChannel = i + 1;
+    h.scales[0].i2cAddr    = NAU7802_I2C_ADDRESS;
+#endif
     h.scales[0].offset  = p.getLong(i == 0 ? "s1_offset" : "s2_offset", 0);
     h.scales[0].factor  = p.getFloat(i == 0 ? "s1_factor" : "s2_factor", -7050.0f);
     // No ROM was stored pre-0.20; sensors.cpp falls back to probe index order

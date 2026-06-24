@@ -166,9 +166,11 @@ void setup() {
   Serial.println("[DS18B20] Disabled (ENABLE_DS18B20_HIVE_TEMP=0); hive temp from BLE sensor if paired");
 #endif
 
+#if ENABLE_HX711
   scale1.begin(HX1_DOUT, HX1_SCK);
   scale2.begin(HX2_DOUT, HX2_SCK);
   Serial.println("[HX711] Initialized");
+#endif
 
   // Detect the TCA9548A mux and configure every NAU7802 in the registry. Needs
   // Wire (started above) and the loaded registry; safe when no I2C scales exist.

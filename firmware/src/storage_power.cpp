@@ -40,8 +40,10 @@ void releaseSleepPinHolds() {
   // gpio_hold_en/dis() handle hold state for each pin individually.
   gpio_deep_sleep_hold_dis();
 #endif
+#if ENABLE_HX711
   gpio_hold_dis((gpio_num_t)HX1_SCK);
   gpio_hold_dis((gpio_num_t)HX2_SCK);
+#endif
   gpio_hold_dis((gpio_num_t)SD_CS);
 
 #ifdef CONFIG_IDF_TARGET_ESP32C6
@@ -82,6 +84,7 @@ bool rtcHasValidTime() {
 }
 
 void powerUpScales() {
+#if ENABLE_HX711
   gpio_hold_dis((gpio_num_t)HX1_SCK);
   gpio_hold_dis((gpio_num_t)HX2_SCK);
 
@@ -95,6 +98,10 @@ void powerUpScales() {
 
   // HX711 needs a short settling period after power-up/reset at 10 SPS.
   delay(500);
+#else
+  // No HX711 on this build (e.g. XIAO C6). The I2C NAU7802 scales are re-powered
+  // and re-calibrated each wake by scalebus::begin(), so there is nothing to do.
+#endif
 }
 
 void powerDownScalesForSleep() {
@@ -104,6 +111,7 @@ void powerDownScalesForSleep() {
   // burns milliamps through the whole sleep window.
   scalebus::powerDownAllForSleep();
 
+#if ENABLE_HX711
   scale1.power_down();
   scale2.power_down();
 
@@ -117,6 +125,7 @@ void powerDownScalesForSleep() {
 
   gpio_hold_en((gpio_num_t)HX1_SCK);
   gpio_hold_en((gpio_num_t)HX2_SCK);
+#endif
 }
 
 void shutdownWifiAndBt() {

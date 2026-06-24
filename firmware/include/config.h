@@ -15,15 +15,21 @@
 #include "secrets.h"
 
 // ==============================
-// XIAO ESP32-C6 — UNSUPPORTED WIRED SENSORS
+// XIAO ESP32-C6 — BOARD-SPECIFIC SENSOR SET
 // ==============================
-// The C6 variant only breaks out the 11 front-header pins (D0–D10), with no
-// room for the wired in-hive sensors, so it has no ONE_WIRE_PIN / INMP441 pins
-// defined below. Force these flags off for that target — overriding whatever a
-// secrets.h carried over from an ESP32 build (or the default of 1) may set — so
-// their drivers (OneWire/DallasTemperature, the I2S mic path) are never compiled
-// in and the build doesn't fail looking for libraries this env omits. Use
-// wireless BLE in-hive sensors on the C6 instead.
+// The C6 variant breaks out only the 11 front-header pins (D0–D10). Two wired
+// peripherals from the classic board do not fit and are force-compiled out for
+// this target — overriding whatever a secrets.h carried over from an ESP32 build
+// (or the default of 1) may set:
+//   - HX711: each amp needs a dedicated DOUT/SCK pin pair (two pairs = 4 pins).
+//     The C6 reads load cells through I2C NAU7802 channels (D4/D5) instead, so
+//     no HX711 driver is compiled in and no scale1/scale2 objects exist.
+//   - INMP441 I2S microphone: no spare I2S-capable pins.
+//
+// A single DS18B20 1-Wire bus IS supported on the C6. With HX711 removed, D1 is
+// free, so the V0.4 breakout wires the DS18B20 there (ONE_WIRE_PIN in the C6 pin
+// map below) and ENABLE_DS18B20_HIVE_TEMP defaults ON for this board. It stays
+// optional: in-hive temperature can still come from a paired BLE sensor instead.
 //
 // Two guards for the same condition:
 //   HIVESCALE_BOARD_XIAO_C6  — set by [env:xiao_esp32c6] build_flags; available
@@ -33,8 +39,9 @@
 // Using both ensures this block fires even though config.h is included before
 // Arduino.h (e.g. as the first thing in globals.h).
 #if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
-#undef ENABLE_DS18B20_HIVE_TEMP
-#define ENABLE_DS18B20_HIVE_TEMP 0
+// No HX711 on the C6 — force the driver out regardless of any secrets.h value.
+#undef ENABLE_HX711
+#define ENABLE_HX711 0
 #undef ENABLE_INMP441_MICS
 #define ENABLE_INMP441_MICS 0
 #endif
@@ -75,12 +82,16 @@
 // ==============================
 // DS18B20 WIRED IN-HIVE TEMPERATURE (optional)
 // ==============================
-// The two 1-Wire DS18B20 probes (hive_1_temp_c / hive_2_temp_c) are an OPTIONAL
-// sensor and OFF by default: in-hive temperature can instead come from a paired
-// in-hive BLE sensor (see below). Set ENABLE_DS18B20_HIVE_TEMP 1 in secrets.h on
-// builds that fit the wired probes.
+// The 1-Wire DS18B20 probes are an OPTIONAL sensor: in-hive temperature can
+// instead come from a paired in-hive BLE sensor (see below). Default OFF on the
+// classic board; default ON for the XIAO C6, whose V0.4 breakout always wires a
+// DS18B20 to D1. Override either way in secrets.h.
 #ifndef ENABLE_DS18B20_HIVE_TEMP
-#define ENABLE_DS18B20_HIVE_TEMP 0
+#  if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#    define ENABLE_DS18B20_HIVE_TEMP 1
+#  else
+#    define ENABLE_DS18B20_HIVE_TEMP 0
+#  endif
 #endif
 
 // ==============================
@@ -105,6 +116,19 @@
 // channels + 8 muxed NAU7802 × 2 channels = 18).
 #ifndef MAX_SCALES
 #define MAX_SCALES 18
+#endif
+
+// ==============================
+// HX711 LOAD-CELL AMPLIFIER (legacy, 2× dedicated pin pairs)
+// ==============================
+// The classic board reads two load cells through two HX711 amps on dedicated
+// pins (HX1_*/HX2_* in the pin map). Set to 0 to compile the HX711 driver out
+// entirely — no <HX711.h> include, no scale1/scale2 objects, no HX711 option in
+// the provisioning portal. The XIAO ESP32-C6 has no room for the amps and reads
+// load cells via I2C NAU7802 instead, so ENABLE_HX711 is force-disabled for that
+// target up in the board-specific block near the top of this file.
+#ifndef ENABLE_HX711
+#define ENABLE_HX711 1
 #endif
 
 // ==============================
@@ -465,15 +489,15 @@
 // ==============================
 // PIN MAP — XIAO ESP32-C6 (compact RISC-V variant)
 // ==============================
-// Only the 11 front-header pins D0–D10 are used. DS18B20 and INMP441 wired
-// sensors are not supported on this board; pair BLE in-hive sensors instead.
-// Deep-sleep button wake uses esp_deep_sleep_enable_gpio_wakeup() (no RTC GPIO
-// subsystem on C6); see storage_power.cpp for the platform-specific guard.
+// Only the 11 front-header pins D0–D10 are used. There is no HX711 on this board
+// (ENABLE_HX711 forced 0 above) — scales are I2C NAU7802 channels on D4/D5 — so
+// D0/D1 are free. The V0.4 breakout uses D1 for a single DS18B20 1-Wire bus
+// (D0 is unused). The INMP441 mic is unsupported; pair BLE in-hive sensors for
+// acoustics/vibration. Deep-sleep button wake uses
+// esp_deep_sleep_enable_gpio_wakeup() (no RTC GPIO subsystem on C6); see
+// storage_power.cpp for the platform-specific guard.
 #if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
-#define HX1_DOUT        16   // D6
-#define HX1_SCK         17   // D7
-#define HX2_DOUT         0   // D0
-#define HX2_SCK          1   // D1
+#define ONE_WIRE_PIN     1   // D1 — DS18B20 in-hive temperature bus (4.7k pull-up on-board)
 #define I2C_SDA         22   // D4 (XIAO SDA label)
 #define I2C_SCL         23   // D5 (XIAO SCL label)
 #define SD_CS           21   // D3
