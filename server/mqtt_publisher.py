@@ -31,6 +31,8 @@ import threading
 from datetime import datetime
 from typing import Any, Optional
 
+from tempcomp import TEMP_SOURCE_FIELD, compensate_weight
+
 logger = logging.getLogger("hivescale.mqtt")
 
 
@@ -89,7 +91,7 @@ _HA_SENSORS: list[tuple[str, str, Optional[str], Optional[str], Optional[str], O
 
 def _hive_sensors(n: int):
     """HA sensor definitions for a single hive (published once per hive index seen)."""
-    return [
+    sensors = [
         (f"scale_{n}_weight_kg",        f"Hive {n} weight",            "kg", "weight",      "measurement",      "mdi:scale"),
         (f"hive_{n}_temp_c",            f"Hive {n} temperature",       "°C", "temperature", "measurement",      None),
         (f"hive_{n}_humidity_percent",  f"Hive {n} humidity",          "%",  "humidity",    "measurement",      None),
@@ -98,6 +100,17 @@ def _hive_sensors(n: int):
         (f"bee_counter_{n}_interval_in",  f"Hive {n} bees in",         None, None,          "measurement",      "mdi:bee"),
         (f"bee_counter_{n}_interval_out", f"Hive {n} bees out",        None, None,          "measurement",      "mdi:bee"),
     ]
+    # Temperature-compensated weight. The backend's compensation model carries a
+    # coefficient only for scales 1 and 2 (scale{1,2}_tempco_kg_per_c), so the
+    # compensated entity is only meaningful for those two hives; for the rest the
+    # raw weight above is the authoritative value.
+    if n <= 2:
+        sensors.insert(
+            1,
+            (f"scale_{n}_weight_kg_compensated", f"Hive {n} weight (temp-compensated)",
+             "kg", "weight", "measurement", "mdi:scale-balance"),
+        )
+    return sensors
 
 
 def _flatten_hives(payload: dict) -> None:
@@ -130,6 +143,34 @@ def _present_hive_indices(payload: dict) -> set[int]:
         if payload.get(f"scale_{n}_weight_kg") is not None or payload.get(f"hive_{n}_temp_c") is not None:
             idx.add(n)
     return idx
+
+
+def _apply_tempco(payload: dict, tempco: tuple) -> None:
+    """Add temperature-compensated weights to an already-flattened payload.
+
+    ``tempco`` is ``(source, ref_temp_c, scale1_coeff, scale2_coeff)`` as returned
+    by the backend's ``load_tempco_configs`` (only present when the device has
+    compensation enabled with a non-zero coefficient). Mirrors the read-path
+    ``attach_temperature_compensation`` but for one live reading: there is no
+    history here, so the *instantaneous* temperature is used (the DB/read path
+    keeps the EMA-smoothed version for charts). The coefficient model only covers
+    scales 1 and 2, so only those two compensated keys are emitted.
+    """
+    source, ref_temp, c1, c2 = tempco
+    temp = payload.get(TEMP_SOURCE_FIELD.get(source, "ambient_temp_c"))
+    for n, coeff in ((1, c1), (2, c2)):
+        w = payload.get(f"scale_{n}_weight_kg")
+        if w is None:
+            continue
+        payload[f"scale_{n}_weight_kg_compensated"] = compensate_weight(
+            w, temp, ref_temp, coeff
+        )
+        # Mirror onto the nested hive entry too, so consumers of the raw `hives[]`
+        # array (not just the flat keys) also see the compensated value.
+        for h in (payload.get("hives") or []):
+            if h.get("index") == n and h.get("weight_kg") is not None:
+                h["weight_kg_compensated"] = payload[f"scale_{n}_weight_kg_compensated"]
+    payload["tempco_applied"] = True
 
 
 class MqttPublisher:
@@ -254,6 +295,13 @@ class MqttPublisher:
     def _device_state_topic(self, device_id: str) -> str:
         return f"{MQTT_BASE_TOPIC}/{device_id}/state"
 
+    def is_active(self) -> bool:
+        """True once the bridge has a live client (MQTT enabled and started).
+
+        Lets callers skip work (e.g. a tempco config lookup) when MQTT is off.
+        """
+        return self._client is not None
+
     # ── publishing ───────────────────────────────────────────────────────────
     def publish_measurement(
         self,
@@ -261,8 +309,13 @@ class MqttPublisher:
         state: dict[str, Any],
         measured_at: datetime,
         display_name: Optional[str] = None,
+        tempco: Optional[tuple] = None,
     ) -> None:
-        """Publish one measurement. Never raises — failures are logged, not propagated."""
+        """Publish one measurement. Never raises — failures are logged, not propagated.
+
+        ``tempco`` (optional) is the device's temperature-compensation config; when
+        given, ``scale_{1,2}_weight_kg_compensated`` are added to the payload.
+        """
         client = self._client
         if not client:
             return
@@ -275,6 +328,9 @@ class MqttPublisher:
             # Normalise the two firmware battery field names into one HA-friendly key.
             if payload.get("battery_voltage_v") is None and payload.get("battery_voltage") is not None:
                 payload["battery_voltage_v"] = payload["battery_voltage"]
+            # Add temperature-compensated weights (scales 1/2) for the live feed.
+            if tempco is not None:
+                _apply_tempco(payload, tempco)
 
             if MQTT_HA_DISCOVERY:
                 if device_id not in self._discovered:

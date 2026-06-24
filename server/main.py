@@ -1654,11 +1654,17 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
             conn.commit()
     # Mirror the reading to MQTT (Home Assistant etc.) when the bridge is enabled.
     # This is purely additive and fail-soft — it never affects the stored result.
-    mqtt_publisher.publish_measurement(
-        payload.device_id,
-        payload.model_dump(mode="json", exclude_none=True, exclude={"claim_code"}),
-        measured_at,
-    )
+    # Pass the device's temp-compensation config so the live payload carries
+    # scale_{1,2}_weight_kg_compensated alongside the raw weights; the lookup is
+    # skipped entirely when the bridge is disabled.
+    if mqtt_publisher.is_active():
+        mqtt_tempco = load_tempco_configs([payload.device_id]).get(payload.device_id)
+        mqtt_publisher.publish_measurement(
+            payload.device_id,
+            payload.model_dump(mode="json", exclude_none=True, exclude={"claim_code"}),
+            measured_at,
+            tempco=mqtt_tempco,
+        )
     return {"status": "ok", "id": new_id, "measured_at": measured_at.isoformat()}
 
 

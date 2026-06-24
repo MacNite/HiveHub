@@ -444,6 +444,159 @@ void handleI2cScan() {
   setupServer.send(200, "text/html", html);
 }
 
+// ── Local scale calibration (offline, inside the captive portal) ─────────────
+// The provisioning AP has no internet, so the server-side calibration path
+// (the calibrate_scale_N command / "calibration mode" frequent uploads) is
+// unreachable here. This page reads each configured scale channel live and lets
+// you Tare (zero) and set a known weight, writing offset/factor straight into
+// the hive registry — the same kg = (raw - offset) / factor convention used on
+// the upload path (weightFromRaw). Works for HX711 and NAU7802 channels alike.
+static float calKg(long raw, long offset, float factor) {
+  if (factor == 0.0f) return NAN;
+  return ((float)(raw - offset)) / factor;
+}
+
+static hivecfg::ScaleChannel* calChannel(int hiveIndex, int slot) {
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    hivecfg::Hive& hive = hivecfg::gHives[h];
+    if (hive.index != hiveIndex) continue;
+    if (slot < 0 || slot >= hive.scaleCount) return nullptr;
+    return &hive.scales[slot];
+  }
+  return nullptr;
+}
+
+static String calChannelLabel(const hivecfg::ScaleChannel& ch) {
+  if (ch.backend == hivecfg::ScaleBackend::NAU7802) {
+    String s = "NAU7802 ";
+    s += (ch.muxChannel < 0) ? String("main bus") : (String("mux ch") + (int)ch.muxChannel);
+    s += " CH"; s += String((int)ch.adcChannel);
+    return s;
+  }
+  if (ch.backend == hivecfg::ScaleBackend::HX711)
+    return String("HX711 #") + (int)(ch.hxIndex + 1);
+  return String("scale");
+}
+
+// GET /calibrate/read — JSON: live raw + kg for every configured scale channel.
+static void handleCalibrateRead() {
+  sendNoCacheHeaders();
+  String js = "{\"ch\":[";
+  bool first = true;
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    hivecfg::Hive& hive = hivecfg::gHives[h];
+    for (uint8_t s = 0; s < hive.scaleCount; s++) {
+      hivecfg::ScaleChannel& ch = hive.scales[s];
+      if (!ch.valid()) continue;
+      long raw = scalebus::readRaw(ch);
+      float kg = calKg(raw, ch.offset, ch.factor);
+      if (!first) js += ",";
+      first = false;
+      String nm = hive.name.length() ? hive.name : (String("Hive ") + hive.index);
+      js += "{\"h\":" + String(hive.index) + ",\"s\":" + String(s);
+      js += ",\"name\":\"" + htmlEscape(nm) + "\"";
+      js += ",\"label\":\"" + htmlEscape(calChannelLabel(ch)) + "\"";
+      js += ",\"raw\":" + String(raw);
+      js += ",\"kg\":" + (isnan(kg) ? String("null") : String(kg, 3));
+      js += ",\"off\":" + String(ch.offset) + ",\"fac\":" + String(ch.factor, 2) + "}";
+    }
+  }
+  js += "]}";
+  setupServer.send(200, "application/json", js);
+}
+
+// POST /calibrate/set — op=tare (offset := current raw) or op=span (factor from a
+// known weight: factor := (raw - offset) / kg). Persists the registry on success.
+static void handleCalibrateSet() {
+  sendNoCacheHeaders();
+  int h = setupServer.arg("h").toInt();
+  int s = setupServer.arg("s").toInt();
+  String op = setupServer.arg("op");
+  hivecfg::ScaleChannel* ch = calChannel(h, s);
+  if (!ch) {
+    setupServer.send(404, "application/json", "{\"ok\":false,\"err\":\"no such scale channel\"}");
+    return;
+  }
+
+  long raw = scalebus::readRaw(*ch);
+  String err;
+  if (op == "tare") {
+    ch->offset = raw;
+  } else if (op == "span") {
+    float known = setupServer.arg("kg").toFloat();
+    if (known == 0.0f) {
+      err = "enter a non-zero known weight";
+    } else if (raw == ch->offset) {
+      err = "reading equals the tare point — Tare empty first, then load the scale";
+    } else {
+      ch->factor = (float)((double)(raw - ch->offset) / (double)known);
+    }
+  } else {
+    err = "unknown operation";
+  }
+
+  if (err.length()) {
+    setupServer.send(400, "application/json", String("{\"ok\":false,\"err\":\"") + err + "\"}");
+    return;
+  }
+  hivecfg::saveHiveConfig();
+  float kg = calKg(raw, ch->offset, ch->factor);
+  String js = "{\"ok\":true,\"raw\":" + String(raw) + ",\"off\":" + String(ch->offset) +
+              ",\"fac\":" + String(ch->factor, 2) +
+              ",\"kg\":" + (isnan(kg) ? String("null") : String(kg, 3)) + "}";
+  setupServer.send(200, "application/json", js);
+}
+
+// GET /calibrate — the live calibration UI (polls /calibrate/read; posts to /set).
+static void handleCalibratePage() {
+  sendNoCacheHeaders();
+  String html;
+  html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<title>Scale calibration</title><style>"
+          "body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;margin:0;padding:20px;background:#f6f7f8;color:#1a1d23;line-height:1.5}"
+          ".wrap{max-width:680px;margin:0 auto}h1{font-size:1.5rem;margin:0 0 6px}"
+          ".ch{border:1px solid #e4e7ec;background:#fff;border-radius:12px;padding:14px;margin:14px 0}"
+          ".rd{font-size:1.7rem;font-weight:600;margin:4px 0}"
+          ".raw{color:#667085;font-size:.86em}"
+          "input{padding:9px;border:1px solid #e4e7ec;border-radius:8px;width:7rem;font-size:1rem}"
+          "button{padding:10px 16px;margin:8px 6px 0 0;border:1px solid #e4e7ec;border-radius:8px;background:#fff;cursor:pointer;font-size:1rem}"
+          "button.p{background:#f59e0b;border-color:#f59e0b;color:#fff;font-weight:600}"
+          ".msg{font-size:.85em;color:#667085;min-height:1.1em;margin-top:8px}a{color:#b46b00}"
+          "@media(prefers-color-scheme:dark){body{background:#161618;color:#ececf1}.ch{background:#1f1f23;border-color:#33343a}input,button{background:#26262b;color:#ececf1;border-color:#33343a}}"
+          "</style></head><body><div class='wrap'>";
+  html += "<h1>Scale calibration</h1>";
+  html += "<p class='raw'>Readings refresh automatically. <b>Tare</b> with the scale empty, then place a known weight, type its mass in kg and press <b>Set weight</b>. Each change is saved to the device immediately.</p>";
+  if (hivecfg::gHiveCount == 0)
+    html += "<p><b>No hives configured yet.</b> Add a hive with a scale on the setup page first.</p>";
+  html += "<div id='list'></div>";
+  html += "<p><a href='/'>&larr; Back to setup</a></p>";
+  html += R"CAL(<script>
+function render(d){var L=document.getElementById('list');
+d.ch.forEach(function(c){var id='c'+c.h+'_'+c.s,e=document.getElementById(id);
+if(!e){e=document.createElement('div');e.className='ch';e.id=id;
+e.innerHTML="<div><b data-nm></b> &middot; <span data-lb></span></div>"+
+"<div class='rd' data-kg>--</div><div class='raw' data-raw></div>"+
+"<button class='p' data-tare>Tare (zero)</button> "+
+"<input type='number' step='any' inputmode='decimal' placeholder='kg' data-known> "+
+"<button data-span>Set weight</button><div class='msg' data-msg></div>";
+L.appendChild(e);
+e.querySelector('[data-nm]').textContent=c.name;
+e.querySelector('[data-lb]').textContent=c.label;
+e.querySelector('[data-tare]').onclick=function(){setp(c.h,c.s,'tare','',e);};
+e.querySelector('[data-span]').onclick=function(){setp(c.h,c.s,'span',e.querySelector('[data-known]').value,e);};}
+e.querySelector('[data-kg]').textContent=(c.kg==null?'-- kg':c.kg+' kg');
+e.querySelector('[data-raw]').textContent='raw '+c.raw+'  ·  offset '+c.off+'  ·  factor '+c.fac;});}
+function poll(){fetch('/calibrate/read').then(function(r){return r.json();}).then(render).catch(function(){}).finally(function(){setTimeout(poll,1500);});}
+function setp(h,s,op,kg,e){var m=e.querySelector('[data-msg]');m.textContent='Saving...';
+var body='h='+h+'&s='+s+'&op='+op+'&kg='+encodeURIComponent(kg);
+fetch('/calibrate/set',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})
+.then(function(r){return r.json();}).then(function(d){m.textContent=d.ok?('Saved — offset '+d.off+', factor '+d.fac):('Error: '+d.err);});}
+poll();
+</script>)CAL";
+  html += "</div></body></html>";
+  setupServer.send(200, "text/html", html);
+}
+
 void handleSetupRoot() {
   sendNoCacheHeaders();
 
@@ -490,6 +643,10 @@ void handleSetupRoot() {
   } else {
     html += "<p>SD card not available.</p>";
   }
+  html += "</fieldset>";
+  html += "<fieldset><legend>Scale calibration</legend>";
+  html += "<p>Tare and set known weights for each scale live, with no server or internet needed. Changes save to the device immediately.</p>";
+  html += "<p><a class='button' href='/calibrate'>Open scale calibration</a></p>";
   html += "</fieldset>";
   html += "<form method='POST' action='/save' id='cfgform'>";
   html += "<fieldset><legend>Backend</legend>";
@@ -731,6 +888,9 @@ void startProvisioningPortal() {
   setupServer.on("/ble/scan", HTTP_GET, handleBleScan);
 #endif
   setupServer.on("/i2c/scan", HTTP_GET, handleI2cScan);
+  setupServer.on("/calibrate", HTTP_GET, handleCalibratePage);
+  setupServer.on("/calibrate/read", HTTP_GET, handleCalibrateRead);
+  setupServer.on("/calibrate/set", HTTP_POST, handleCalibrateSet);
 
   // Common captive-portal probe URLs used by Android, iOS/macOS, Windows, and Firefox.
   // Redirecting these makes most phones/laptops show the setup page automatically
