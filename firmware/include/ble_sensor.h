@@ -106,6 +106,19 @@ struct Discovered {
 void scanPairedSensors(const String& mac0, const String& mac1,
                        Snapshot& slot1, Snapshot& slot2);
 
+// Multi-hive passive scan. ONE scan window matches every MAC in `macs` (so any
+// number of beacons costs the same airtime). For a MAC flagged isGatt[i] that is
+// seen by MAC but carries no advertising data (GATT-mode HiveInside), a serial
+// GATT read is attempted — but only up to `gattBudget` such reads happen per
+// call, the rest are left !present and retried next cycle, so connection-based
+// sensors cannot keep the radio awake long enough to defeat deep sleep. out[] is
+// resized to macs.size(); out[i] corresponds to macs[i]. Pass gattBudget < 0 for
+// "no cap".
+void scanPairedSensorsMulti(const std::vector<String>& macs,
+                            const std::vector<bool>& isGatt,
+                            std::vector<Snapshot>& out,
+                            int gattBudget);
+
 // Portal helper: scan for all nearby BLE devices so the user can pick which to
 // pair. HolyIot-looking devices are flagged. Used by the provisioning portal.
 std::vector<Discovered> discover(uint32_t seconds);
@@ -116,6 +129,11 @@ std::vector<Discovered> discover(uint32_t seconds);
 // range_g). Temperature is NOT written here — sensors.cpp owns hive_{slot}_temp_c
 // so it can choose between the wired DS18B20 and this sensor.
 void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap);
+
+// Per-hive form for the hives[] array: writes nested "ble", "accel" and (when
+// present) "mic" sub-objects into `hive`. Temperature is owned by the caller
+// (sensors.cpp) so the wired/BLE arbitration can pick the source.
+void writeSnapshotToHive(JsonObject hive, const Snapshot& snap);
 
 // Normalise a MAC string ("aa:bb:..", upper/lower, spaces) to "AA:BB:CC:DD:EE:FF"
 // or "" when it is not a valid 6-byte MAC. Shared by the portal and matcher.

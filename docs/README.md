@@ -6,6 +6,7 @@ hardware list, firmware/server setup, and API summary, start with the
 
 ## Hardware & wiring
 
+- [multi-hive.md](multi-hive.md) — **up to 18 hives per ESP32** (firmware v0.20.0): NAU7802 I2C scales, TCA9548A mux, up to 18 DS18B20, the hive-centric portal, the BLE budget, and the data model.
 - [wiring.md](wiring.md) — full ESP32 pin map and wiring for every sensor and module.
 - [../pcb-design/README.md](../pcb-design/README.md) — KiCad Scale Module / Power Module pinout and fabrication notes.
 - [accelerometer.md](accelerometer.md) — the vibration science and ~20 Hz pre-swarm signal (and the legacy wired LIS3DH/LIS2DH12 driver; stock builds now read vibration over BLE).

@@ -84,6 +84,81 @@
 #endif
 
 // ==============================
+// MULTI-HIVE CAPACITY (up to 18 hives per ESP32)
+// ==============================
+// HiveScale historically served exactly two hives (two HX711 load cells, two
+// DS18B20 probes, two BLE slots). v0.20.0 generalises this to a dynamic registry
+// of up to MAX_HIVES hives, each carrying its own scale(s) and in-hive sensors,
+// configured from the provisioning portal and stored as a per-hive JSON blob in
+// NVS (see firmware/src/hive_config.cpp).
+//
+//   - Scales: 2 HX711 (legacy pins) OR up to 18 I2C load-cell channels via the
+//     NAU7802 + TCA9548A path below.
+//   - Wired temperature: up to MAX_HIVES DS18B20 on the single ONE_WIRE_PIN bus,
+//     addressed by ROM (not by index) so each probe maps to a specific hive.
+//   - Wireless in-hive sensors: passive BLE beacons (unlimited — one shared scan)
+//     plus a capped number of serial GATT reads per cycle (see below).
+#ifndef MAX_HIVES
+#define MAX_HIVES 18
+#endif
+// Upper bound on physically attached load-cell channels (2 direct NAU7802
+// channels + 8 muxed NAU7802 × 2 channels = 18).
+#ifndef MAX_SCALES
+#define MAX_SCALES 18
+#endif
+
+// ==============================
+// NAU7802 24-bit I2C LOAD-CELL ADC (alternative to HX711)
+// ==============================
+// The NAU7802 (Nuvoton) is a 24-bit bridge ADC on I2C at a FIXED address 0x2A. It
+// has TWO differential input channels (CH1/CH2) multiplexed onto one ADC, so a
+// single NAU7802 reads two load cells. We read it RAW (getReading()) and apply our
+// own offset/factor, mirroring the HX711 path (weightFromRaw), so no per-channel
+// calibration state has to survive a mux switch. Before deep sleep every NAU7802
+// is put into power-down (PU_CTRL PUD/PUA cleared) — see powerDownScalesForSleep().
+#ifndef ENABLE_NAU7802
+#define ENABLE_NAU7802 1
+#endif
+#ifndef NAU7802_I2C_ADDRESS
+#define NAU7802_I2C_ADDRESS 0x2A
+#endif
+// Samples averaged per NAU7802 channel read (matches the HX711 default of 15).
+#ifndef NAU7802_SAMPLES
+#define NAU7802_SAMPLES 15
+#endif
+
+// ==============================
+// TCA9548A 1-to-8 I2C MULTIPLEXER (fan out 8 more NAU7802s)
+// ==============================
+// Because every NAU7802 lives at 0x2A, more than one can only share the bus
+// behind a TCA9548A mux. The mux exposes 8 downstream channels (0–7); writing
+// (1<<channel) to its control register connects exactly one. With one NAU7802 per
+// mux channel that is 8×2 = 16 extra scales, plus the 2 channels of a NAU7802 on
+// the main bus = 18 total. Only ONE mux channel may be enabled at a time; the
+// driver disables all channels (write 0x00) between hives.
+#ifndef ENABLE_I2C_MUX
+#define ENABLE_I2C_MUX 1
+#endif
+#ifndef TCA9548A_I2C_ADDRESS
+#define TCA9548A_I2C_ADDRESS 0x70
+#endif
+
+// ==============================
+// BLE READ BUDGET (protect deep sleep — see also the BLE sections below)
+// ==============================
+// A passive scan catches every nearby BEACON (HolyIot 25015 / RuuviTag /
+// advertising HiveInside) in a single window, so any number of beacon in-hive
+// sensors costs the same one scan and deep sleep stays effective. GATT sensors
+// (HiveHeart, GATT-mode HiveInside, wireless HiveScale, HiveTraffic) instead need
+// a SERIAL connect→read→disconnect of seconds each, so reading many of them would
+// keep the radio awake for minutes and defeat deep sleep. Cap the number of GATT
+// reads attempted per wake cycle; remaining paired GATT sensors are skipped this
+// cycle (and logged). Beacons are never capped.
+#ifndef MAX_GATT_READS_PER_CYCLE
+#define MAX_GATT_READS_PER_CYCLE 4
+#endif
+
+// ==============================
 // INMP441 STEREO MICS (defaults)
 // ==============================
 // The wired in-hive microphone is optional and compiled out by default

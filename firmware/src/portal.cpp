@@ -4,6 +4,8 @@
 #include "config.h"
 #include "device_prefs.h"
 #include "storage_power.h"
+#include "hive_config.h"
+#include "scale_bus.h"
 
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -140,6 +142,22 @@ static void addMeasurementRow(String& html, const String& label, const String& v
   html += "<tr><th>" + htmlEscape(label) + "</th><td>" + htmlEscape(value) + "</td></tr>";
 }
 
+// Format a JSON value (e.g. a nested hives[].* member) for the last-sensor panel.
+static String valNumberOrNA(JsonVariantConst v, uint8_t decimals, const char* unit) {
+  if (v.isNull()) return "n/a";
+  double value = v.as<double>();
+  if (isnan(value)) return "n/a";
+  String text = String(value, static_cast<unsigned int>(decimals));
+  if (unit != nullptr && unit[0] != '\0') { text += " "; text += unit; }
+  return text;
+}
+static String valStringOrNA(JsonVariantConst v) {
+  if (v.isNull()) return "n/a";
+  String s = v.as<String>();
+  s.trim();
+  return s.length() > 0 ? s : String("n/a");
+}
+
 void appendLastSensorPanel(String& html) {
   ensureLastMeasurementLoaded();
 
@@ -159,31 +177,12 @@ void appendLastSensorPanel(String& html) {
     return;
   }
 
+  // Device-level values.
   html += "<table>";
   addMeasurementRow(html, "Timestamp", jsonStringOrNA(doc, "timestamp"));
-  addMeasurementRow(html, "Scale 1 weight", jsonNumberOrNA(doc, "scale_1_weight_kg", 3, "kg"));
-  addMeasurementRow(html, "Scale 2 weight", jsonNumberOrNA(doc, "scale_2_weight_kg", 3, "kg"));
-  addMeasurementRow(html, "Hive 1 temperature", jsonNumberOrNA(doc, "hive_1_temp_c", 2, "C"));
-  addMeasurementRow(html, "Hive 2 temperature", jsonNumberOrNA(doc, "hive_2_temp_c", 2, "C"));
+  addMeasurementRow(html, "Hives configured", jsonNumberOrNA(doc, "hive_count", 0, ""));
   addMeasurementRow(html, "Ambient temperature", jsonNumberOrNA(doc, "ambient_temp_c", 2, "C"));
   addMeasurementRow(html, "Ambient humidity", jsonNumberOrNA(doc, "ambient_humidity_percent", 1, "%"));
-  addMeasurementRow(html, "Scale 1 raw", jsonNumberOrNA(doc, "scale_1_raw", 0, ""));
-  addMeasurementRow(html, "Scale 2 raw", jsonNumberOrNA(doc, "scale_2_raw", 0, ""));
-
-  // Wireless beehivemonitoring.com GATT sensors are reported on their own
-  // hivescale_N_* / hiveheart_N_* fields (not the wired scale_N_* / hive_N_*
-  // rows above), so surface them here when a paired device produced a reading.
-  if (!doc["hivescale_1_weight_kg"].isNull() || !doc["hivescale_2_weight_kg"].isNull()) {
-    addMeasurementRow(html, "HiveScale 1 weight", jsonNumberOrNA(doc, "hivescale_1_weight_kg", 2, "kg"));
-    addMeasurementRow(html, "HiveScale 2 weight", jsonNumberOrNA(doc, "hivescale_2_weight_kg", 2, "kg"));
-  }
-  if (!doc["hiveheart_1_temp_c"].isNull() || !doc["hiveheart_2_temp_c"].isNull()) {
-    addMeasurementRow(html, "HiveHeart 1 temperature", jsonNumberOrNA(doc, "hiveheart_1_temp_c", 2, "C"));
-    addMeasurementRow(html, "HiveHeart 1 humidity", jsonNumberOrNA(doc, "hiveheart_1_humidity_percent", 1, "%"));
-    addMeasurementRow(html, "HiveHeart 2 temperature", jsonNumberOrNA(doc, "hiveheart_2_temp_c", 2, "C"));
-    addMeasurementRow(html, "HiveHeart 2 humidity", jsonNumberOrNA(doc, "hiveheart_2_humidity_percent", 1, "%"));
-  }
-
   addMeasurementRow(html, "WiFi RSSI", jsonNumberOrNA(doc, "rssi_dbm", 0, "dBm"));
   addMeasurementRow(html, "SD card OK", jsonBoolOrNA(doc, "sd_ok"));
   addMeasurementRow(html, "RTC OK", jsonBoolOrNA(doc, "rtc_ok"));
@@ -194,30 +193,44 @@ void appendLastSensorPanel(String& html) {
     addMeasurementRow(html, "Solar current", jsonNumberOrNA(doc, "solar_current_ma", 1, "mA"));
     addMeasurementRow(html, "Solar power", jsonNumberOrNA(doc, "solar_power_mw", 1, "mW"));
   }
-
   if (!doc["battery_voltage_v"].isNull() || !doc["battery_soc_percent"].isNull()) {
     addMeasurementRow(html, "Battery voltage", jsonNumberOrNA(doc, "battery_voltage_v", 3, "V"));
     addMeasurementRow(html, "Battery state of charge", jsonNumberOrNA(doc, "battery_soc_percent", 1, "%"));
     addMeasurementRow(html, "Battery alert", jsonBoolOrNA(doc, "battery_alert"));
   }
-
-  if (!doc["mic_left_rms_dbfs"].isNull() || !doc["mic_right_rms_dbfs"].isNull()) {
-    addMeasurementRow(html, "Mic left RMS", jsonNumberOrNA(doc, "mic_left_rms_dbfs", 1, "dBFS"));
-    addMeasurementRow(html, "Mic right RMS", jsonNumberOrNA(doc, "mic_right_rms_dbfs", 1, "dBFS"));
-  }
-
-  if (!doc["ble_1_pressure_hpa"].isNull() || !doc["ble_1_humidity_percent"].isNull()) {
-    addMeasurementRow(html, "Hive 1 BLE humidity", jsonNumberOrNA(doc, "ble_1_humidity_percent", 1, "%"));
-    addMeasurementRow(html, "Hive 1 BLE pressure", jsonNumberOrNA(doc, "ble_1_pressure_hpa", 1, "hPa"));
-    addMeasurementRow(html, "Hive 1 BLE battery", jsonNumberOrNA(doc, "ble_1_battery_percent", 0, "%"));
-  }
-  if (!doc["ble_2_pressure_hpa"].isNull() || !doc["ble_2_humidity_percent"].isNull()) {
-    addMeasurementRow(html, "Hive 2 BLE humidity", jsonNumberOrNA(doc, "ble_2_humidity_percent", 1, "%"));
-    addMeasurementRow(html, "Hive 2 BLE pressure", jsonNumberOrNA(doc, "ble_2_pressure_hpa", 1, "hPa"));
-    addMeasurementRow(html, "Hive 2 BLE battery", jsonNumberOrNA(doc, "ble_2_battery_percent", 0, "%"));
-  }
-
   html += "</table>";
+
+  // Per-hive values from the hives[] array.
+  JsonArray hives = doc["hives"].as<JsonArray>();
+  if (hives.size() == 0) {
+    html += "<p class='meta'>No per-hive data in the last measurement.</p>";
+  }
+  for (JsonObject h : hives) {
+    int idx = h["index"] | 0;
+    html += "<h3>Hive " + String(idx) + "</h3><table>";
+    if (!h["name"].isNull()) addMeasurementRow(html, "Name", valStringOrNA(h["name"]));
+    addMeasurementRow(html, "Weight", valNumberOrNA(h["weight_kg"], 3, "kg"));
+    addMeasurementRow(html, "Scale source", valStringOrNA(h["scale_source"]));
+    addMeasurementRow(html, "Raw weight", valNumberOrNA(h["raw_weight"], 0, ""));
+    addMeasurementRow(html, "Temperature", valNumberOrNA(h["temp_c"], 2, "C"));
+    addMeasurementRow(html, "Temp source", valStringOrNA(h["temp_source"]));
+    if (!h["humidity_percent"].isNull())
+      addMeasurementRow(html, "Humidity", valNumberOrNA(h["humidity_percent"], 1, "%"));
+    JsonObject ble = h["ble"];
+    if (!ble.isNull()) {
+      addMeasurementRow(html, "BLE sensor", valStringOrNA(ble["sensor_type"]));
+      if (!ble["pressure_hpa"].isNull()) addMeasurementRow(html, "BLE pressure", valNumberOrNA(ble["pressure_hpa"], 1, "hPa"));
+      if (!ble["battery_percent"].isNull()) addMeasurementRow(html, "BLE battery", valNumberOrNA(ble["battery_percent"], 0, "%"));
+    }
+    JsonObject accel = h["accel"];
+    if (!accel.isNull() && !accel["rms_mg"].isNull())
+      addMeasurementRow(html, "Vibration RMS", valNumberOrNA(accel["rms_mg"], 1, "mg"));
+    JsonObject bc = h["bee_counter"];
+    if (!bc.isNull() && (bc["ok"] | false)) {
+      addMeasurementRow(html, "Bee counter in/out", valStringOrNA(bc["total_in"]) + " / " + valStringOrNA(bc["total_out"]));
+    }
+    html += "</table>";
+  }
   html += "<p class='meta'>Shown from the latest measurement in memory or from ";
   html += BACKUP_FILE;
   html += " on the SD card. Refresh this page after a new cycle to update it.</p>";
@@ -306,6 +319,128 @@ void handleBleScan() {
 }
 #endif
 
+// ── I2C / DS18B20 discovery (used to populate the hive-mapping dropdowns) ─────
+// A JS array literal of every detected I2C load-cell channel: each NAU7802 (main
+// bus + behind each TCA9548A channel) exposes two ADC inputs, plus the two HX711
+// pin channels are always offered. Runs a quick bus probe each page render.
+static String detectedScalesJs() {
+  String js = "[";
+  bool first = true;
+  auto add = [&](int mux, int adc) {
+    if (!first) js += ",";
+    first = false;
+    js += "{b:'nau',mux:"; js += String(mux); js += ",adc:"; js += String(adc);
+    js += ",addr:"; js += String((int)NAU7802_I2C_ADDRESS);
+    js += ",label:'NAU7802 ";
+    js += (mux < 0) ? String("main bus") : (String("mux ch") + mux);
+    js += " CH"; js += String(adc); js += "'}";
+  };
+#if ENABLE_NAU7802
+  scalebus::muxDisableAll();
+  Wire.beginTransmission(NAU7802_I2C_ADDRESS);
+  if (Wire.endTransmission() == 0) { add(-1, 1); add(-1, 2); }
+  if (scalebus::muxPresent()) {
+    for (int ch = 0; ch < 8; ch++) {
+      scalebus::muxSelect((uint8_t)ch);
+      Wire.beginTransmission(NAU7802_I2C_ADDRESS);
+      if (Wire.endTransmission() == 0) { add(ch, 1); add(ch, 2); }
+    }
+    scalebus::muxDisableAll();
+  }
+#endif
+  if (!first) js += ",";
+  js += "{b:'hx',hx:0,label:'HX711 #1 (pins)'},{b:'hx',hx:1,label:'HX711 #2 (pins)'}";
+  js += "]";
+  return js;
+}
+
+// A JS array literal of detected DS18B20 ROM addresses (16 hex chars each).
+static String detectedProbesJs() {
+  String js = "[";
+#if ENABLE_DS18B20_HIVE_TEMP
+  bool first = true;
+  uint8_t n = ds18b20.getDeviceCount();
+  for (uint8_t i = 0; i < n; i++) {
+    DeviceAddress rom;
+    if (!ds18b20.getAddress(rom, i)) continue;
+    if (!first) js += ",";
+    first = false;
+    js += "'"; js += hivecfg::romToHex(rom); js += "'";
+  }
+#endif
+  js += "]";
+  return js;
+}
+
+// The current registry as a JS array in the same shape the page edits and submits
+// (and that hivecfg::hiveFromJson parses back), so existing mappings — including
+// stored calibration offset/factor — repaint and survive a save.
+static String initialHivesJs() {
+  String js = "[";
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    if (h) js += ",";
+    js += "{i:"; js += String(hive.index);
+    js += ",n:'"; js += htmlEscape(hive.name); js += "',s:[";
+    for (uint8_t s = 0; s < hive.scaleCount; s++) {
+      const hivecfg::ScaleChannel& c = hive.scales[s];
+      if (s) js += ",";
+      if (c.backend == hivecfg::ScaleBackend::NAU7802)
+        js += String("{b:'nau',mux:") + (int)c.muxChannel + ",adc:" + (int)c.adcChannel +
+              ",addr:" + (int)c.i2cAddr + ",off:" + c.offset + ",fac:" + String(c.factor, 4) + "}";
+      else
+        js += String("{b:'hx',hx:") + (int)c.hxIndex + ",off:" + c.offset +
+              ",fac:" + String(c.factor, 4) + "}";
+    }
+    js += "],ds:";
+    if (hive.hasDsRom) { js += "'"; js += hivecfg::romToHex(hive.dsRom); js += "'"; }
+    else js += "null";
+    js += ",bl:[";
+    for (uint8_t b = 0; b < hive.bleCount; b++) {
+      if (b) js += ",";
+      js += "{t:'"; js += hive.ble[b].type; js += "',m:'"; js += hive.ble[b].mac; js += "'}";
+    }
+    js += "]}";
+  }
+  js += "]";
+  return js;
+}
+
+// Informational I2C-scan page (the main page already auto-scans for the dropdowns;
+// this just shows the raw findings for troubleshooting).
+void handleI2cScan() {
+  sendNoCacheHeaders();
+  String html;
+  html += "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
+  html += "<title>I2C scan</title></head><body style='font-family:system-ui;margin:24px'>";
+  html += "<h1>I2C scale scan</h1>";
+#if ENABLE_I2C_MUX
+  html += "<p>TCA9548A mux: <b>";
+  html += scalebus::muxPresent() ? "detected (0x70)" : "absent";
+  html += "</b></p>";
+#endif
+  html += "<p>Detected load-cell channels:</p><ul>";
+  {
+    JsonDocument d;
+    deserializeJson(d, detectedScalesJs());
+    for (JsonObject o : d.as<JsonArray>())
+      html += "<li>" + htmlEscape(String((const char*)(o["label"] | ""))) + "</li>";
+  }
+  html += "</ul>";
+#if ENABLE_DS18B20_HIVE_TEMP
+  html += "<p>Detected DS18B20 probes (ROM):</p><ul>";
+  {
+    JsonDocument d;
+    deserializeJson(d, detectedProbesJs());
+    for (JsonVariant v : d.as<JsonArray>())
+      html += "<li><code>" + htmlEscape(v.as<String>()) + "</code></li>";
+  }
+  html += "</ul>";
+#endif
+  html += "<p><a href='/'>Back to setup</a></p></body></html>";
+  setupServer.send(200, "text/html", html);
+}
+
 void handleSetupRoot() {
   sendNoCacheHeaders();
 
@@ -361,129 +496,93 @@ void handleSetupRoot() {
   html += "<label>API key</label><input name='api_key' value='" + htmlEscape(apiKey) + "'>";
   html += "</fieldset>";
 
-#if (ENABLE_BLE_SCAN || ENABLE_BEEHIVE_GATT || ENABLE_WIRELESS_BEECOUNTER)
-  // Dynamic wireless-sensor list. Instead of fixed per-slot fields, the user
-  // adds rows and picks each sensor's type; the categories and limits mirror the
-  // secrets.h configurator (in-hive / scale / bee counter, max 2 each, 6 total).
-  // The default type is an in-hive sensor. handleSetupSave() persists this list
-  // and recomputes the per-transport slot keys the firmware actually reads.
-  html += "<fieldset><legend>Wireless sensors</legend>";
-  html += "<p>Add up to six wireless BLE sensors &mdash; at most two in-hive sensors, two scales and two bee counters. ";
-  html += "For each one choose its type and enter its MAC address";
-#if ENABLE_BLE_SCAN
-  html += ", or <a href='/ble/scan'>scan for wireless sensors</a> and copy a MAC below";
-#endif
-  html += ". Use each sensor's <em>Maps to</em> dropdown to pick which hive / scale / counter it serves &mdash; ";
-  html += "so you can, for example, keep hive 1 on its wired probe and add a wireless sensor for hive 2 only. ";
-  html += "When a paired in-hive sensor reports temperature, vibration or sound, the matching wired sensor for that hive is disabled automatically to avoid duplicate readings.</p>";
-  html += "<div id='wlist'></div>";
-  html += "<p id='wempty' class='meta'>No wireless sensors added yet.</p>";
-  html += "<p><button type='button' class='button' id='waddbtn'>&#10133; Add wireless sensor</button></p>";
-  html += "<p id='wfull' class='meta' style='display:none'>Maximum of 6 wireless sensors reached (2 per category).</p>";
-  html += "<input type='hidden' name='wcount' id='wcount' value='0'>";
+  // ── Hive-centric mapping ───────────────────────────────────────────────────
+  // Top-level "+ Add hive"; each hive maps its scale(s) (HX711 / NAU7802 channels
+  // detected by the I2C scan that ran when this page loaded) and its in-hive
+  // sensors (BLE beacons/GATT + a wired DS18B20 probe). The page submits one JSON
+  // blob per hive in exactly the shape hivecfg::hiveFromJson() parses.
+  html += "<fieldset><legend>Hives &amp; sensors</legend>";
+  html += "<p>Add a hive, then map its scale(s) and in-hive sensors. An I2C scan ran when this page loaded; ";
+  html += "use <a href='/ble/scan'>Scan BLE</a> to find wireless sensors and <a href='/i2c/scan'>I2C scan details</a> to verify wiring. ";
+  html += "Beacon sensors (HolyIot / RuuviTag) are recommended for in-hive readings &mdash; any number share one quick scan and keep deep sleep effective. ";
+  html += "Connection-based GATT sensors are read serially and capped at " + String(MAX_GATT_READS_PER_CYCLE) + " per wake cycle.</p>";
+  html += "<div id='hives'></div>";
+  html += "<p id='hempty' class='meta'>No hives yet. Add one to begin.</p>";
+  html += "<p><button type='button' class='button primary' id='addhive'>&#10133; Add hive</button> ";
+  html += "<span id='hfull' class='meta' style='display:none'>Maximum number of hives reached.</span></p>";
+  html += "<input type='hidden' name='hives_json' id='hives_json'>";
 
-  // Seed the in-browser list from stored pairings. Prefer the canonical
-  // wcount/wtypeN/wmacN list; fall back to the legacy fixed-slot keys so devices
-  // provisioned before this change still show their existing pairings.
-  html += "<script>var INITIAL=[";
-  {
-    prefs.begin("hivescale", true);
-    bool first = true;
-    auto emit = [&](const char* type, const String& mac, int slot) {
-      if (mac.length() == 0) return;
-      if (!first) html += ",";
-      first = false;
-      html += "{t:'"; html += type; html += "',m:'"; html += mac;
-      html += "',s:"; html += String(slot); html += "}";
-    };
-    if (prefs.isKey("wcount")) {
-      int wc = (int)prefs.getUInt("wcount", 0);
-      if (wc > 6) wc = 6;
-      // Derive a slot when an entry stored by older firmware has no wslotN key.
-      int seenInhive = 0, seenScale = 0, seenCnt = 0;
-      for (int i = 0; i < wc; i++) {
-        String t = prefs.getString((String("wtype") + i).c_str(), "");
-        String m = prefs.getString((String("wmac") + i).c_str(), "");
-        if (t.length() == 0) t = "holyiot";
-        int slot = (int)prefs.getUInt((String("wslot") + i).c_str(), 0);
-        if (slot < 1 || slot > 2) {
-          if (t == "hivescale") slot = ++seenScale;
-          else if (t == "beecounter") slot = ++seenCnt;
-          else slot = ++seenInhive;
-          if (slot > 2) slot = 2;
-        }
-        emit(t.c_str(), m, slot);
-      }
-    } else {
-      emit("holyiot",    prefs.getString("ble_mac0", ""), 1);
-      emit("holyiot",    prefs.getString("ble_mac1", ""), 2);
-      emit("hiveheart",  prefs.getString("heart_mac0", ""), 1);
-      emit("hiveheart",  prefs.getString("heart_mac1", ""), 2);
-      emit("hivescale",  prefs.getString("scale_mac0", ""), 1);
-      emit("hivescale",  prefs.getString("scale_mac1", ""), 2);
-      emit("beecounter", prefs.getString("counter_mac0", ""), 1);
-      emit("beecounter", prefs.getString("counter_mac1", ""), 2);
-    }
-    prefs.end();
-  }
-  html += "];</script>";
+  html += "<script>var DETECTED_SCALES=" + detectedScalesJs() + ";";
+  html += "var DETECTED_PROBES=" + detectedProbesJs() + ";";
+  html += "var INITIAL_HIVES=" + initialHivesJs() + ";";
+  html += "var MAX_HIVES=" + String(MAX_HIVES) + ";var MAX_BLE=" + String(hivecfg::MAX_BLE_PER_HIVE) + ";";
+  html += "var MAX_SCALES_PER_HIVE=" + String(hivecfg::MAX_SCALES_PER_HIVE) + ";</script>";
 
-  // Inline list controller (no external assets — works on the offline portal).
-  html += R"WSJS(<script>(function(){
-var TYPES={
-holyiot:{label:"HolyIot 25015 - in-hive (BLE beacon)",cat:"inhive"},
-ruuvitag:{label:"RuuviTag - in-hive (BLE beacon)",cat:"inhive"},
-hiveinside:{label:"HiveInside - in-hive (GATT)",cat:"inhive"},
-hiveheart:{label:"HiveHeart - in-hive (GATT)",cat:"inhive"},
-hivescale:{label:"HiveScale - wireless scale (GATT)",cat:"scale"},
-beecounter:{label:"HiveTraffic - entrance bee counter (GATT)",cat:"beecounter"}};
-var ORDER=["holyiot","ruuvitag","hiveinside","hiveheart","hivescale","beecounter"];
-var LIMIT={inhive:2,scale:2,beecounter:2},MAXT=6;
-var LAB={inhive:"In-hive sensor, hive",scale:"Scale, scale",beecounter:"Bee counter, counter"};
-var SLOTLAB={inhive:["Hive 1","Hive 2"],scale:["Scale 1","Scale 2"],beecounter:["Counter 1","Counter 2"]};
-var list=document.getElementById("wlist"),addbtn=document.getElementById("waddbtn"),form=document.getElementById("cfgform");
-function rows(){return Array.prototype.slice.call(list.querySelectorAll(".wsrow"));}
-function catCount(cat,except){var n=0;rows().forEach(function(r){if(r===except)return;if(TYPES[r.querySelector("[data-wtype]").value].cat===cat)n++;});return n;}
-function firstFree(except){for(var i=0;i<ORDER.length;i++){var k=ORDER[i];if(catCount(TYPES[k].cat,except)<LIMIT[TYPES[k].cat])return k;}return null;}
-function opts(sel){return ORDER.map(function(k){return "<option value='"+k+"'"+(k===sel?" selected":"")+">"+TYPES[k].label+"</option>";}).join("");}
-function slotTaken(cat,except){var t={};rows().forEach(function(r){if(r===except)return;if(TYPES[r.querySelector("[data-wtype]").value].cat!==cat)return;t[r.querySelector("[data-wslot]").value]=true;});return t;}
-function freeSlot(cat,except){var t=slotTaken(cat,except);for(var n=1;n<=LIMIT[cat];n++)if(!t[String(n)])return n;return LIMIT[cat];}
-function slotOpts(cat,sel){return SLOTLAB[cat].map(function(l,i){var n=i+1;return "<option value='"+n+"'"+(n===sel?" selected":"")+">"+l+"</option>";}).join("");}
-function buildSlots(r,want){var cat=TYPES[r.querySelector("[data-wtype]").value].cat,ss=r.querySelector("[data-wslot]"),w=want||freeSlot(cat,r);if(slotTaken(cat,r)[String(w)])w=freeSlot(cat,r);ss.innerHTML=slotOpts(cat,w);}
-function addRow(type,mac,slot){
-var key=type||firstFree(null);if(!key)return;
-var r=document.createElement("div");r.className="wsrow";
-r.innerHTML="<label>Sensor type</label><select data-wtype>"+opts(key)+"</select>"+
-"<label>Maps to</label><select data-wslot></select>"+
-"<label>MAC address</label><input data-wmac placeholder='AA:BB:CC:DD:EE:FF'>"+
-"<p class='wnote'></p>"+
-"<button type='button' class='button' data-wrem>Remove</button>";
-list.appendChild(r);
-buildSlots(r,slot);
-if(mac)r.querySelector("[data-wmac]").value=mac;
-r.querySelector("[data-wtype]").addEventListener("change",function(){onType(r);});
-r.querySelector("[data-wslot]").addEventListener("change",function(){onSlot(r);});
-r.querySelector("[data-wrem]").addEventListener("click",function(){list.removeChild(r);refresh();});
-refresh();}
-function onType(r){var sel=r.querySelector("[data-wtype]"),cat=TYPES[sel.value].cat;
-if(catCount(cat,r)>=LIMIT[cat])sel.value=firstFree(r)||ORDER[0];
-buildSlots(r);refresh();}
-function onSlot(r){var cat=TYPES[r.querySelector("[data-wtype]").value].cat,ss=r.querySelector("[data-wslot]");
-if(slotTaken(cat,r)[ss.value])ss.value=freeSlot(cat,r);refresh();}
-function refresh(){var rs=rows();
-rs.forEach(function(r){var d=TYPES[r.querySelector("[data-wtype]").value],s=r.querySelector("[data-wslot]").value;
-r.querySelector(".wnote").textContent=LAB[d.cat]+" "+s;});
-document.getElementById("wempty").style.display=rs.length?"none":"block";
-var full=rs.length>=MAXT||firstFree(null)===null;
-addbtn.disabled=full;document.getElementById("wfull").style.display=full?"block":"none";}
-addbtn.addEventListener("click",function(){addRow(null,"");});
-form.addEventListener("submit",function(){var rs=rows();document.getElementById("wcount").value=rs.length;
-rs.forEach(function(r,i){r.querySelector("[data-wtype]").name="wtype"+i;r.querySelector("[data-wslot]").name="wslot"+i;r.querySelector("[data-wmac]").name="wmac"+i;});});
-INITIAL.forEach(function(e){addRow(e.t,e.m,e.s);});
-refresh();
-})();</script>)WSJS";
+  // Inline controller (no external assets — works on the offline captive portal).
+  html += R"HVJS(<script>(function(){
+var TYPES=[["holyiot","HolyIot 25015 — beacon"],["ruuvitag","RuuviTag — beacon"],["hiveinside","HiveInside — GATT"],["hiveheart","HiveHeart — GATT"],["hivescale","HiveScale wireless scale — GATT"],["beecounter","HiveTraffic counter — GATT"]];
+var host=document.getElementById("hives"),form=document.getElementById("cfgform");
+function clone(o){return JSON.parse(JSON.stringify(o));}
+var HIVES=(INITIAL_HIVES||[]).map(function(h){return {i:h.i,n:h.n||"",s:(h.s||[]).slice(),ds:h.ds||null,bl:(h.bl||[]).slice()};});
+function scaleKey(o){return o.b=="nau"?("nau:"+o.mux+":"+o.adc):("hx:"+o.hx);}
+function usedScales(){var u={};HIVES.forEach(function(h){h.s.forEach(function(o){u[scaleKey(o)]=1;});});return u;}
+function usedProbes(){var u={};HIVES.forEach(function(h){if(h.ds)u[h.ds]=1;});return u;}
+function nextScale(){var u=usedScales();for(var i=0;i<DETECTED_SCALES.length;i++){if(!u[scaleKey(DETECTED_SCALES[i])])return clone(DETECTED_SCALES[i]);}return DETECTED_SCALES.length?clone(DETECTED_SCALES[0]):{b:"hx",hx:0,label:"HX711 #1"};}
+function nextProbe(){var u=usedProbes();for(var i=0;i<DETECTED_PROBES.length;i++){if(!u[DETECTED_PROBES[i]])return DETECTED_PROBES[i];}return DETECTED_PROBES[0]||"";}
+function nextIndex(){var m=0;HIVES.forEach(function(h){if(h.i>m)m=h.i;});return m+1;}
+function findScale(k){for(var i=0;i<DETECTED_SCALES.length;i++)if(scaleKey(DETECTED_SCALES[i])==k)return clone(DETECTED_SCALES[i]);return null;}
+function scaleOpts(sel){return DETECTED_SCALES.map(function(o){var k=scaleKey(o);return "<option value='"+k+"'"+(k==scaleKey(sel)?" selected":"")+">"+o.label+"</option>";}).join("");}
+function probeOpts(sel){if(!DETECTED_PROBES.length)return "<option value=''>(no DS18B20 detected)</option>";return DETECTED_PROBES.map(function(r){return "<option value='"+r+"'"+(r==sel?" selected":"")+">"+r+"</option>";}).join("");}
+function typeOpts(sel){return TYPES.map(function(t){return "<option value='"+t[0]+"'"+(t[0]==sel?" selected":"")+">"+t[1]+"</option>";}).join("");}
+function render(){
+host.innerHTML="";
+HIVES.forEach(function(h,hi){
+var c=document.createElement("fieldset");c.className="wsrow";
+c.innerHTML="<legend>Hive "+h.i+"</legend>"+
+"<label>Name (optional)</label><input data-hn placeholder='e.g. Apiary A #3'>"+
+"<h3>Scales</h3><div data-scales></div><p><button type='button' class='button' data-addscale>&#10133; Add scale</button></p>"+
+"<h3>In-hive sensors</h3><div data-sensors></div><p><button type='button' class='button' data-addble>&#10133; Add BLE sensor</button> <button type='button' class='button' data-addds>&#10133; Add DS18B20</button></p>"+
+"<p><button type='button' class='button danger' data-delhive>Remove hive</button></p>";
+host.appendChild(c);
+var nm=c.querySelector("[data-hn]");nm.value=h.n||"";nm.addEventListener("input",function(){h.n=this.value;});
+var sc=c.querySelector("[data-scales]");
+h.s.forEach(function(o,si){var row=document.createElement("p");row.className="wnote";
+row.innerHTML="<select data-sc>"+scaleOpts(o)+"</select> <button type='button' class='button' data-rm>Remove</button>";
+sc.appendChild(row);
+row.querySelector("[data-sc]").addEventListener("change",function(){var n=findScale(this.value);if(n){n.off=o.off||0;n.fac=o.fac||-7050;h.s[si]=n;}render();});
+row.querySelector("[data-rm]").addEventListener("click",function(){h.s.splice(si,1);render();});});
+c.querySelector("[data-addscale]").addEventListener("click",function(){if(h.s.length<MAX_SCALES_PER_HIVE){h.s.push(nextScale());render();}});
+var sn=c.querySelector("[data-sensors]");
+if(h.ds){var row=document.createElement("p");row.className="wnote";
+row.innerHTML="<b>Wired DS18B20</b> <select data-ds>"+probeOpts(h.ds)+"</select> <button type='button' class='button' data-rm>Remove</button>";
+sn.appendChild(row);
+row.querySelector("[data-ds]").addEventListener("change",function(){h.ds=this.value;});
+row.querySelector("[data-rm]").addEventListener("click",function(){h.ds=null;render();});}
+h.bl.forEach(function(b,bi){var row=document.createElement("p");row.className="wnote";
+row.innerHTML="<select data-bt>"+typeOpts(b.t)+"</select> <input data-bm placeholder='AA:BB:CC:DD:EE:FF'> <button type='button' class='button' data-rm>Remove</button>";
+sn.appendChild(row);
+row.querySelector("[data-bt]").addEventListener("change",function(){b.t=this.value;});
+var mi=row.querySelector("[data-bm]");mi.value=b.m||"";mi.addEventListener("input",function(){b.m=this.value;});
+row.querySelector("[data-rm]").addEventListener("click",function(){h.bl.splice(bi,1);render();});});
+c.querySelector("[data-addble]").addEventListener("click",function(){if(h.bl.length<MAX_BLE){h.bl.push({t:"holyiot",m:""});render();}});
+c.querySelector("[data-addds]").addEventListener("click",function(){if(!h.ds)h.ds=nextProbe();render();});
+c.querySelector("[data-delhive]").addEventListener("click",function(){HIVES.splice(hi,1);render();});
+});
+document.getElementById("hempty").style.display=HIVES.length?"none":"block";
+document.getElementById("hfull").style.display=HIVES.length>=MAX_HIVES?"inline":"none";
+document.getElementById("addhive").disabled=HIVES.length>=MAX_HIVES;
+}
+document.getElementById("addhive").addEventListener("click",function(){if(HIVES.length<MAX_HIVES){HIVES.push({i:nextIndex(),n:"",s:[],ds:null,bl:[]});render();}});
+form.addEventListener("submit",function(){
+var out=HIVES.map(function(h){var o={i:h.i,n:h.n||""};
+o.s=h.s.map(function(s){return s.b=="nau"?{b:"nau",mux:s.mux,adc:s.adc,addr:s.addr||42,off:s.off||0,fac:s.fac||-7050}:{b:"hx",hx:s.hx,off:s.off||0,fac:s.fac||-7050};});
+if(h.ds)o.ds=h.ds;
+o.bl=h.bl.filter(function(b){return b.m&&b.m.length;}).map(function(b){return {t:b.t,m:b.m};});
+return o;});
+document.getElementById("hives_json").value=JSON.stringify(out);});
+render();
+})();</script>)HVJS";
   html += "</fieldset>";
-#endif
 
   html += "<fieldset><legend>WiFi networks</legend>";
   for (int i = 0; i < MAX_WIFI_NETWORKS; i++) {
@@ -516,80 +615,28 @@ void handleSetupSave() {
   if (newApiBase.length() > 0) prefs.putString("api_base", newApiBase);
   if (newApiKey.length() > 0) prefs.putString("api_key", newApiKey);
 
-#if (ENABLE_BLE_SCAN || ENABLE_BEEHIVE_GATT || ENABLE_WIRELESS_BEECOUNTER)
-  // Dynamic wireless-sensor list. The portal submits wcount plus a wtypeN /
-  // wmacN pair per row. We store that canonical list (so the page can repaint
-  // the exact rows next time) AND fan each row out to the per-transport slot
-  // keys the firmware reads: in-hive beacons/GATT -> ble_mac{0,1}, HiveHeart ->
-  // heart_mac{0,1}, HiveScale -> scale_mac{0,1}, BeeCounter -> counter_mac{0,1}
-  // (stored only; no firmware support yet). Each row also submits a wslotN (the
-  // "Maps to" choice, 1 or 2) that decides the target index, so a sensor can be
-  // mapped to hive/scale/counter 2 even when slot 1 is left to a wired sensor.
-  int wcount = setupServer.arg("wcount").toInt();
-  if (wcount < 0) wcount = 0;
-  if (wcount > 6) wcount = 6;
-
-  String bleMac[2]   = {"", ""};
-  String heartMac[2] = {"", ""};
-  String scaleMac[2] = {"", ""};
-  String cntMac[2]   = {"", ""};
-
-  prefs.putUInt("wcount", (uint32_t)wcount);
-  for (int i = 0; i < wcount; i++) {
-    String type = setupServer.arg(String("wtype") + i);
-    String mac = portalNormalizeMac(setupServer.arg(String("wmac") + i));
-    type.trim();
-    int slot = setupServer.arg(String("wslot") + i).toInt();
-    if (slot < 1) slot = 1;
-    if (slot > 2) slot = 2;
-    int idx = slot - 1;
-
-    prefs.putString((String("wtype") + i).c_str(), type);
-    prefs.putString((String("wmac") + i).c_str(), mac);
-    prefs.putUInt((String("wslot") + i).c_str(), (uint32_t)slot);
-
-    if (type == "hiveheart") {
-      heartMac[idx] = mac;
-    } else if (type == "hivescale") {
-      scaleMac[idx] = mac;
-    } else if (type == "beecounter") {
-      cntMac[idx] = mac;
-    } else {
-      // holyiot / ruuvitag / hiveinside and any unknown type -> in-hive bridge.
-      bleMac[idx] = mac;
+  // Parse the hive-mapping JSON the portal submitted. Each element is already in
+  // the shape hivecfg::hiveFromJson() expects, so we load them straight into the
+  // in-memory registry here; the NVS write happens once after prefs.end() below
+  // (saveHiveConfig opens its own handle, so it must not nest with this one).
+  {
+    String hivesJson = setupServer.arg("hives_json");
+    JsonDocument hd;
+    if (hivesJson.length() && !deserializeJson(hd, hivesJson)) {
+      uint8_t count = 0;
+      for (JsonObject o : hd.as<JsonArray>()) {
+        if (count >= MAX_HIVES) break;
+        // Normalise any MAC values in place before re-serialising for hiveFromJson.
+        for (JsonObject b : o["bl"].as<JsonArray>())
+          b["m"] = portalNormalizeMac(b["m"] | "");
+        String one;
+        serializeJson(o, one);
+        hivecfg::Hive hive;
+        if (hivecfg::hiveFromJson(one, hive)) hivecfg::gHives[count++] = hive;
+      }
+      hivecfg::gHiveCount = count;
     }
   }
-  // Clear any stale list entries left over from a previously longer list.
-  for (int i = wcount; i < 6; i++) {
-    prefs.remove((String("wtype") + i).c_str());
-    prefs.remove((String("wmac") + i).c_str());
-    prefs.remove((String("wslot") + i).c_str());
-  }
-
-#if ENABLE_BLE_SCAN
-  prefs.putString("ble_mac0", bleMac[0]);
-  prefs.putString("ble_mac1", bleMac[1]);
-  bleSensorMac0 = bleMac[0];
-  bleSensorMac1 = bleMac[1];
-#endif
-#if ENABLE_BEEHIVE_GATT
-  prefs.putString("heart_mac0", heartMac[0]);
-  prefs.putString("heart_mac1", heartMac[1]);
-  prefs.putString("scale_mac0", scaleMac[0]);
-  prefs.putString("scale_mac1", scaleMac[1]);
-  heartMac0 = heartMac[0];
-  heartMac1 = heartMac[1];
-  scaleMac0 = scaleMac[0];
-  scaleMac1 = scaleMac[1];
-#endif
-  // HiveTraffic (wireless bee counter) MACs — consumed when ENABLE_WIRELESS_BEECOUNTER.
-  prefs.putString("counter_mac0", cntMac[0]);
-  prefs.putString("counter_mac1", cntMac[1]);
-#if ENABLE_WIRELESS_BEECOUNTER
-  trafficMac0 = cntMac[0];
-  trafficMac1 = cntMac[1];
-#endif
-#endif
 
   int savedCount = 0;
   for (int i = 0; i < MAX_WIFI_NETWORKS; i++) {
@@ -626,6 +673,9 @@ void handleSetupSave() {
   prefs.putBool("provisioned", true);
   prefs.putBool("seeded", true);
   prefs.end();
+
+  // Persist the hive registry parsed above (opens/closes its own NVS handle).
+  hivecfg::saveHiveConfig();
 
   setupServer.send(200, "text/html", "<html><body><h1>Saved</h1><p>Device will reboot now.</p></body></html>");
   delay(1000);
@@ -669,6 +719,7 @@ void startProvisioningPortal() {
 #if ENABLE_BLE_SCAN
   setupServer.on("/ble/scan", HTTP_GET, handleBleScan);
 #endif
+  setupServer.on("/i2c/scan", HTTP_GET, handleI2cScan);
 
   // Common captive-portal probe URLs used by Android, iOS/macOS, Windows, and Firefox.
   // Redirecting these makes most phones/laptops show the setup page automatically

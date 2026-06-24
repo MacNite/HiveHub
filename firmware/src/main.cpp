@@ -11,6 +11,8 @@
 #include "sensors.h"
 #include "portal.h"
 #include "bee_counter_client.h"
+#include "hive_config.h"
+#include "scale_bus.h"
 
 #if ENABLE_INMP441_MICS
 #include "mics.h"
@@ -96,6 +98,10 @@ void setup() {
 
   seedPrefsFromSecretsIfNeeded();
   loadConfigFromPrefs();
+  // Parse the dynamic hive registry (migrating the legacy 2-slot config on the
+  // first boot after upgrade). Must run before the provisioning portal and the
+  // measurement cycle, both of which read gHives.
+  hivecfg::loadHiveConfig();
 
   if (digitalRead(SETUP_BUTTON_PIN) == LOW
 #ifdef CONFIG_IDF_TARGET_ESP32C6
@@ -106,6 +112,13 @@ void setup() {
   ) {
     Serial.println("[SETUP] Button wake/press detected; starting provisioning portal");
     initSdCard();
+    // Bring up I2C + the scale bus + the 1-Wire bus so the portal's "Scan I2C
+    // scales" and DS18B20 mapping can enumerate what is physically attached.
+    Wire.begin(I2C_SDA, I2C_SCL);
+    scalebus::begin();
+#if ENABLE_DS18B20_HIVE_TEMP
+    ds18b20.begin();
+#endif
     startProvisioningPortal();
     return;
   }
@@ -156,6 +169,10 @@ void setup() {
   scale1.begin(HX1_DOUT, HX1_SCK);
   scale2.begin(HX2_DOUT, HX2_SCK);
   Serial.println("[HX711] Initialized");
+
+  // Detect the TCA9548A mux and configure every NAU7802 in the registry. Needs
+  // Wire (started above) and the loaded registry; safe when no I2C scales exist.
+  scalebus::begin();
 
   initSdCard();
 

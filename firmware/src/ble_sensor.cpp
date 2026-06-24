@@ -267,7 +267,11 @@ struct Accumulator {
 };
 
 namespace {
-Accumulator g_slot[2];
+// One accumulator per paired in-hive MAC for the current scan. Sized by the
+// caller (scanPairedSensorsMulti / the 2-slot wrapper / discover / OTA) before a
+// scan; the callback matches advertisements against every entry, so any number of
+// beacons is handled by the single shared scan window.
+std::vector<Accumulator> g_slot;
 std::vector<Discovered>* g_discover = nullptr;  // non-null during discover()
 
 class ScanCallbacks : public NimBLEScanCallbacks {
@@ -312,7 +316,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     // absent. GATT-mode HiveInside does not embed the measurement blob, so p.ok
     // is false, but we need the address type for the subsequent connection
     // (normal GATT read and/or the OTA relay).
-    for (int s = 0; s < 2; s++) {
+    for (size_t s = 0; s < g_slot.size(); s++) {
       if (g_slot[s].mac.length() > 0 && g_slot[s].mac == mac) {
         g_slot[s].found_by_mac = true;
         g_slot[s].ble_addr_type = (uint8_t)dev->getAddress().getType();
@@ -321,7 +325,7 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 #endif
 
     if (!p.ok) return;
-    for (int s = 0; s < 2; s++) {
+    for (size_t s = 0; s < g_slot.size(); s++) {
       if (g_slot[s].mac.length() == 0 || g_slot[s].mac != mac) continue;
       Accumulator& a = g_slot[s];
       a.present = true;
@@ -568,58 +572,81 @@ static NimBLEScan* startScan(ScanCallbacks& cb, uint32_t seconds) {
   return scan;
 }
 
-void scanPairedSensors(const String& mac0, const String& mac1,
-                       Snapshot& slot1, Snapshot& slot2) {
-  slot1 = Snapshot{};
-  slot2 = Snapshot{};
+void scanPairedSensorsMulti(const std::vector<String>& macs,
+                            const std::vector<bool>& isGatt,
+                            std::vector<Snapshot>& out,
+                            int gattBudget) {
+  out.assign(macs.size(), Snapshot{});
 
-  String m0 = normalizeMac(mac0);
-  String m1 = normalizeMac(mac1);
-  if (m0.length() == 0 && m1.length() == 0) {
+  g_slot.assign(macs.size(), Accumulator{});
+  size_t paired = 0;
+  for (size_t i = 0; i < macs.size(); i++) {
+    String m = normalizeMac(macs[i]);
+    g_slot[i].mac = m;
+    if (m.length()) paired++;
+  }
+  g_discover = nullptr;
+
+  if (paired == 0) {
     Serial.println("[BLE] No in-hive sensors paired; skipping scan");
+    g_slot.clear();
     return;
   }
 
-  g_slot[0] = Accumulator{}; g_slot[0].mac = m0;
-  g_slot[1] = Accumulator{}; g_slot[1].mac = m1;
-  g_discover = nullptr;
-
-  Serial.printf("[BLE] Scanning %us for paired sensors (slot1=%s slot2=%s) at boot+%lums\n",
-                (unsigned)HOLYIOT_BLE_SCAN_SECONDS,
-                m0.length() ? m0.c_str() : "-",
-                m1.length() ? m1.c_str() : "-",
-                millis());
+  // ONE shared scan window catches every paired beacon at once, so any number of
+  // beacon sensors costs the same airtime and deep sleep stays effective.
+  Serial.printf("[BLE] Scanning %us for %u paired in-hive sensor(s) at boot+%lums\n",
+                (unsigned)HOLYIOT_BLE_SCAN_SECONDS, (unsigned)paired, millis());
 
   ScanCallbacks cb;
   NimBLEScan* scan = startScan(cb, HOLYIOT_BLE_SCAN_SECONDS);
   scan->clearResults();
 
 #if HIVEINSIDE_USE_GATT
-  // Post-scan GATT phase — NimBLE stack is still alive here; deinit follows.
-  // Devices with advertising data (HolyIot, advertising-mode HiveInside) are
-  // copied directly. Devices found only by MAC match (GATT-mode HiveInside, no
-  // manufacturer blob) get a GATT connection attempt instead.
-  for (int s = 0; s < 2; s++) {
-    Snapshot& dest = (s == 0) ? slot1 : slot2;
+  // Post-scan GATT phase — the NimBLE stack is still alive here. Beacons with
+  // advertising data are copied directly (free). A sensor found only by MAC
+  // (GATT-mode HiveInside) needs a serial connect→read, which is slow — so only
+  // up to `gattBudget` such reads are attempted this cycle; the rest stay
+  // !present and are retried next wake. This is the "cap GATT" half of the
+  // beacon-first strategy that keeps many sensors from defeating deep sleep.
+  int gattUsed = 0;
+  for (size_t s = 0; s < g_slot.size(); s++) {
     if (g_slot[s].mac.length() == 0 || !g_slot[s].found_by_mac) continue;
     if (g_slot[s].present) {
-      // Advertising data parsed successfully — use it, no GATT needed.
-      copyToSnapshot(g_slot[s], dest);
+      copyToSnapshot(g_slot[s], out[s]);   // advertising data — no GATT needed
       continue;
     }
-    // No advertising data: try GATT (expected for BLE_MODE_GATT HiveInside).
-    NimBLEAddress addr(g_slot[s].mac.c_str(), g_slot[s].ble_addr_type);
-    Serial.printf("[BLE] GATT: connecting to slot%d (%s)\n", s + 1, g_slot[s].mac.c_str());
-    if (!gattReadHiveInside(addr, dest)) {
-      Serial.printf("[BLE] GATT slot%d: no data this cycle\n", s + 1);
+    bool wantGatt = (s < isGatt.size()) ? isGatt[s] : true;
+    if (!wantGatt) continue;
+    if (gattBudget >= 0 && gattUsed >= gattBudget) {
+      Serial.printf("[BLE] GATT budget (%d/cycle) reached; deferring %s\n",
+                    gattBudget, g_slot[s].mac.c_str());
+      continue;
     }
+    gattUsed++;
+    NimBLEAddress addr(g_slot[s].mac.c_str(), g_slot[s].ble_addr_type);
+    Serial.printf("[BLE] GATT: connecting to %s (%d/%d)\n",
+                  g_slot[s].mac.c_str(), gattUsed, gattBudget);
+    if (!gattReadHiveInside(addr, out[s]))
+      Serial.printf("[BLE] GATT %s: no data this cycle\n", g_slot[s].mac.c_str());
   }
 #else
-  copyToSnapshot(g_slot[0], slot1);
-  copyToSnapshot(g_slot[1], slot2);
+  for (size_t s = 0; s < g_slot.size(); s++) copyToSnapshot(g_slot[s], out[s]);
 #endif
 
   NimBLEDevice::deinit(true);  // free the controller before the WiFi upload
+  g_slot.clear();
+}
+
+void scanPairedSensors(const String& mac0, const String& mac1,
+                       Snapshot& slot1, Snapshot& slot2) {
+  // Back-compat 2-slot wrapper over the generalized multi-hive scan.
+  std::vector<String> macs = {mac0, mac1};
+  std::vector<bool>   gatt = {true, true};
+  std::vector<Snapshot> out;
+  scanPairedSensorsMulti(macs, gatt, out, MAX_GATT_READS_PER_CYCLE);
+  slot1 = out.size() > 0 ? out[0] : Snapshot{};
+  slot2 = out.size() > 1 ? out[1] : Snapshot{};
 
   Serial.printf("[BLE] slot1 present=%d (%u adv) | slot2 present=%d (%u adv)\n",
                 slot1.present, slot1.sample_count, slot2.present, slot2.sample_count);
@@ -627,8 +654,7 @@ void scanPairedSensors(const String& mac0, const String& mac1,
 
 std::vector<Discovered> discover(uint32_t seconds) {
   std::vector<Discovered> found;
-  g_slot[0] = Accumulator{};
-  g_slot[1] = Accumulator{};
+  g_slot.clear();   // discover mode matches against g_discover, not g_slot
   g_discover = &found;
 
   ScanCallbacks cb;
@@ -694,6 +720,49 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
     if (!isnan(snap.mic_piping_dbfs))  doc[mp + "band_piping_dbfs"]   = snap.mic_piping_dbfs;
     if (!isnan(snap.mic_stress_dbfs))  doc[mp + "band_stress_dbfs"]   = snap.mic_stress_dbfs;
     if (!isnan(snap.mic_high_dbfs))    doc[mp + "band_high_dbfs"]     = snap.mic_high_dbfs;
+  }
+}
+
+void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
+  // Nested per-hive form used by the hives[] array (server maps these onto the
+  // hive_readings accel_*/ble_*/mic_* columns). Temperature is owned by
+  // sensors.cpp (DS18B20-vs-BLE arbitration), so it is not written here.
+  JsonObject accel = hive["accel"].to<JsonObject>();
+  accel["ok"] = snap.present;
+  if (!snap.present) return;
+
+  JsonObject ble = hive["ble"].to<JsonObject>();
+  ble["present"]     = true;
+  ble["sensor_type"] = sensorTypeName(snap.type);
+  if (!isnan(snap.humidity_pct)) ble["humidity_percent"] = snap.humidity_pct;
+  if (!isnan(snap.pressure_hpa)) ble["pressure_hpa"]     = snap.pressure_hpa;
+  if (!isnan(snap.accel_x_mg))   ble["accel_x_mg"]       = snap.accel_x_mg;
+  if (!isnan(snap.accel_y_mg))   ble["accel_y_mg"]       = snap.accel_y_mg;
+  if (!isnan(snap.accel_z_mg))   ble["accel_z_mg"]       = snap.accel_z_mg;
+  if (snap.battery_pct >= 0)     ble["battery_percent"]  = snap.battery_pct;
+  ble["rssi_dbm"] = snap.rssi_dbm;
+  if (snap.fw_version.length())  ble["firmware_version"] = snap.fw_version;
+
+  if (snap.sample_count > 0) {
+    accel["sample_count"]   = snap.sample_count;
+    accel["sample_rate_hz"] = 0;   // beacon: no fixed sample rate
+    accel["range_g"]        = 2;   // LIS2DH12 / LIS3DH default ±2 g
+    if (!isnan(snap.accel_rms_mg))  accel["rms_mg"]  = snap.accel_rms_mg;
+    if (!isnan(snap.accel_peak_mg)) accel["peak_mg"] = snap.accel_peak_mg;
+    if (!isnan(snap.accel_band_swarm_mg))    accel["band_swarm_mg"]    = snap.accel_band_swarm_mg;
+    if (!isnan(snap.accel_band_fanning_mg))  accel["band_fanning_mg"]  = snap.accel_band_fanning_mg;
+    if (!isnan(snap.accel_band_activity_mg)) accel["band_activity_mg"] = snap.accel_band_activity_mg;
+  }
+
+  if (snap.mic_present) {
+    JsonObject mic = hive["mic"].to<JsonObject>();
+    mic["ok"] = true;
+    if (!isnan(snap.mic_rms_dbfs))      mic["rms_dbfs"]           = snap.mic_rms_dbfs;
+    if (!isnan(snap.mic_sub_bass_dbfs)) mic["band_sub_bass_dbfs"] = snap.mic_sub_bass_dbfs;
+    if (!isnan(snap.mic_hum_dbfs))      mic["band_hum_dbfs"]      = snap.mic_hum_dbfs;
+    if (!isnan(snap.mic_piping_dbfs))   mic["band_piping_dbfs"]   = snap.mic_piping_dbfs;
+    if (!isnan(snap.mic_stress_dbfs))   mic["band_stress_dbfs"]   = snap.mic_stress_dbfs;
+    if (!isnan(snap.mic_high_dbfs))     mic["band_high_dbfs"]     = snap.mic_high_dbfs;
   }
 }
 
@@ -763,8 +832,7 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
   // same scan callback the measurement path uses.
   uint8_t addrType = BLE_ADDR_PUBLIC;
   bool found = false;
-  g_slot[0] = Accumulator{}; g_slot[0].mac = m;
-  g_slot[1] = Accumulator{};
+  g_slot.assign(1, Accumulator{}); g_slot[0].mac = m;
   g_discover = nullptr;
   {
     ScanCallbacks cb;

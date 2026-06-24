@@ -10,6 +10,8 @@
 #include <driver/rtc_io.h>
 #endif
 
+#include "scale_bus.h"
+
 #if ENABLE_INMP441_MICS
 #include "mics.h"
 #endif
@@ -96,6 +98,12 @@ void powerUpScales() {
 }
 
 void powerDownScalesForSleep() {
+  // Put every I2C NAU7802 (direct + behind each mux channel) into power-down
+  // first, while the I2C bus is still active. This is the "sleep the NAU7802
+  // before the ESP32 deep-sleeps" step; without it the ADC keeps converting and
+  // burns milliamps through the whole sleep window.
+  scalebus::powerDownAllForSleep();
+
   scale1.power_down();
   scale2.power_down();
 
