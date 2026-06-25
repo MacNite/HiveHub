@@ -5,11 +5,14 @@
 #include "hivescale_network.h"
 #include "storage_power.h"
 #include "bee_counter_client.h"
+#include "hive_config.h"
+#include "scale_bus.h"
 
 #include <WiFi.h>
 #include <time.h>
 #include <sys/time.h>
 #include <math.h>
+#include <vector>
 
 #if ENABLE_INMP441_MICS
 #include "mics.h"
@@ -106,6 +109,7 @@ void syncTime() {
   timeSource = "invalid";
 }
 
+#if ENABLE_HX711
 long readAverageRaw(HX711& scale, int samples) {
   if (!scale.wait_ready_timeout(2000)) {
     Serial.println("[HX711] Not ready");
@@ -113,95 +117,83 @@ long readAverageRaw(HX711& scale, int samples) {
   }
   return scale.read_average(samples);
 }
+#endif
 
 float weightFromRaw(long raw, long offset, float factor) {
   if (factor == 0.0f) return NAN;
   return ((float)(raw - offset)) / factor;
 }
 
+static const char* scaleBackendName(hivecfg::ScaleBackend b) {
+  switch (b) {
+    case hivecfg::ScaleBackend::HX711:   return "hx711";
+    case hivecfg::ScaleBackend::NAU7802: return "nau7802";
+    default:                             return "none";
+  }
+}
+
+#if ENABLE_BLE_SCAN
+// First present in-hive snapshot mapped to hive-array slot `hiveArrIdx` (else the
+// first one paired to that hive even if absent, so callers can still report it).
+static const blesensor::Snapshot* snapForHive(
+    const std::vector<int>& hiveOfMac,
+    const std::vector<blesensor::Snapshot>& snaps,
+    int hiveArrIdx) {
+  const blesensor::Snapshot* fallback = nullptr;
+  for (size_t i = 0; i < snaps.size() && i < hiveOfMac.size(); i++) {
+    if (hiveOfMac[i] != hiveArrIdx) continue;
+    if (snaps[i].present) return &snaps[i];
+    if (!fallback) fallback = &snaps[i];
+  }
+  return fallback;
+}
+#endif
+
 String createMeasurementJson() {
   Serial.println("[MEASURE] Reading sensors...");
 
   powerUpScales();
 
-  // ── In-hive BLE sensor scan FIRST ──────────────────────────────────────────
-  // We scan the paired in-hive BLE sensors (HolyIot 25015 and/or HiveInside
-  // ESP32-C6) before the wired sensors so we know which capabilities the BLE
-  // sensor already provides, and can skip the wired sensor that measures the
-  // same in-hive quantity (collision avoidance — see config.h BLE_OVERRIDE_*).
+  // ── In-hive BLE sensors (beacon + capped GATT) for ALL hives ───────────────
+  // One passive scan window catches every paired beacon at once; connection-based
+  // GATT reads are capped per cycle (MAX_GATT_READS_PER_CYCLE) so deep sleep stays
+  // effective even with many hives. Done before the wired sensors so per-hive
+  // arbitration (below) can skip a wired probe a BLE sensor already covers.
 #if ENABLE_BLE_SCAN
-  blesensor::Snapshot bleSnap1;
-  blesensor::Snapshot bleSnap2;
-  blesensor::scanPairedSensors(bleSensorMac0, bleSensorMac1, bleSnap1, bleSnap2);
-
-  // Per-slot arbitration decisions (hive 1 = slot 1, hive 2 = slot 2).
-  const bool bleTakesTemp1 = BLE_OVERRIDE_DS18B20 && bleSnap1.providesTemp();
-  const bool bleTakesTemp2 = BLE_OVERRIDE_DS18B20 && bleSnap2.providesTemp();
-  const bool bleTakesMic    = BLE_OVERRIDE_MICS &&
-                              (bleSnap1.providesMic() || bleSnap2.providesMic());
+  std::vector<String> bleMacs;
+  std::vector<bool>   bleIsGatt;
+  std::vector<int>    bleHiveOfMac;   // gHives[] index each MAC belongs to
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    for (uint8_t b = 0; b < hive.bleCount; b++) {
+      const hivecfg::BlePairing& p = hive.ble[b];
+      // In-hive beacon/HiveInside sensors go through this bridge; HiveHeart/
+      // HiveScale/HiveTraffic are handled by their own GATT modules below.
+      if (p.type == "holyiot" || p.type == "ruuvitag" || p.type == "hiveinside") {
+        bleMacs.push_back(p.mac);
+        bleIsGatt.push_back(p.isGatt());
+        bleHiveOfMac.push_back(h);
+      }
+    }
+  }
+  std::vector<blesensor::Snapshot> bleSnaps;
+  blesensor::scanPairedSensorsMulti(bleMacs, bleIsGatt, bleSnaps, MAX_GATT_READS_PER_CYCLE);
 #endif
 
-  // ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) ─────────────
-  // Connect-read-disconnect over GATT. Done here, before WiFi, so a present
-  // HiveHeart can also supply the in-hive temperature/humidity for its hive.
+  // ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) — hives 1–2 ──
 #if ENABLE_BEEHIVE_GATT
   bhgatt::CycleResult bh;
   bhgatt::runCycle(bh);
 #endif
 
-  // Wired DS18B20 in-hive probes are optional. A probe is skipped for a hive
-  // whose paired BLE sensor already reports in-hive temperature, so each
-  // hive_N_temp_c carries exactly one source.
-  float hiveTemp1 = NAN;
-  float hiveTemp2 = NAN;
-  // In-hive relative humidity (sourced from a paired in-hive BLE sensor; there
-  // is no wired in-hive RH probe). Distinct from the ambient SHT40 humidity.
-  float hiveHumidity1 = NAN;
-  float hiveHumidity2 = NAN;
+  // ── Wired DS18B20: a single bus conversion, then per-hive ROM reads below ───
 #if ENABLE_DS18B20_HIVE_TEMP
-  bool ds18Skip1 = false, ds18Skip2 = false;
-#if ENABLE_BLE_SCAN
-  ds18Skip1 = bleTakesTemp1;
-  ds18Skip2 = bleTakesTemp2;
-  if (ds18Skip1 || ds18Skip2)
-    Serial.printf("[ARB] BLE supplies in-hive temp (h1=%d h2=%d); skipping wired DS18B20 for those\n",
-                  ds18Skip1, ds18Skip2);
+  ds18b20.requestTemperatures();
 #endif
-  if (!(ds18Skip1 && ds18Skip2)) {
-    ds18b20.requestTemperatures();
-    // A DS18B20 that is enabled in config but not physically wired reports the
-    // library's disconnect sentinel (DEVICE_DISCONNECTED_C = -127 C), not a
-    // read error. Leaving that value in hiveTemp{1,2} would (a) defeat the
-    // isnan() BLE/HiveHeart fallback below and (b) upload nonsense temperatures.
-    // Map the sentinel (and the other sub-range error codes) back to NAN so the
-    // slot is treated as "no wired reading".
-    if (!ds18Skip1) {
-      float t = ds18b20.getTempCByIndex(0);
-      hiveTemp1 = (t <= DEVICE_DISCONNECTED_C) ? NAN : t;
-    }
-    if (!ds18Skip2) {
-      float t = ds18b20.getTempCByIndex(1);
-      hiveTemp2 = (t <= DEVICE_DISCONNECTED_C) ? NAN : t;
-    }
-  }
-#endif
+
+  // ── Ambient SHT4x (device-level, outside-hive) ─────────────────────────────
   float ambientTemp = NAN;
   float ambientHumidity = NAN;
-
-#if ENABLE_INA219_SOLAR
-  float solarBusVoltage = NAN;
-  float solarShuntVoltageMv = NAN;
-  float solarLoadVoltage = NAN;
-  float solarCurrentMa = NAN;
-  float solarPowerMw = NAN;
-#endif
-
-#if ENABLE_MAX17048_BATTERY
-  float batteryVoltage = NAN;
-  float batterySoc = NAN;
-  bool batteryAlert = false;
-#endif
-
   if (shtOk) {
     sensors_event_t humidity, temp;
     if (sht4.getEvent(&humidity, &temp)) {
@@ -212,12 +204,9 @@ String createMeasurementJson() {
     }
   }
 
-  long raw1 = readAverageRaw(scale1);
-  long raw2 = readAverageRaw(scale2);
-  float weight1 = weightFromRaw(raw1, scale1Offset, scale1Factor);
-  float weight2 = weightFromRaw(raw2, scale2Offset, scale2Factor);
-
 #if ENABLE_INA219_SOLAR
+  float solarBusVoltage = NAN, solarShuntVoltageMv = NAN, solarLoadVoltage = NAN;
+  float solarCurrentMa = NAN, solarPowerMw = NAN;
   if (solarMonitorOk) {
     solarMonitor.powerSave(false);
     delay(10);
@@ -231,62 +220,40 @@ String createMeasurementJson() {
 #endif
 
 #if ENABLE_MAX17048_BATTERY
+  float batteryVoltage = NAN, batterySoc = NAN;
+  bool batteryAlert = false;
   if (batteryMonitorOk) {
     batteryVoltage = batteryGauge.getVoltage();
     batterySoc = batteryGauge.getSOC();
     batteryAlert = batteryGauge.getAlert();
-    // The ALRT bit is sticky — clear it after reading so the chip can
-    // re-assert it on the next internal cycle if SOC is still below threshold.
     if (batteryAlert) batteryGauge.clearAlert();
   }
 #endif
+
+  // ── Wired stereo mics (device-level; left=hive 1, right=hive 2) ────────────
 #if ENABLE_INMP441_MICS
-  // The wired stereo INMP441 pair is skipped when a paired in-hive BLE sensor
-  // supplies acoustics (its FFT bands are mapped onto mic_left_*/mic_right_*
-  // instead). Avoids capturing — and uploading — two competing sound sources.
   bool wiredMicUsed = true;
 #if ENABLE_BLE_SCAN
-  if (bleTakesMic) {
-    wiredMicUsed = false;
-    Serial.println("[ARB] BLE supplies in-hive acoustics; skipping wired INMP441 mics");
+  if (BLE_OVERRIDE_MICS) {
+    const blesensor::Snapshot* s1 = snapForHive(bleHiveOfMac, bleSnaps, 0);
+    const blesensor::Snapshot* s2 = snapForHive(bleHiveOfMac, bleSnaps, 1);
+    if ((s1 && s1->providesMic()) || (s2 && s2->providesMic())) {
+      wiredMicUsed = false;
+      Serial.println("[ARB] BLE supplies in-hive acoustics; skipping wired INMP441 mics");
+    }
   }
 #endif
   MicMeasurement micResult;
   if (wiredMicUsed) micResult = readMicSamples();
 #endif
 
-#if ENABLE_BLE_SCAN
-  // In-hive temperature source: the wired DS18B20 (when not overridden above)
-  // takes priority; otherwise fall back to the BLE sensor's SHT40 temperature.
-  if (isnan(hiveTemp1) && bleSnap1.present && !isnan(bleSnap1.temp_c)) hiveTemp1 = bleSnap1.temp_c;
-  if (isnan(hiveTemp2) && bleSnap2.present && !isnan(bleSnap2.temp_c)) hiveTemp2 = bleSnap2.temp_c;
-  // In-hive humidity comes only from the BLE sensor (no wired in-hive RH probe).
-  if (bleSnap1.present && !isnan(bleSnap1.humidity_pct)) hiveHumidity1 = bleSnap1.humidity_pct;
-  if (bleSnap2.present && !isnan(bleSnap2.humidity_pct)) hiveHumidity2 = bleSnap2.humidity_pct;
-#endif
-
-#if ENABLE_BEEHIVE_GATT
-  // A paired HiveHeart supplies in-hive temperature/humidity for its hive when
-  // no higher-priority source (wired DS18B20 / HolyIot) already filled it.
-  if (isnan(hiveTemp1) && bh.heart[0].present) hiveTemp1 = bh.heart[0].temp_c;
-  if (isnan(hiveTemp2) && bh.heart[1].present) hiveTemp2 = bh.heart[1].temp_c;
-  if (isnan(hiveHumidity1) && bh.heart[0].present) hiveHumidity1 = bh.heart[0].humidity_pct;
-  if (isnan(hiveHumidity2) && bh.heart[1].present) hiveHumidity2 = bh.heart[1].humidity_pct;
-#endif
-
-// ---- BeeCounter polling -------------------------------------------------
-  // Each slot is independent — a missing counter just reports "ok=false".
-  // A slot with a paired HiveTraffic MAC is read wirelessly over GATT; any
-  // remaining slot falls back to the wired I2C BeeCounter on the shared bus.
-  beecnt::Snapshot beeSnap1;
-  beecnt::Snapshot beeSnap2;
+  // ── BeeCounter (entrance gates) — hives 1–2, wired I2C or HiveTraffic BLE ──
+  beecnt::Snapshot beeSnap1, beeSnap2;
 #if ENABLE_WIRELESS_BEECOUNTER
   const bool trafficSlot1 = trafficMac0.length() > 0;
   const bool trafficSlot2 = trafficMac1.length() > 0;
-  if (trafficSlot1 || trafficSlot2) {
-    // Single BLE up/down for both wireless slots (mirrors bhgatt::runCycle).
+  if (trafficSlot1 || trafficSlot2)
     beecnt::bleRunCycle(trafficMac0, trafficMac1, beeSnap1, beeSnap2);
-  }
 #else
   const bool trafficSlot1 = false;
   const bool trafficSlot2 = false;
@@ -294,35 +261,11 @@ String createMeasurementJson() {
   if (!trafficSlot1) (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_1, beeSnap1);
   if (!trafficSlot2) (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_2, beeSnap2);
 
-  Serial.printf("[MEASURE] raw1=%ld weight1=%.3f kg\n", raw1, weight1);
-  Serial.printf("[MEASURE] raw2=%ld weight2=%.3f kg\n", raw2, weight2);
-  Serial.printf("[MEASURE] hiveTemp1=%.2f hiveTemp2=%.2f\n", hiveTemp1, hiveTemp2);
-  Serial.printf("[MEASURE] ambientTemp=%.2f humidity=%.2f\n", ambientTemp, ambientHumidity);
-#if ENABLE_INA219_SOLAR
-  Serial.printf("[MEASURE] solar load=%.3f V current=%.2f mA power=%.2f mW\n", solarLoadVoltage, solarCurrentMa, solarPowerMw);
-#endif
-#if ENABLE_MAX17048_BATTERY
-  Serial.printf("[MEASURE] battery=%.3f V soc=%.1f%% alert=%s\n", batteryVoltage, batterySoc, batteryAlert ? "yes" : "no");
-#endif
-
+  // ── Assemble the upload document ───────────────────────────────────────────
   JsonDocument doc;
   doc["device_id"] = deviceId;
   if (claimCode.length() > 0 && !claimRegistered) doc["claim_code"] = claimCode;
-  // Only attach a client timestamp when the device actually knows the time.
-  // When RTC and NTP have both failed (timeSource == "invalid"), timestampNow()
-  // returns the 1970-01-01 epoch fallback. The server stores the client
-  // timestamp verbatim, so sending 1970 silently freezes "last data" in the
-  // dashboard at the last good reading even though uploads keep succeeding.
-  // Omitting the field instead lets the server stamp the row with its own clock.
-  if (timeSource != "invalid") {
-    doc["timestamp"] = timestampNow();
-  }
-  doc["scale_1_weight_kg"] = weight1;
-  doc["scale_2_weight_kg"] = weight2;
-  doc["hive_1_temp_c"] = hiveTemp1;
-  doc["hive_2_temp_c"] = hiveTemp2;
-  doc["hive_1_humidity_percent"] = hiveHumidity1;
-  doc["hive_2_humidity_percent"] = hiveHumidity2;
+  if (timeSource != "invalid") doc["timestamp"] = timestampNow();
   doc["ambient_temp_c"] = ambientTemp;
   doc["ambient_humidity_percent"] = ambientHumidity;
   doc["network_transport"] = "wifi";
@@ -331,8 +274,7 @@ String createMeasurementJson() {
   doc["calibration_mode"] = calibrationModeActive;
   doc["boot_count"] = rtcBootCount;
   doc["time_source"] = timeSource;
-  doc["scale_1_raw"] = raw1;
-  doc["scale_2_raw"] = raw2;
+  doc["hive_count"] = hivecfg::gHiveCount;
   doc["sd_ok"] = sdOk;
   doc["rtc_ok"] = rtcOk;
   doc["sht_ok"] = shtOk;
@@ -351,45 +293,118 @@ String createMeasurementJson() {
   doc["battery_alert"] = batteryAlert;
 #endif
 #if ENABLE_INMP441_MICS
-  // Only emit the wired-mic fields when the wired pair was actually read; when a
-  // BLE sensor supplied acoustics, blesensor::writeSnapshotToJson below fills
-  // mic_left_*/mic_right_* instead.
   if (wiredMicUsed) {
-  doc["mic_ok"]                       = micResult.ok;
-  doc["mic_sample_rate_hz"]           = (uint32_t)INMP441_SAMPLE_RATE;
-  doc["mic_sample_frames"]            = (uint32_t)INMP441_SAMPLE_FRAMES;
-  doc["mic_left_ok"]                  = micResult.left.ok;
-  doc["mic_left_rms_dbfs"]            = micResult.left.rmsDbfs;
-  doc["mic_left_peak_dbfs"]           = micResult.left.peakDbfs;
-  doc["mic_left_rms_normalized"]      = micResult.left.rmsNormalized;
-  doc["mic_right_ok"]                 = micResult.right.ok;
-  doc["mic_right_rms_dbfs"]           = micResult.right.rmsDbfs;
-  doc["mic_right_peak_dbfs"]          = micResult.right.peakDbfs;
-  doc["mic_right_rms_normalized"]     = micResult.right.rmsNormalized;
-  doc["mic_left_band_sub_bass_dbfs"]  = micResult.left.bands.sub_bass_dbfs;
-  doc["mic_left_band_hum_dbfs"]       = micResult.left.bands.hum_dbfs;
-  doc["mic_left_band_piping_dbfs"]    = micResult.left.bands.piping_dbfs;
-  doc["mic_left_band_stress_dbfs"]    = micResult.left.bands.stress_dbfs;
-  doc["mic_left_band_high_dbfs"]      = micResult.left.bands.high_dbfs;
-  doc["mic_right_band_sub_bass_dbfs"] = micResult.right.bands.sub_bass_dbfs;
-  doc["mic_right_band_hum_dbfs"]      = micResult.right.bands.hum_dbfs;
-  doc["mic_right_band_piping_dbfs"]   = micResult.right.bands.piping_dbfs;
-  doc["mic_right_band_stress_dbfs"]   = micResult.right.bands.stress_dbfs;
-  doc["mic_right_band_high_dbfs"]     = micResult.right.bands.high_dbfs;
-  }  // if (wiredMicUsed)
+    doc["mic_ok"]                   = micResult.ok;
+    doc["mic_sample_rate_hz"]       = (uint32_t)INMP441_SAMPLE_RATE;
+    doc["mic_sample_frames"]        = (uint32_t)INMP441_SAMPLE_FRAMES;
+    doc["mic_left_ok"]              = micResult.left.ok;
+    doc["mic_left_rms_dbfs"]        = micResult.left.rmsDbfs;
+    doc["mic_left_peak_dbfs"]       = micResult.left.peakDbfs;
+    doc["mic_left_rms_normalized"]  = micResult.left.rmsNormalized;
+    doc["mic_right_ok"]             = micResult.right.ok;
+    doc["mic_right_rms_dbfs"]       = micResult.right.rmsDbfs;
+    doc["mic_right_peak_dbfs"]      = micResult.right.peakDbfs;
+    doc["mic_right_rms_normalized"] = micResult.right.rmsNormalized;
+    doc["mic_left_band_sub_bass_dbfs"]  = micResult.left.bands.sub_bass_dbfs;
+    doc["mic_left_band_hum_dbfs"]       = micResult.left.bands.hum_dbfs;
+    doc["mic_left_band_piping_dbfs"]    = micResult.left.bands.piping_dbfs;
+    doc["mic_left_band_stress_dbfs"]    = micResult.left.bands.stress_dbfs;
+    doc["mic_left_band_high_dbfs"]      = micResult.left.bands.high_dbfs;
+    doc["mic_right_band_sub_bass_dbfs"] = micResult.right.bands.sub_bass_dbfs;
+    doc["mic_right_band_hum_dbfs"]      = micResult.right.bands.hum_dbfs;
+    doc["mic_right_band_piping_dbfs"]   = micResult.right.bands.piping_dbfs;
+    doc["mic_right_band_stress_dbfs"]   = micResult.right.bands.stress_dbfs;
+    doc["mic_right_band_high_dbfs"]     = micResult.right.bands.high_dbfs;
+  }
 #endif
 
-  beecnt::writeSnapshotToJson(doc, 1, beeSnap1);
-  beecnt::writeSnapshotToJson(doc, 2, beeSnap2);
+  // ── Per-hive array — the heart of the multi-hive upload ────────────────────
+  JsonArray hivesArr = doc["hives"].to<JsonArray>();
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    JsonObject ho = hivesArr.add<JsonObject>();
+    ho["index"] = hive.index;
+    if (hive.name.length()) ho["name"] = hive.name;
 
 #if ENABLE_BLE_SCAN
-  blesensor::writeSnapshotToJson(doc, 1, bleSnap1);
-  blesensor::writeSnapshotToJson(doc, 2, bleSnap2);
+    const blesensor::Snapshot* sn = snapForHive(bleHiveOfMac, bleSnaps, h);
 #endif
 
-#if ENABLE_BEEHIVE_GATT
-  bhgatt::writeToJson(doc, bh);
+    // Scales: sum every channel mapped to this hive (usually one).
+    double weightSum = 0.0;
+    bool   anyScale = false;
+    long   firstRaw = 0;
+    const char* scaleSrc = "";
+    for (uint8_t s = 0; s < hive.scaleCount; s++) {
+      const hivecfg::ScaleChannel& ch = hive.scales[s];
+      if (!ch.valid()) continue;
+      long raw = scalebus::readRaw(ch);
+      float kg = weightFromRaw(raw, ch.offset, ch.factor);
+      if (s == 0) { firstRaw = raw; scaleSrc = scaleBackendName(ch.backend); }
+      if (!isnan(kg)) { weightSum += kg; anyScale = true; }
+      Serial.printf("[MEASURE] hive %u scale %u (%s) raw=%ld kg=%.3f\n",
+                    hive.index, s, scaleBackendName(ch.backend), raw, kg);
+    }
+    if (anyScale) {
+      ho["weight_kg"]    = weightSum;
+      ho["raw_weight"]   = firstRaw;
+      ho["scale_source"] = scaleSrc;
+    }
+
+    // Temperature arbitration: BLE overrides the wired DS18B20 when configured;
+    // otherwise the wired probe wins and BLE/HiveHeart are the fallback.
+    float t = NAN;
+    const char* tsrc = nullptr;
+#if ENABLE_BLE_SCAN
+    bool bleHasTemp = sn && sn->present && !isnan(sn->temp_c);
+#else
+    bool bleHasTemp = false;
 #endif
+
+#if (ENABLE_BLE_SCAN && BLE_OVERRIDE_DS18B20)
+    if (bleHasTemp) { t = sn->temp_c; tsrc = "ble"; }
+#endif
+#if ENABLE_DS18B20_HIVE_TEMP
+    if (isnan(t)) {
+      float wired = NAN;
+      if (hive.hasDsRom) {
+        wired = ds18b20.getTempC((const uint8_t*)hive.dsRom);
+      } else if (hive.index >= 1 && hive.index <= 2) {
+        // Legacy/migrated hives without a mapped ROM fall back to probe order.
+        wired = ds18b20.getTempCByIndex(hive.index - 1);
+      }
+      if (!isnan(wired) && wired > DEVICE_DISCONNECTED_C) { t = wired; tsrc = "ds18b20"; }
+    }
+#endif
+#if ENABLE_BLE_SCAN
+    if (isnan(t) && bleHasTemp) { t = sn->temp_c; tsrc = "ble"; }
+#endif
+#if ENABLE_BEEHIVE_GATT
+    if (isnan(t) && hive.index >= 1 && hive.index <= 2 && bh.heart[hive.index - 1].present) {
+      t = bh.heart[hive.index - 1].temp_c;
+      tsrc = "hiveheart";
+    }
+#endif
+    if (!isnan(t)) { ho["temp_c"] = t; if (tsrc) ho["temp_source"] = tsrc; }
+
+    // In-hive humidity (BLE sensor, or HiveHeart for hives 1–2).
+#if ENABLE_BLE_SCAN
+    if (sn && sn->present && !isnan(sn->humidity_pct)) ho["humidity_percent"] = sn->humidity_pct;
+#endif
+#if ENABLE_BEEHIVE_GATT
+    if (!ho["humidity_percent"].is<float>() && hive.index >= 1 && hive.index <= 2 &&
+        bh.heart[hive.index - 1].present)
+      ho["humidity_percent"] = bh.heart[hive.index - 1].humidity_pct;
+#endif
+
+    // Nested wireless/vibration/acoustic data.
+#if ENABLE_BLE_SCAN
+    if (sn) blesensor::writeSnapshotToHive(ho, *sn);
+#endif
+    // BeeCounter entrance gates (hives 1–2).
+    if (hive.index == 1) beecnt::writeSnapshotToHive(ho, beeSnap1);
+    else if (hive.index == 2) beecnt::writeSnapshotToHive(ho, beeSnap2);
+  }
 
   String output;
   serializeJson(doc, output);

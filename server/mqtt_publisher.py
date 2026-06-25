@@ -31,6 +31,8 @@ import threading
 from datetime import datetime
 from typing import Any, Optional
 
+from tempcomp import TEMP_SOURCE_FIELD, compensate_weight
+
 logger = logging.getLogger("hivescale.mqtt")
 
 
@@ -68,14 +70,14 @@ MQTT_HA_EXPIRE_AFTER = int(os.environ.get("MQTT_HA_EXPIRE_AFTER", "0"))
 # entities are listed — the full reading is always available in the raw `state`
 # JSON for anyone templating their own sensors.
 #
+# Largest hive index to expose to Home Assistant. Discovery only ever fires for
+# hives a device actually reports, so this is just an upper bound for the flat-key
+# detection below.
+_MQTT_MAX_HIVES = int(os.environ.get("MQTT_MAX_HIVES", "18"))
+
 # Tuple: (json_key, friendly_name, unit, device_class, state_class, icon)
+# Device-level sensors (one set per device, published once).
 _HA_SENSORS: list[tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]]] = [
-    ("scale_1_weight_kg",        "Scale 1 weight",        "kg",   "weight",          "measurement", "mdi:scale"),
-    ("scale_2_weight_kg",        "Scale 2 weight",        "kg",   "weight",          "measurement", "mdi:scale"),
-    ("hive_1_temp_c",            "Hive 1 temperature",    "°C",   "temperature",     "measurement", None),
-    ("hive_2_temp_c",            "Hive 2 temperature",    "°C",   "temperature",     "measurement", None),
-    ("hive_1_humidity_percent",  "Hive 1 humidity",       "%",    "humidity",        "measurement", None),
-    ("hive_2_humidity_percent",  "Hive 2 humidity",       "%",    "humidity",        "measurement", None),
     ("ambient_temp_c",           "Ambient temperature",   "°C",   "temperature",     "measurement", None),
     ("ambient_humidity_percent", "Ambient humidity",      "%",    "humidity",        "measurement", None),
     ("battery_voltage_v",        "Battery voltage",       "V",    "voltage",         "measurement", None),
@@ -83,14 +85,92 @@ _HA_SENSORS: list[tuple[str, str, Optional[str], Optional[str], Optional[str], O
     ("solar_power_mw",           "Solar power",           "mW",   None,              "measurement", "mdi:solar-power"),
     ("solar_bus_voltage_v",      "Solar bus voltage",     "V",    "voltage",         "measurement", None),
     ("rssi_dbm",                 "Wi-Fi signal",          "dBm",  "signal_strength", "measurement", None),
-    ("bee_counter_1_total_in",   "Bee counter 1 total in",  None, None, "total_increasing", "mdi:bee"),
-    ("bee_counter_1_total_out",  "Bee counter 1 total out", None, None, "total_increasing", "mdi:bee"),
-    ("bee_counter_2_total_in",   "Bee counter 2 total in",  None, None, "total_increasing", "mdi:bee"),
-    ("bee_counter_2_total_out",  "Bee counter 2 total out", None, None, "total_increasing", "mdi:bee"),
-    ("bee_counter_1_interval_in",  "Bee counter 1 interval in",  None, None, "measurement", "mdi:bee"),
-    ("bee_counter_1_interval_out", "Bee counter 1 interval out", None, None, "measurement", "mdi:bee"),
     ("firmware_version",         "Firmware version",      None,   None,              None,          "mdi:chip"),
 ]
+
+
+def _hive_sensors(n: int):
+    """HA sensor definitions for a single hive (published once per hive index seen)."""
+    sensors = [
+        (f"scale_{n}_weight_kg",        f"Hive {n} weight",            "kg", "weight",      "measurement",      "mdi:scale"),
+        (f"hive_{n}_temp_c",            f"Hive {n} temperature",       "°C", "temperature", "measurement",      None),
+        (f"hive_{n}_humidity_percent",  f"Hive {n} humidity",          "%",  "humidity",    "measurement",      None),
+        (f"bee_counter_{n}_total_in",   f"Hive {n} bees in (total)",   None, None,          "total_increasing", "mdi:bee"),
+        (f"bee_counter_{n}_total_out",  f"Hive {n} bees out (total)",  None, None,          "total_increasing", "mdi:bee"),
+        (f"bee_counter_{n}_interval_in",  f"Hive {n} bees in",         None, None,          "measurement",      "mdi:bee"),
+        (f"bee_counter_{n}_interval_out", f"Hive {n} bees out",        None, None,          "measurement",      "mdi:bee"),
+    ]
+    # Temperature-compensated weight. The backend's compensation model carries a
+    # coefficient only for scales 1 and 2 (scale{1,2}_tempco_kg_per_c), so the
+    # compensated entity is only meaningful for those two hives; for the rest the
+    # raw weight above is the authoritative value.
+    if n <= 2:
+        sensors.insert(
+            1,
+            (f"scale_{n}_weight_kg_compensated", f"Hive {n} weight (temp-compensated)",
+             "kg", "weight", "measurement", "mdi:scale-balance"),
+        )
+    return sensors
+
+
+def _flatten_hives(payload: dict) -> None:
+    """Expand the nested hives[] array (firmware v0.20.0+) into the flat
+    scale_N_/hive_N_/bee_counter_N_ keys the HA sensor templates are keyed on."""
+    for h in (payload.get("hives") or []):
+        n = h.get("index")
+        if not isinstance(n, int):
+            continue
+        if h.get("weight_kg") is not None:
+            payload[f"scale_{n}_weight_kg"] = h["weight_kg"]
+        if h.get("temp_c") is not None:
+            payload[f"hive_{n}_temp_c"] = h["temp_c"]
+        if h.get("humidity_percent") is not None:
+            payload[f"hive_{n}_humidity_percent"] = h["humidity_percent"]
+        bc = h.get("bee_counter") or {}
+        for k in ("total_in", "total_out", "interval_in", "interval_out"):
+            if bc.get(k) is not None:
+                payload[f"bee_counter_{n}_{k}"] = bc[k]
+
+
+def _present_hive_indices(payload: dict) -> set[int]:
+    """Hive indices that have any data in this (already flattened) payload."""
+    idx: set[int] = set()
+    for h in (payload.get("hives") or []):
+        n = h.get("index")
+        if isinstance(n, int):
+            idx.add(n)
+    for n in range(1, _MQTT_MAX_HIVES + 1):
+        if payload.get(f"scale_{n}_weight_kg") is not None or payload.get(f"hive_{n}_temp_c") is not None:
+            idx.add(n)
+    return idx
+
+
+def _apply_tempco(payload: dict, tempco: tuple) -> None:
+    """Add temperature-compensated weights to an already-flattened payload.
+
+    ``tempco`` is ``(source, ref_temp_c, scale1_coeff, scale2_coeff)`` as returned
+    by the backend's ``load_tempco_configs`` (only present when the device has
+    compensation enabled with a non-zero coefficient). Mirrors the read-path
+    ``attach_temperature_compensation`` but for one live reading: there is no
+    history here, so the *instantaneous* temperature is used (the DB/read path
+    keeps the EMA-smoothed version for charts). The coefficient model only covers
+    scales 1 and 2, so only those two compensated keys are emitted.
+    """
+    source, ref_temp, c1, c2 = tempco
+    temp = payload.get(TEMP_SOURCE_FIELD.get(source, "ambient_temp_c"))
+    for n, coeff in ((1, c1), (2, c2)):
+        w = payload.get(f"scale_{n}_weight_kg")
+        if w is None:
+            continue
+        payload[f"scale_{n}_weight_kg_compensated"] = compensate_weight(
+            w, temp, ref_temp, coeff
+        )
+        # Mirror onto the nested hive entry too, so consumers of the raw `hives[]`
+        # array (not just the flat keys) also see the compensated value.
+        for h in (payload.get("hives") or []):
+            if h.get("index") == n and h.get("weight_kg") is not None:
+                h["weight_kg_compensated"] = payload[f"scale_{n}_weight_kg_compensated"]
+    payload["tempco_applied"] = True
 
 
 class MqttPublisher:
@@ -107,8 +187,11 @@ class MqttPublisher:
         self._lock = threading.Lock()
         self._connected = False
         self._started = False
-        # Devices we have already published HA discovery for, this process.
+        # Devices we have already published device-level HA discovery for.
         self._discovered: set[str] = set()
+        # Per-device set of hive indices we have published hive discovery for, so
+        # a hive that appears later (e.g. added in the portal) still gets entities.
+        self._discovered_hives: dict[str, set[int]] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -196,7 +279,12 @@ class MqttPublisher:
         except Exception:
             logger.debug("Could not publish bridge availability", exc_info=True)
         # Re-publish discovery after a reconnect so HA recovers its entities.
+        # Both the device-level and per-hive discovery state must be cleared —
+        # otherwise hives already seen this process keep their entry in
+        # _discovered_hives and their per-hive sensors are never re-announced
+        # after a broker restart that dropped the retained discovery configs.
         self._discovered.clear()
+        self._discovered_hives.clear()
 
     def _on_disconnect(self, client, userdata, *args) -> None:
         self._connected = False
@@ -212,6 +300,13 @@ class MqttPublisher:
     def _device_state_topic(self, device_id: str) -> str:
         return f"{MQTT_BASE_TOPIC}/{device_id}/state"
 
+    def is_active(self) -> bool:
+        """True once the bridge has a live client (MQTT enabled and started).
+
+        Lets callers skip work (e.g. a tempco config lookup) when MQTT is off.
+        """
+        return self._client is not None
+
     # ── publishing ───────────────────────────────────────────────────────────
     def publish_measurement(
         self,
@@ -219,8 +314,13 @@ class MqttPublisher:
         state: dict[str, Any],
         measured_at: datetime,
         display_name: Optional[str] = None,
+        tempco: Optional[tuple] = None,
     ) -> None:
-        """Publish one measurement. Never raises — failures are logged, not propagated."""
+        """Publish one measurement. Never raises — failures are logged, not propagated.
+
+        ``tempco`` (optional) is the device's temperature-compensation config; when
+        given, ``scale_{1,2}_weight_kg_compensated`` are added to the payload.
+        """
         client = self._client
         if not client:
             return
@@ -228,13 +328,25 @@ class MqttPublisher:
             payload = dict(state)
             payload["device_id"] = device_id
             payload["measured_at"] = measured_at.isoformat()
+            # Expand the multi-hive array into flat per-hive keys for the HA templates.
+            _flatten_hives(payload)
             # Normalise the two firmware battery field names into one HA-friendly key.
             if payload.get("battery_voltage_v") is None and payload.get("battery_voltage") is not None:
                 payload["battery_voltage_v"] = payload["battery_voltage"]
+            # Add temperature-compensated weights (scales 1/2) for the live feed.
+            if tempco is not None:
+                _apply_tempco(payload, tempco)
 
-            if MQTT_HA_DISCOVERY and device_id not in self._discovered:
-                self._publish_discovery(client, device_id, display_name)
-                self._discovered.add(device_id)
+            if MQTT_HA_DISCOVERY:
+                if device_id not in self._discovered:
+                    self._publish_sensor_configs(client, device_id, display_name, _HA_SENSORS)
+                    self._discovered.add(device_id)
+                # Publish per-hive discovery for any hive index not yet seen.
+                seen = self._discovered_hives.setdefault(device_id, set())
+                for n in sorted(_present_hive_indices(payload)):
+                    if n not in seen:
+                        self._publish_sensor_configs(client, device_id, display_name, _hive_sensors(n))
+                        seen.add(n)
 
             client.publish(
                 self._device_availability_topic(device_id),
@@ -256,12 +368,13 @@ class MqttPublisher:
             "model": "ESP32 Dual Beehive Scale",
         }
 
-    def _publish_discovery(self, client, device_id: str, display_name: Optional[str]) -> None:
+    def _publish_sensor_configs(self, client, device_id: str, display_name: Optional[str],
+                                sensors) -> None:
         state_topic = self._device_state_topic(device_id)
         availability_topic = self._device_availability_topic(device_id)
         device_block = self._device_block(device_id, display_name)
 
-        for key, name, unit, device_class, state_class, icon in _HA_SENSORS:
+        for key, name, unit, device_class, state_class, icon in sensors:
             node = device_id.replace("/", "_").replace("+", "_").replace("#", "_")
             unique_id = f"hivescale_{node}_{key}"
             # Render nothing when the field is absent from a given reading so HA

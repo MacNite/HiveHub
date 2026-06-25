@@ -6,6 +6,7 @@
 #include "storage_power.h"
 #include "portal.h"
 #include "ca_cert.h"
+#include "hive_config.h"
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -331,6 +332,46 @@ void fetchRemoteConfig() {
   scale1Factor = doc["scale1_factor"] | scale1Factor;
   scale2Offset = doc["scale2_offset"] | scale2Offset;
   scale2Factor = doc["scale2_factor"] | scale2Factor;
+
+  // Bridge calibration into the hive registry (the authoritative source for the
+  // read path). The legacy scale1/2 fields map to hives 1–2 scale[0]; an optional
+  // per-hive array calibrates the rest:
+  //   "hive_scales": [ { "index": 5, "scale": 0, "offset": 123, "factor": -7100 }, … ]
+  // Only persist when a value actually changed — fetchRemoteConfig runs every
+  // cycle, and re-writing up to 18 NVS blobs each time would wear the flash.
+  bool regChanged = false;
+  auto applyToHive = [&regChanged](uint8_t hiveIndex, uint8_t scaleIdx, long off, float fac) {
+    for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+      if (hivecfg::gHives[h].index != hiveIndex) continue;
+      if (scaleIdx < hivecfg::gHives[h].scaleCount) {
+        auto& ch = hivecfg::gHives[h].scales[scaleIdx];
+        if (ch.offset != off || ch.factor != fac) {
+          ch.offset = off; ch.factor = fac; regChanged = true;
+        }
+      }
+      return;
+    }
+  };
+  applyToHive(1, 0, scale1Offset, scale1Factor);
+  applyToHive(2, 0, scale2Offset, scale2Factor);
+  for (JsonObject o : doc["hive_scales"].as<JsonArray>()) {
+    uint8_t idx = (uint8_t)(o["index"] | 0);
+    uint8_t sc  = (uint8_t)(o["scale"] | 0);
+    if (idx < 1) continue;
+    for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+      if (hivecfg::gHives[h].index != idx || sc >= hivecfg::gHives[h].scaleCount) continue;
+      auto& ch = hivecfg::gHives[h].scales[sc];
+      if (!o["offset"].isNull()) {
+        long v = (long)(o["offset"] | 0L);
+        if (ch.offset != v) { ch.offset = v; regChanged = true; }
+      }
+      if (!o["factor"].isNull()) {
+        float v = (float)(o["factor"] | -7050.0);
+        if (ch.factor != v) { ch.factor = v; regChanged = true; }
+      }
+    }
+  }
+  if (regChanged) hivecfg::saveHiveConfig();
 
   if (doc["claim_code"].is<const char*>()) {
     String remoteClaimCode = doc["claim_code"].as<String>();

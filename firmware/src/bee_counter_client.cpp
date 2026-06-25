@@ -195,6 +195,36 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
     for (uint8_t i = 0; i < PER_GATE_ARRAY_LEN; i++) gout.add(snap.per_gate_out[i]);
 }
 
+void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
+    // Nested per-hive form for the hives[] array (server maps it onto the
+    // hive_readings bee_counter_* columns; per-gate arrays go to raw_json).
+    JsonObject bc = hive["bee_counter"].to<JsonObject>();
+    bc["ok"] = snap.present;
+    if (!snap.present) return;
+
+    bc["protocol_version"] = snap.protocol_version;
+    bc["status_flags"]     = snap.status_flags;
+    bc["uptime_s"]         = snap.uptime_s;
+    bc["num_gates"]        = snap.num_gates;
+    bc["gates_healthy"]    = snap.gates_healthy;
+    bc["total_in"]         = snap.total_in;
+    bc["total_out"]        = snap.total_out;
+    bc["glitch_count"]     = snap.glitch_count;
+    bc["read_attempts"]    = snap.read_attempts;
+
+    if (snap.totals_only) return;
+
+    bc["interval_in"]     = snap.interval_in;
+    bc["interval_out"]    = snap.interval_out;
+    bc["busy_retries"]    = snap.busy_retries;
+    bc["latch_succeeded"] = snap.latch_succeeded;
+
+    JsonArray gin = bc["per_gate_in"].to<JsonArray>();
+    for (uint8_t i = 0; i < PER_GATE_ARRAY_LEN; i++) gin.add(snap.per_gate_in[i]);
+    JsonArray gout = bc["per_gate_out"].to<JsonArray>();
+    for (uint8_t i = 0; i < PER_GATE_ARRAY_LEN; i++) gout.add(snap.per_gate_out[i]);
+}
+
 // ---------------------------------------------------------------------------
 // OTA-over-I2C relay (master side)
 // ---------------------------------------------------------------------------

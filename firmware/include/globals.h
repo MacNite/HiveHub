@@ -13,7 +13,12 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#if ENABLE_HX711
 #include <HX711.h>
+#endif
+#if ENABLE_NAU7802
+#include <SparkFun_Qwiic_Scale_NAU7802_Arduino_Library.h>
+#endif
 #if ENABLE_DS18B20_HIVE_TEMP
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -34,8 +39,18 @@
 extern const char* const FIRMWARE_VERSION;
 
 // ---- Hardware driver instances -------------------------------------------
+#if ENABLE_HX711
+// Up to two HX711 load-cell amps on dedicated pin pairs (legacy / first hives).
+// Compiled out on the XIAO C6 (ENABLE_HX711 0), which uses I2C NAU7802 scales.
 extern HX711 scale1;
 extern HX711 scale2;
+#endif
+#if ENABLE_NAU7802
+// One shared NAU7802 I2C ADC object. Every NAU7802 lives at the same address
+// (0x2A); the TCA9548A mux routes this object to one physical chip at a time, so
+// a single instance serves all I2C scale channels. See scale_bus.cpp.
+extern NAU7802 nau;
+#endif
 #if ENABLE_DS18B20_HIVE_TEMP
 extern OneWire oneWire;
 extern DallasTemperature ds18b20;

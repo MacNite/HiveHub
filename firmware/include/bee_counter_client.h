@@ -109,6 +109,9 @@ bool pollSlot(uint8_t address, Snapshot& out);
 // under a per-slot key prefix (e.g. "bee_counter_1_").
 void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap);
 
+// Per-hive form for the hives[] array: writes a nested "bee_counter" object.
+void writeSnapshotToHive(JsonObject hive, const Snapshot& snap);
+
 #if ENABLE_WIRELESS_BEECOUNTER
 // HiveTraffic (wireless bee counter) GATT-client read. Brings the BLE stack up
 // once, connects to each non-empty MAC, reads the JSON measurement

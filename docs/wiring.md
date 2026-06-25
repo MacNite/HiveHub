@@ -427,3 +427,50 @@ Most breakout boards include SDA/SCL pull-ups. If multiple breakout boards are i
 - Use ferrules, locking connectors, or soldered joints where vibration or condensation is expected.
 - Keep the SD card accessible for debugging, but protected from water ingress.
 - In off-grid builds, test upload and battery-charge current before sealing the enclosure.
+
+---
+
+## Multi-hive I2C scales (NAU7802 + TCA9548A) — firmware v0.20.0+
+
+Beyond the two HX711 pin channels, HiveScale can read load cells over I2C with the
+**NAU7802** 24-bit ADC, and fan out up to eight of them with a **TCA9548A** 1-to-8
+I2C multiplexer — up to **18 hives** total. See
+[multi-hive.md](multi-hive.md) for the full feature overview.
+
+### NAU7802 (one chip = two load cells)
+
+The NAU7802 sits on the shared I2C bus at the fixed address `0x2A` and has two
+differential inputs (CH1/CH2):
+
+| NAU7802 pin | Connect to |
+| --- | --- |
+| `VIN` / `VDD` | 3V3 |
+| `GND` | GND |
+| `SDA` | `I2C_SDA` (GPIO21 on the 30-pin DevKit) |
+| `SCL` | `I2C_SCL` (GPIO22) |
+| `VDDA` | tie to VDD (or its own 3V3 rail) |
+| Channel 1 | first load cell (E+/E-/A+/A-) |
+| Channel 2 | second load cell |
+
+### TCA9548A multiplexer (up to 8 NAU7802 = 16 scales)
+
+| TCA9548A pin | Connect to |
+| --- | --- |
+| `VCC` / `GND` | 3V3 / GND |
+| `SDA` / `SCL` (upstream) | ESP32 `I2C_SDA` / `I2C_SCL` |
+| `A0`/`A1`/`A2` | GND for address `0x70` (default) |
+| `SD0..SD7` / `SC0..SC7` | one NAU7802's SDA/SCL per channel |
+
+Pull-ups: keep 4.7 kΩ pull-ups on the **upstream** bus; each downstream channel
+needs its own pull-ups too (most NAU7802 breakouts include them).
+
+> All NAU7802s share `0x2A`, so do not also place a NAU7802 on the upstream bus
+> while populating mux channels — see the topology note in
+> [multi-hive.md](multi-hive.md).
+
+### DS18B20 — up to 18 on one bus
+
+All DS18B20 probes share the single 1-Wire data pin (`ONE_WIRE_PIN`, GPIO4 on the
+DevKit) with one 4.7 kΩ pull-up to 3V3 for the whole bus. Each probe is mapped to
+a hive by its **ROM address** in the portal (run the I2C/1-Wire scan first), so a
+specific probe always serves a specific hive.

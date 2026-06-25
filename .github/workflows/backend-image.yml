@@ -2,7 +2,7 @@ name: Build backend Docker image
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
     paths:
       - "server/**"
       - ".github/workflows/backend-image.yml"
@@ -23,8 +23,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create short SHA tag
-        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+      - name: Compute image tags
+        run: |
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          # Branch name as a Docker-safe tag (claude/foo-bar -> claude-foo-bar),
+          # so each branch build is pullable without clobbering another's image.
+          echo "BRANCH_TAG=$(echo "$GITHUB_REF_NAME" | tr '/' '-')" >> "$GITHUB_ENV"
+          # Only main updates the :latest tag the docker-compose deployment pulls.
+          # A feature / claude branch build must never overwrite it.
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "LATEST_TAG=${IMAGE_NAME}:latest" >> "$GITHUB_ENV"
+          else
+            echo "LATEST_TAG=" >> "$GITHUB_ENV"
+          fi
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -43,6 +54,7 @@ jobs:
           file: ./server/Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.IMAGE_NAME }}:sha-${{ env.SHORT_SHA }}
+            ${{ env.IMAGE_NAME }}:${{ env.BRANCH_TAG }}
+            ${{ env.LATEST_TAG }}

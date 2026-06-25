@@ -207,6 +207,76 @@ if RATE_LIMIT_ENABLED:
     app.add_middleware(SlowAPIMiddleware)
 
 
+# ── Per-hive nested models (firmware v0.20.0 "hives[]" array) ────────────────
+# A single ESP32 now reports up to 18 hives, each with its own scale(s) and
+# in-hive sensors, as a nested object in the "hives" array. The server fans these
+# out into the hive_readings table (and mirrors hives 1–2 onto the legacy
+# measurements columns). Sub-objects use extra="allow" so forensic extras (raw
+# axes, firmware version, per-gate arrays) survive into hive_readings.raw_json.
+class HiveAccelIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    ok: Optional[bool] = None
+    sample_rate_hz: Optional[int] = None
+    sample_count: Optional[int] = None
+    range_g: Optional[int] = None
+    rms_mg: Optional[float] = None
+    peak_mg: Optional[float] = None
+    band_swarm_mg: Optional[float] = None
+    band_fanning_mg: Optional[float] = None
+    band_activity_mg: Optional[float] = None
+
+
+class HiveBleIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    present: Optional[bool] = None
+    sensor_type: Optional[str] = None
+    humidity_percent: Optional[float] = None
+    pressure_hpa: Optional[float] = None
+    battery_percent: Optional[int] = None
+    rssi_dbm: Optional[int] = None
+    firmware_version: Optional[str] = None
+
+
+class HiveMicIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    ok: Optional[bool] = None
+    rms_dbfs: Optional[float] = None
+
+
+class HiveBeeCounterIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    ok: Optional[bool] = None
+    total_in: Optional[int] = None
+    total_out: Optional[int] = None
+    interval_in: Optional[int] = None
+    interval_out: Optional[int] = None
+
+
+class HiveReadingIn(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    index: int = Field(..., ge=1, le=64)
+    name: Optional[str] = None
+    weight_kg: Optional[float] = None
+    raw_weight: Optional[int] = None
+    scale_source: Optional[str] = None
+    temp_c: Optional[float] = None
+    temp_source: Optional[str] = None
+    humidity_percent: Optional[float] = None
+    accel: Optional[HiveAccelIn] = None
+    ble: Optional[HiveBleIn] = None
+    mic: Optional[HiveMicIn] = None
+    bee_counter: Optional[HiveBeeCounterIn] = None
+
+    @field_validator("temp_c")
+    @classmethod
+    def _drop_disconnected_hive_probe(cls, v: Optional[float]) -> Optional[float]:
+        # Mirror the measurements-level guard: an enabled-but-unwired DS18B20
+        # reports ~-127 C; treat any sub-range value as "no reading".
+        if v is not None and v <= -40.0:
+            return None
+        return v
+
+
 class MeasurementIn(BaseModel):
     # extra="ignore": unknown/garbage fields are dropped rather than persisted
     # into raw_json. Every telemetry field this project uses is declared below
@@ -414,6 +484,15 @@ class MeasurementIn(BaseModel):
     bee_counter_1_per_gate_out: Optional[list[int]] = Field(default=None, max_length=64)
     bee_counter_2_per_gate_in:  Optional[list[int]] = Field(default=None, max_length=64)
     bee_counter_2_per_gate_out: Optional[list[int]] = Field(default=None, max_length=64)
+
+    # ── Multi-hive payload (firmware v0.20.0+) ───────────────────────────────
+    # New firmware sends every hive (up to 18) here instead of the fixed
+    # scale_1/2_* / hive_1/2_* fields above. The server fans these into the
+    # hive_readings table and mirrors hives 1–2 onto the legacy columns so the
+    # existing column-based read / insights / temp-comp keep working unchanged.
+    # Old firmware keeps sending the flat fields and omits this.
+    hive_count: Optional[int] = None
+    hives: Optional[list[HiveReadingIn]] = Field(default=None, max_length=64)
 
     # Belt-and-suspenders for field devices running firmware that predates the
     # DS18B20 disconnect-sentinel fix: an enabled-but-unwired probe reports
@@ -927,6 +1006,53 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_measurements_device_time
                     ON measurements (device_id, measured_at DESC);
 
+                -- ── Per-hive readings (normalized child of measurements) ──────
+                -- One row per hive per measurement cycle, so a single ESP32 can
+                -- carry up to 18 hives without a per-hive column explosion. The
+                -- legacy measurements.scale_1/2_* / hive_1/2_* columns stay
+                -- populated for hives 1–2 (historical continuity + the existing
+                -- column-based read/insights/temp-comp paths); this table is the
+                -- source of truth for ALL hives the read path exposes.
+                CREATE TABLE IF NOT EXISTS hive_readings (
+                    id                BIGSERIAL PRIMARY KEY,
+                    measurement_id    BIGINT NOT NULL REFERENCES measurements(id) ON DELETE CASCADE,
+                    device_id         TEXT NOT NULL,
+                    measured_at       TIMESTAMPTZ NOT NULL,
+                    hive_index        SMALLINT NOT NULL,          -- 1..18
+                    name              TEXT,
+                    weight_kg         DOUBLE PRECISION,
+                    raw_weight        BIGINT,
+                    scale_source      TEXT,                       -- hx711 | nau7802 | ...
+                    temp_c            DOUBLE PRECISION,
+                    temp_source       TEXT,                       -- ds18b20 | ble | hiveheart
+                    humidity_percent  DOUBLE PRECISION,
+                    accel_ok                BOOLEAN,
+                    accel_sample_count      INTEGER,
+                    accel_range_g           INTEGER,
+                    accel_rms_mg            DOUBLE PRECISION,
+                    accel_peak_mg           DOUBLE PRECISION,
+                    accel_band_swarm_mg     DOUBLE PRECISION,
+                    accel_band_fanning_mg   DOUBLE PRECISION,
+                    accel_band_activity_mg  DOUBLE PRECISION,
+                    ble_present       BOOLEAN,
+                    ble_sensor_type   TEXT,
+                    ble_humidity_percent DOUBLE PRECISION,
+                    ble_pressure_hpa  DOUBLE PRECISION,
+                    ble_battery_percent INTEGER,
+                    ble_rssi_dbm      INTEGER,
+                    bee_counter_ok           BOOLEAN,
+                    bee_counter_total_in     BIGINT,
+                    bee_counter_total_out    BIGINT,
+                    bee_counter_interval_in  BIGINT,
+                    bee_counter_interval_out BIGINT,
+                    raw_json          JSONB,
+                    UNIQUE (measurement_id, hive_index)
+                );
+                CREATE INDEX IF NOT EXISTS idx_hive_readings_device_hive_time
+                    ON hive_readings (device_id, hive_index, measured_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_hive_readings_measurement
+                    ON hive_readings (measurement_id);
+
                 CREATE TABLE IF NOT EXISTS device_configs (
                     device_id TEXT PRIMARY KEY,
                     send_interval_seconds INTEGER NOT NULL DEFAULT 600,
@@ -950,6 +1076,10 @@ def init_db():
                 ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS tempco_ref_temp_c DOUBLE PRECISION NOT NULL DEFAULT 20.0;
                 ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS scale1_tempco_kg_per_c DOUBLE PRECISION NOT NULL DEFAULT 0.0;
                 ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS scale2_tempco_kg_per_c DOUBLE PRECISION NOT NULL DEFAULT 0.0;
+                -- Per-hive calibration / temp-comp maps for hives beyond 1–2 (JSON
+                -- keyed by hive_index). scale1/2_* columns stay for hives 1–2.
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS tempco_by_hive JSONB;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS scale_offsets_by_hive JSONB;
 
                 CREATE TABLE IF NOT EXISTS firmware_releases (
                     id BIGSERIAL PRIMARY KEY,
@@ -1367,6 +1497,129 @@ def measurement_insert_params(payload: "MeasurementIn", measured_at: datetime) -
     }
 
 
+# ── Multi-hive ingest helpers ────────────────────────────────────────────────
+
+HIVE_READINGS_INSERT_SQL = """
+    INSERT INTO hive_readings (
+        measurement_id, device_id, measured_at, hive_index, name,
+        weight_kg, raw_weight, scale_source, temp_c, temp_source, humidity_percent,
+        accel_ok, accel_sample_count, accel_range_g, accel_rms_mg, accel_peak_mg,
+        accel_band_swarm_mg, accel_band_fanning_mg, accel_band_activity_mg,
+        ble_present, ble_sensor_type, ble_humidity_percent, ble_pressure_hpa,
+        ble_battery_percent, ble_rssi_dbm,
+        bee_counter_ok, bee_counter_total_in, bee_counter_total_out,
+        bee_counter_interval_in, bee_counter_interval_out, raw_json
+    ) VALUES (
+        %(measurement_id)s, %(device_id)s, %(measured_at)s, %(hive_index)s, %(name)s,
+        %(weight_kg)s, %(raw_weight)s, %(scale_source)s, %(temp_c)s, %(temp_source)s, %(humidity_percent)s,
+        %(accel_ok)s, %(accel_sample_count)s, %(accel_range_g)s, %(accel_rms_mg)s, %(accel_peak_mg)s,
+        %(accel_band_swarm_mg)s, %(accel_band_fanning_mg)s, %(accel_band_activity_mg)s,
+        %(ble_present)s, %(ble_sensor_type)s, %(ble_humidity_percent)s, %(ble_pressure_hpa)s,
+        %(ble_battery_percent)s, %(ble_rssi_dbm)s,
+        %(bee_counter_ok)s, %(bee_counter_total_in)s, %(bee_counter_total_out)s,
+        %(bee_counter_interval_in)s, %(bee_counter_interval_out)s, %(raw_json)s
+    )
+    ON CONFLICT (measurement_id, hive_index) DO NOTHING
+"""
+
+
+def _hive_reading_row_params(device_id: str, h: "HiveReadingIn",
+                             measurement_id: int, measured_at: datetime) -> dict:
+    a, b, c = h.accel, h.ble, h.bee_counter
+    return {
+        "measurement_id": measurement_id,
+        "device_id": device_id,
+        "measured_at": measured_at,
+        "hive_index": h.index,
+        "name": h.name,
+        "weight_kg": h.weight_kg,
+        "raw_weight": h.raw_weight,
+        "scale_source": h.scale_source,
+        "temp_c": h.temp_c,
+        "temp_source": h.temp_source,
+        "humidity_percent": h.humidity_percent,
+        "accel_ok": a.ok if a else None,
+        "accel_sample_count": a.sample_count if a else None,
+        "accel_range_g": a.range_g if a else None,
+        "accel_rms_mg": a.rms_mg if a else None,
+        "accel_peak_mg": a.peak_mg if a else None,
+        "accel_band_swarm_mg": a.band_swarm_mg if a else None,
+        "accel_band_fanning_mg": a.band_fanning_mg if a else None,
+        "accel_band_activity_mg": a.band_activity_mg if a else None,
+        "ble_present": b.present if b else None,
+        "ble_sensor_type": b.sensor_type if b else None,
+        "ble_humidity_percent": b.humidity_percent if b else None,
+        "ble_pressure_hpa": b.pressure_hpa if b else None,
+        "ble_battery_percent": b.battery_percent if b else None,
+        "ble_rssi_dbm": b.rssi_dbm if b else None,
+        "bee_counter_ok": c.ok if c else None,
+        "bee_counter_total_in": c.total_in if c else None,
+        "bee_counter_total_out": c.total_out if c else None,
+        "bee_counter_interval_in": c.interval_in if c else None,
+        "bee_counter_interval_out": c.interval_out if c else None,
+        "raw_json": psycopg.types.json.Jsonb(h.model_dump(mode="json", exclude_none=True)),
+    }
+
+
+def overlay_legacy_hive_columns(params: dict, payload: "MeasurementIn") -> None:
+    """When a payload carries the hives[] array (new firmware), copy hives 1–2 onto
+    the legacy measurements columns the column-based read / insights / temp-comp
+    still use. Only fills a column the flat payload left None, so an explicit flat
+    field always wins."""
+    if not payload.hives:
+        return
+    by_index = {h.index: h for h in payload.hives}
+    for n in (1, 2):
+        h = by_index.get(n)
+        if h is None:
+            continue
+
+        def put(col, val):
+            if val is not None and params.get(col) is None:
+                params[col] = val
+
+        put(f"scale_{n}_weight_kg", h.weight_kg)
+        put(f"scale_{n}_raw", h.raw_weight)
+        put(f"hive_{n}_temp_c", h.temp_c)
+        put(f"hive_{n}_humidity_percent", h.humidity_percent)
+        if h.accel:
+            put(f"accel_{n}_ok", h.accel.ok)
+            put(f"accel_{n}_sample_count", h.accel.sample_count)
+            put(f"accel_{n}_range_g", h.accel.range_g)
+            put(f"accel_{n}_rms_mg", h.accel.rms_mg)
+            put(f"accel_{n}_peak_mg", h.accel.peak_mg)
+            put(f"accel_{n}_band_swarm_mg", h.accel.band_swarm_mg)
+            put(f"accel_{n}_band_fanning_mg", h.accel.band_fanning_mg)
+            put(f"accel_{n}_band_activity_mg", h.accel.band_activity_mg)
+        if h.ble:
+            put(f"ble_{n}_humidity_percent", h.ble.humidity_percent)
+            put(f"ble_{n}_pressure_hpa", h.ble.pressure_hpa)
+        if h.bee_counter:
+            put(f"bee_counter_{n}_ok", h.bee_counter.ok)
+            put(f"bee_counter_{n}_total_in", h.bee_counter.total_in)
+            put(f"bee_counter_{n}_total_out", h.bee_counter.total_out)
+            put(f"bee_counter_{n}_interval_in", h.bee_counter.interval_in)
+            put(f"bee_counter_{n}_interval_out", h.bee_counter.interval_out)
+
+
+def insert_hive_readings(cur, payload: "MeasurementIn",
+                         measurement_id: int, measured_at: datetime) -> None:
+    """Fan a payload's hives[] array into hive_readings rows. No-op for legacy
+    (flat-field) payloads — the read path synthesizes hives 1–2 from the legacy
+    columns for those."""
+    if not payload.hives:
+        return
+    seen: set[int] = set()
+    rows = []
+    for h in payload.hives:
+        if h.index in seen:
+            continue
+        seen.add(h.index)
+        rows.append(_hive_reading_row_params(payload.device_id, h, measurement_id, measured_at))
+    if rows:
+        cur.executemany(HIVE_READINGS_INSERT_SQL, rows)
+
+
 @app.post("/api/v1/measurements")
 def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="")):
     if len(x_api_key) < 16:
@@ -1390,21 +1643,28 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
         payload.device_id, payload.claim_code, payload.firmware_version, x_api_key,
         touch_last_seen=True,
     )
+    params = measurement_insert_params(payload, measured_at)
+    overlay_legacy_hive_columns(params, payload)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                MEASUREMENT_INSERT_SQL + " RETURNING id;",
-                measurement_insert_params(payload, measured_at),
-            )
+            cur.execute(MEASUREMENT_INSERT_SQL + " RETURNING id;", params)
             new_id = cur.fetchone()[0]
+            # Fan the hives[] array (if any) into the normalized child table.
+            insert_hive_readings(cur, payload, new_id, measured_at)
             conn.commit()
     # Mirror the reading to MQTT (Home Assistant etc.) when the bridge is enabled.
     # This is purely additive and fail-soft — it never affects the stored result.
-    mqtt_publisher.publish_measurement(
-        payload.device_id,
-        payload.model_dump(mode="json", exclude_none=True, exclude={"claim_code"}),
-        measured_at,
-    )
+    # Pass the device's temp-compensation config so the live payload carries
+    # scale_{1,2}_weight_kg_compensated alongside the raw weights; the lookup is
+    # skipped entirely when the bridge is disabled.
+    if mqtt_publisher.is_active():
+        mqtt_tempco = load_tempco_configs([payload.device_id]).get(payload.device_id)
+        mqtt_publisher.publish_measurement(
+            payload.device_id,
+            payload.model_dump(mode="json", exclude_none=True, exclude={"claim_code"}),
+            measured_at,
+            tempco=mqtt_tempco,
+        )
     return {"status": "ok", "id": new_id, "measured_at": measured_at.isoformat()}
 
 
@@ -1463,14 +1723,31 @@ def import_measurements(
 
             new_keys, duplicates = split_new_and_duplicate(keys, existing)
             if new_keys:
+                def _params(key):
+                    p = measurement_insert_params(record_by_key[key], key)
+                    overlay_legacy_hive_columns(p, record_by_key[key])
+                    return p
+
                 cur.executemany(
                     MEASUREMENT_INSERT_SQL + ";",
-                    [
-                        measurement_insert_params(record_by_key[key], key)
-                        for key in new_keys
-                    ],
+                    [_params(key) for key in new_keys],
                 )
                 inserted = len(new_keys)
+
+                # Fan any multi-hive payloads into hive_readings. executemany gives
+                # no ids back, so look up the rows we just inserted by their key.
+                hive_keys = [k for k in new_keys if record_by_key[k].hives]
+                if hive_keys:
+                    cur.execute(
+                        "SELECT measured_at, id FROM measurements "
+                        "WHERE device_id = %s AND measured_at = ANY(%s);",
+                        (device_id, hive_keys),
+                    )
+                    id_by_key = {row[0]: row[1] for row in cur.fetchall()}
+                    for key in hive_keys:
+                        mid = id_by_key.get(key)
+                        if mid is not None:
+                            insert_hive_readings(cur, record_by_key[key], mid, key)
             conn.commit()
 
     return {
@@ -2013,12 +2290,123 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     return measurements
 
 
+HIVE_READINGS_SELECT = """
+    SELECT measurement_id, hive_index, name, weight_kg, raw_weight, scale_source,
+           temp_c, temp_source, humidity_percent,
+           accel_ok, accel_sample_count, accel_range_g, accel_rms_mg, accel_peak_mg,
+           accel_band_swarm_mg, accel_band_fanning_mg, accel_band_activity_mg,
+           ble_present, ble_sensor_type, ble_humidity_percent, ble_pressure_hpa,
+           ble_battery_percent, ble_rssi_dbm,
+           bee_counter_ok, bee_counter_total_in, bee_counter_total_out,
+           bee_counter_interval_in, bee_counter_interval_out
+    FROM hive_readings WHERE measurement_id = ANY(%s)
+    ORDER BY measurement_id, hive_index
+"""
+
+
+def _hive_reading_row_to_dict(r) -> dict:
+    return {
+        "index": r[1], "name": r[2], "weight_kg": r[3], "raw_weight": r[4],
+        "scale_source": r[5], "temp_c": r[6], "temp_source": r[7],
+        "humidity_percent": r[8],
+        "accel": {"ok": r[9], "sample_count": r[10], "range_g": r[11],
+                  "rms_mg": r[12], "peak_mg": r[13], "band_swarm_mg": r[14],
+                  "band_fanning_mg": r[15], "band_activity_mg": r[16]},
+        "ble": {"present": r[17], "sensor_type": r[18], "humidity_percent": r[19],
+                "pressure_hpa": r[20], "battery_percent": r[21], "rssi_dbm": r[22]},
+        "bee_counter": {"ok": r[23], "total_in": r[24], "total_out": r[25],
+                        "interval_in": r[26], "interval_out": r[27]},
+    }
+
+
+def _synthesize_hives_from_flat(m: dict) -> list[dict]:
+    """For historical / old-firmware rows with no hive_readings, build the hives[]
+    array (hives 1–2) from the legacy measurements columns so the API shape is
+    uniform regardless of firmware version."""
+    hives = []
+    for n in (1, 2):
+        accel = {
+            "ok": m.get(f"accel_{n}_ok"), "rms_mg": m.get(f"accel_{n}_rms_mg"),
+            "peak_mg": m.get(f"accel_{n}_peak_mg"),
+            "band_swarm_mg": m.get(f"accel_{n}_band_swarm_mg"),
+            "band_fanning_mg": m.get(f"accel_{n}_band_fanning_mg"),
+            "band_activity_mg": m.get(f"accel_{n}_band_activity_mg"),
+        }
+        ble = {"humidity_percent": m.get(f"ble_{n}_humidity_percent"),
+               "pressure_hpa": m.get(f"ble_{n}_pressure_hpa")}
+        bc = {"ok": m.get(f"bee_counter_{n}_ok"),
+              "total_in": m.get(f"bee_counter_{n}_total_in"),
+              "total_out": m.get(f"bee_counter_{n}_total_out"),
+              "interval_in": m.get(f"bee_counter_{n}_interval_in"),
+              "interval_out": m.get(f"bee_counter_{n}_interval_out")}
+        fields = [m.get(f"scale_{n}_weight_kg"), m.get(f"hive_{n}_temp_c"),
+                  m.get(f"hive_{n}_humidity_percent"), m.get(f"scale_{n}_raw")]
+        if not any(v is not None for v in fields + list(accel.values())
+                   + list(ble.values()) + list(bc.values())):
+            continue
+        hives.append({
+            "index": n, "weight_kg": m.get(f"scale_{n}_weight_kg"),
+            "raw_weight": m.get(f"scale_{n}_raw"), "temp_c": m.get(f"hive_{n}_temp_c"),
+            "humidity_percent": m.get(f"hive_{n}_humidity_percent"),
+            "accel": accel, "ble": ble, "bee_counter": bc,
+        })
+    return hives
+
+
+def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
+    """Synthesize the flat scale_N_/hive_N_/accel_N_/bee_counter_N_ keys for hive
+    N>=3 from its hives[] entry, so the column-based insights / MQTT loops reach
+    every hive. Hives 1–2 already have authoritative legacy columns."""
+    n = h.get("index")
+    if not n or n < 3:
+        return
+    a, b, c = h.get("accel") or {}, h.get("ble") or {}, h.get("bee_counter") or {}
+    m[f"scale_{n}_weight_kg"] = h.get("weight_kg")
+    m[f"scale_{n}_raw"] = h.get("raw_weight")
+    m[f"hive_{n}_temp_c"] = h.get("temp_c")
+    m[f"hive_{n}_humidity_percent"] = h.get("humidity_percent")
+    m[f"accel_{n}_ok"] = a.get("ok")
+    m[f"accel_{n}_rms_mg"] = a.get("rms_mg")
+    m[f"accel_{n}_band_swarm_mg"] = a.get("band_swarm_mg")
+    m[f"accel_{n}_band_fanning_mg"] = a.get("band_fanning_mg")
+    m[f"accel_{n}_band_activity_mg"] = a.get("band_activity_mg")
+    m[f"ble_{n}_humidity_percent"] = b.get("humidity_percent")
+    m[f"ble_{n}_pressure_hpa"] = b.get("pressure_hpa")
+    m[f"bee_counter_{n}_ok"] = c.get("ok")
+    m[f"bee_counter_{n}_interval_in"] = c.get("interval_in")
+    m[f"bee_counter_{n}_interval_out"] = c.get("interval_out")
+
+
+def attach_hive_readings(measurements: list[dict]) -> list[dict]:
+    """Attach a per-hive ``hives`` array (from hive_readings, else synthesized from
+    the legacy columns) to each measurement, and synthesize flat per-hive keys for
+    hives beyond 2 so the existing column-based read consumers see all hives."""
+    if not measurements:
+        return measurements
+    ids = [m["id"] for m in measurements if m.get("id") is not None]
+    by_mid: dict[int, list[dict]] = {}
+    if ids:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(HIVE_READINGS_SELECT, (ids,))
+                for r in cur.fetchall():
+                    by_mid.setdefault(r[0], []).append(_hive_reading_row_to_dict(r))
+    for m in measurements:
+        hive_rows = by_mid.get(m.get("id"))
+        m["hives"] = hive_rows if hive_rows else _synthesize_hives_from_flat(m)
+        for h in m["hives"]:
+            _flatten_hive_to_measurement(m, h)
+    return measurements
+
+
 def serialize_measurements(rows) -> list[dict]:
-    """Map raw DB rows to API dicts and attach temperature compensation."""
+    """Map raw DB rows to API dicts, attach temperature compensation and the
+    per-hive readings (hives[] array + flat keys for hives 3–18)."""
     measurements = attach_temperature_compensation(
         [measurement_row_to_dict(r) for r in rows]
     )
-    return difference_bee_counter_intervals(measurements)
+    measurements = difference_bee_counter_intervals(measurements)
+    return attach_hive_readings(measurements)
 
 
 def measurements_for_insights(rows) -> list[dict]:

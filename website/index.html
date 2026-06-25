@@ -18,7 +18,7 @@
       <a href="#hardware">Hardware</a>
       <a href="#setup">Setup</a>
       <a href="insights.html">Insights</a>
-      <a href="configurator.html">secrets.h tool</a>
+      <a href="configurator.html">Config tool</a>
       <a href="https://github.com/MacNite/HiveScale">GitHub</a>
     </nav>
   </div>
@@ -36,7 +36,7 @@
     </p>
     <div class="cta">
       <a class="btn" href="#setup">🚀 Get started</a>
-      <a class="btn ghost" href="configurator.html">⚙️ Configure secrets.h</a>
+      <a class="btn ghost" href="configurator.html">⚙️ Config tool</a>
       <a class="btn ghost" href="https://github.com/MacNite/HiveScale">★ Star on GitHub</a>
     </div>
   </div>
@@ -107,12 +107,16 @@ docker compose up -d</pre>
       </div></div>
 
       <div class="step"><div class="n">3</div><div>
-        <h3>Configure <code>secrets.h</code></h3>
-        <p>Each device needs a local, untracked <code>secrets.h</code> with its identity, backend URL,
-           Wi-Fi credentials and which sensors are fitted. Use the in-browser tool to build it without
-           hand-editing macros — pick your sensors and download a ready-to-use file.</p>
-        <p><a class="btn" href="configurator.html">⚙️ Open the secrets.h configurator</a></p>
-        <p class="muted">Prefer the manual route? <code>cp firmware/include/secrets.example.h firmware/include/secrets.h</code> and edit it.</p>
+        <h3>Configure the device</h3>
+        <p><strong>Recommended:</strong> configure the device from its on-device
+           <strong>provisioning portal</strong>. After flashing, hold the setup button to start the
+           HiveScale Wi-Fi access point, connect to it, and set Wi-Fi, backend, hives and sensors right
+           on the device. Those settings live in the device's storage and <strong>survive OTA updates</strong>.</p>
+        <p>Optionally pre-seed a brand-new device before first boot with the in-browser
+           <strong>config tool</strong> (it generates an optional <code>secrets.h</code>) — or skip it and
+           pair everything from the portal.</p>
+        <p><a class="btn" href="configurator.html">⚙️ Open the config tool</a></p>
+        <p class="muted">Manual route: <code>cp firmware/include/secrets.example.h firmware/include/secrets.h</code> and edit it.</p>
       </div></div>
 
       <div class="step"><div class="n">4</div><div>
@@ -153,7 +157,7 @@ pio device monitor   # 115200 baud</pre>
 <footer>
   <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
     <span>🐝 HiveScale — MIT © 2026 Maximilian Nitschke</span>
-    <span><a href="https://github.com/MacNite/HiveScale">GitHub</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">secrets.h tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
+    <span><a href="https://github.com/MacNite/HiveScale">GitHub</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
   </div>
 </footer>
 

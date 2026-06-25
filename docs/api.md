@@ -104,11 +104,39 @@ Submit a measurement from a device. On the first measurement from a new `device_
 
 **Auth:** `X-API-Key` (per-device key — registered on first contact, enforced thereafter)
 
+> **Multi-hive payload (firmware v0.20.0+).** Devices now report up to 18 hives in
+> a `hives` array (see below); the flat `scale_1/2_*` / `hive_1/2_*` fields are the
+> legacy two-hive form and remain accepted. The server stores per-hive data in the
+> `hive_readings` table, mirrors hives 1–2 onto the legacy columns, and on read
+> returns **both** a `hives` array and synthesized `scale_N_*`/`hive_N_*` flat keys
+> for every hive. See [multi-hive.md](multi-hive.md).
+>
+> ```json
+> {
+>   "device_id": "hive_scale_18_01",
+>   "hive_count": 2,
+>   "hives": [
+>     { "index": 1, "weight_kg": 41.2, "raw_weight": 8345012, "scale_source": "nau7802",
+>       "temp_c": 34.1, "temp_source": "ds18b20", "humidity_percent": 55.0,
+>       "accel": { "ok": true, "rms_mg": 12.5 },
+>       "ble": { "present": true, "sensor_type": "HolyIot 25015", "pressure_hpa": 1011.2 } },
+>     { "index": 2, "weight_kg": 38.0, "scale_source": "nau7802", "temp_c": 33.0,
+>       "bee_counter": { "ok": true, "total_in": 1200, "interval_in": 5 } }
+>   ]
+> }
+> ```
+>
+> Per-hive object fields: `index` (1–18, required), `name`, `weight_kg`,
+> `raw_weight`, `scale_source`, `temp_c`, `temp_source`, `humidity_percent`, and
+> nested `accel{}`, `ble{}`, `mic{}`, `bee_counter{}` objects.
+
 #### Request fields
 
 | Field | Type | Required | Description |
 |---|---|---:|---|
 | `device_id` | string | Yes | Unique device identifier |
+| `hives` | array | No | Per-hive readings (up to 18); see the multi-hive note above |
+| `hive_count` | int | No | Number of hives the device has configured |
 | `claim_code` | string | No | Pairing code; the firmware sends it only until its first successful upload, after which it is omitted to limit exposure |
 | `timestamp` | ISO datetime | No | Measurement time; server receive time is used if omitted |
 | `scale_1_weight_kg` | number | No | Scale 1 weight in kilograms |

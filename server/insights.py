@@ -290,6 +290,19 @@ def _as_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
+def _hive_channels(measurements: Iterable[dict[str, Any]]) -> list[int]:
+    """Hive indices (channels) to run detectors for. Reads the ``hives`` arrays the
+    read layer attaches; falls back to the legacy two channels when none carry a
+    hives[] array (e.g. raw rows passed directly in a test)."""
+    found: set[int] = set()
+    for m in measurements:
+        for h in (m.get("hives") or []):
+            idx = h.get("index")
+            if isinstance(idx, int) and idx >= 1:
+                found.add(idx)
+    return sorted(found) if found else [1, 2]
+
+
 def _extract_series(measurements: Iterable[dict[str, Any]], field: str) -> Series:
     out: Series = []
     for m in measurements:
@@ -1807,10 +1820,12 @@ def compute_insights(
     ambient = _extract_series(measurements, "ambient_temp_c")
     alerts: list[Alert] = []
 
-    for channel, weight_field, temp_field in (
-        (1, "scale_1_weight_kg", "hive_1_temp_c"),
-        (2, "scale_2_weight_kg", "hive_2_temp_c"),
-    ):
+    # Run every detector for each hive the device reports (up to 18). The read
+    # layer synthesizes flat scale_N_/hive_N_ keys for hives beyond 2, so the
+    # detectors and _extract_* helpers below work unchanged per channel.
+    for channel in _hive_channels(measurements):
+        weight_field = f"scale_{channel}_weight_kg"
+        temp_field = f"hive_{channel}_temp_c"
         weight = _extract_series(measurements, weight_field)
         hive_temp = _extract_series(measurements, temp_field)
         bee_in = _extract_counter_series(measurements, channel, "in")

@@ -10,6 +10,8 @@
 #include <driver/rtc_io.h>
 #endif
 
+#include "scale_bus.h"
+
 #if ENABLE_INMP441_MICS
 #include "mics.h"
 #endif
@@ -38,8 +40,10 @@ void releaseSleepPinHolds() {
   // gpio_hold_en/dis() handle hold state for each pin individually.
   gpio_deep_sleep_hold_dis();
 #endif
+#if ENABLE_HX711
   gpio_hold_dis((gpio_num_t)HX1_SCK);
   gpio_hold_dis((gpio_num_t)HX2_SCK);
+#endif
   gpio_hold_dis((gpio_num_t)SD_CS);
 
 #ifdef CONFIG_IDF_TARGET_ESP32C6
@@ -80,6 +84,7 @@ bool rtcHasValidTime() {
 }
 
 void powerUpScales() {
+#if ENABLE_HX711
   gpio_hold_dis((gpio_num_t)HX1_SCK);
   gpio_hold_dis((gpio_num_t)HX2_SCK);
 
@@ -93,9 +98,20 @@ void powerUpScales() {
 
   // HX711 needs a short settling period after power-up/reset at 10 SPS.
   delay(500);
+#else
+  // No HX711 on this build (e.g. XIAO C6). The I2C NAU7802 scales are re-powered
+  // and re-calibrated each wake by scalebus::begin(), so there is nothing to do.
+#endif
 }
 
 void powerDownScalesForSleep() {
+  // Put every I2C NAU7802 (direct + behind each mux channel) into power-down
+  // first, while the I2C bus is still active. This is the "sleep the NAU7802
+  // before the ESP32 deep-sleeps" step; without it the ADC keeps converting and
+  // burns milliamps through the whole sleep window.
+  scalebus::powerDownAllForSleep();
+
+#if ENABLE_HX711
   scale1.power_down();
   scale2.power_down();
 
@@ -109,6 +125,7 @@ void powerDownScalesForSleep() {
 
   gpio_hold_en((gpio_num_t)HX1_SCK);
   gpio_hold_en((gpio_num_t)HX2_SCK);
+#endif
 }
 
 void shutdownWifiAndBt() {
