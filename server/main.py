@@ -2443,54 +2443,102 @@ def _synthesize_hives_from_flat(m: dict) -> list[dict]:
 def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
     """Synthesize flat per-hive keys from hives[].
 
-    Canonical scale_N_/hive_N_/accel_N_/bee_counter_N_ keys are generated for
-    hives N>=3 so existing column-shaped consumers can see multi-hive readings.
-    HiveHeart/HiveScale diagnostic keys are generated for every hive because the
-    multi-hive implementation stores those diagnostics in hive_readings.raw_json
-    rather than fixed measurements columns.
+    The nested ``hives[]`` object is the canonical multi-hive representation, but
+    several app/dashboard paths still consume column-shaped keys. Generate those
+    aliases from each hive row so every configured hive (up to MAX_HIVES on the
+    firmware side) exposes the same read-response shape. Existing legacy columns
+    for hives 1–2 are left intact; these synthesized keys are read-time aliases
+    and do not require adding unbounded database columns.
     """
     n = h.get("index")
     if not n:
         return
 
+    def put(key: str, value) -> None:
+        if value is not None:
+            m[key] = value
+
     hh, hs = h.get("hiveheart") or {}, h.get("hivescale") or {}
     if hh:
-        m[f"hiveheart_{n}_temp_c"] = hh.get("temp_c")
-        m[f"hiveheart_{n}_humidity_percent"] = hh.get("humidity_percent")
-        m[f"hiveheart_{n}_frequency_hz"] = hh.get("frequency_hz")
-        m[f"hiveheart_{n}_energy"] = hh.get("energy")
-        m[f"hiveheart_{n}_peak"] = hh.get("peak")
-        m[f"hiveheart_{n}_battery_v"] = hh.get("battery_v")
-        m[f"hiveheart_{n}_rssi_dbm"] = hh.get("rssi_dbm")
+        put(f"hiveheart_{n}_temp_c", hh.get("temp_c"))
+        put(f"hiveheart_{n}_humidity_percent", hh.get("humidity_percent"))
+        put(f"hiveheart_{n}_frequency_hz", hh.get("frequency_hz"))
+        put(f"hiveheart_{n}_energy", hh.get("energy"))
+        put(f"hiveheart_{n}_peak", hh.get("peak"))
+        put(f"hiveheart_{n}_battery_v", hh.get("battery_v"))
+        put(f"hiveheart_{n}_rssi_dbm", hh.get("rssi_dbm"))
         if hh.get("fft") is not None:
             m[f"hiveheart_{n}_fft"] = hh.get("fft")
     if hs:
-        m[f"hivescale_{n}_weight_kg"] = hs.get("weight_kg")
-        m[f"hivescale_{n}_raw_weight"] = hs.get("raw_weight")
-        m[f"hivescale_{n}_temp_c"] = hs.get("temp_c")
-        m[f"hivescale_{n}_humidity_percent"] = hs.get("humidity_percent")
-        m[f"hivescale_{n}_pressure_hpa"] = hs.get("pressure_hpa")
-        m[f"hivescale_{n}_battery_v"] = hs.get("battery_v")
-        m[f"hivescale_{n}_rssi_dbm"] = hs.get("rssi_dbm")
+        put(f"hivescale_{n}_weight_kg", hs.get("weight_kg"))
+        put(f"hivescale_{n}_raw_weight", hs.get("raw_weight"))
+        put(f"hivescale_{n}_temp_c", hs.get("temp_c"))
+        put(f"hivescale_{n}_humidity_percent", hs.get("humidity_percent"))
+        put(f"hivescale_{n}_pressure_hpa", hs.get("pressure_hpa"))
+        put(f"hivescale_{n}_battery_v", hs.get("battery_v"))
+        put(f"hivescale_{n}_rssi_dbm", hs.get("rssi_dbm"))
 
-    if n < 3:
-        return
+    a = h.get("accel") or {}
+    b = h.get("ble") or {}
+    c = h.get("bee_counter") or {}
+    mic = h.get("mic") or {}
 
-    a, b, c = h.get("accel") or {}, h.get("ble") or {}, h.get("bee_counter") or {}
-    m[f"scale_{n}_weight_kg"] = h.get("weight_kg")
-    m[f"scale_{n}_raw"] = h.get("raw_weight")
-    m[f"hive_{n}_temp_c"] = h.get("temp_c")
-    m[f"hive_{n}_humidity_percent"] = h.get("humidity_percent")
-    m[f"accel_{n}_ok"] = a.get("ok")
-    m[f"accel_{n}_rms_mg"] = a.get("rms_mg")
-    m[f"accel_{n}_band_swarm_mg"] = a.get("band_swarm_mg")
-    m[f"accel_{n}_band_fanning_mg"] = a.get("band_fanning_mg")
-    m[f"accel_{n}_band_activity_mg"] = a.get("band_activity_mg")
-    m[f"ble_{n}_humidity_percent"] = b.get("humidity_percent")
-    m[f"ble_{n}_pressure_hpa"] = b.get("pressure_hpa")
-    m[f"bee_counter_{n}_ok"] = c.get("ok")
-    m[f"bee_counter_{n}_interval_in"] = c.get("interval_in")
-    m[f"bee_counter_{n}_interval_out"] = c.get("interval_out")
+    # Canonical per-hive aliases. These are especially important for hives 3–18,
+    # which have no fixed measurements-table columns. For hives 1–2 they are
+    # harmless aliases next to the historical scale_1/2 and hive_1/2 columns.
+    put(f"scale_{n}_weight_kg", h.get("weight_kg"))
+    put(f"scale_{n}_raw", h.get("raw_weight"))
+    put(f"hive_{n}_temp_c", h.get("temp_c"))
+    put(f"hive_{n}_humidity_percent", h.get("humidity_percent"))
+
+    # Vibration aliases from hives[n].accel. Include the full HiveInside band set
+    # and metadata, not only the old two-hive subset.
+    if a:
+        put(f"accel_{n}_ok", a.get("ok"))
+        put(f"accel_{n}_sample_rate_hz", a.get("sample_rate_hz"))
+        put(f"accel_{n}_sample_count", a.get("sample_count"))
+        put(f"accel_{n}_range_g", a.get("range_g"))
+        put(f"accel_{n}_rms_mg", a.get("rms_mg"))
+        put(f"accel_{n}_peak_mg", a.get("peak_mg"))
+        put(f"accel_{n}_band_swarm_mg", a.get("band_swarm_mg"))
+        put(f"accel_{n}_band_fanning_mg", a.get("band_fanning_mg"))
+        put(f"accel_{n}_band_activity_mg", a.get("band_activity_mg"))
+
+    # BLE aliases from hives[n].ble. This covers HolyIot/Ruuvi/HiveInside fields
+    # for all hive numbers, including RSSI, battery and HiveInside firmware.
+    if b:
+        put(f"ble_{n}_present", b.get("present"))
+        put(f"ble_{n}_sensor_type", b.get("sensor_type"))
+        put(f"ble_{n}_humidity_percent", b.get("humidity_percent"))
+        put(f"ble_{n}_pressure_hpa", b.get("pressure_hpa"))
+        put(f"ble_{n}_accel_x_mg", b.get("accel_x_mg"))
+        put(f"ble_{n}_accel_y_mg", b.get("accel_y_mg"))
+        put(f"ble_{n}_accel_z_mg", b.get("accel_z_mg"))
+        put(f"ble_{n}_battery_percent", b.get("battery_percent"))
+        put(f"ble_{n}_rssi_dbm", b.get("rssi_dbm"))
+        put(f"ble_{n}_firmware_version", b.get("firmware_version"))
+
+    # HiveInside acoustic aliases from hives[n].mic. The historical flat mic
+    # schema is stereo-only (mic_left/mic_right), so expose per-hive mic_N_*
+    # aliases for hive 3 and beyond while also making hives 1–2 addressable by
+    # number. Nested hives[n].mic remains the canonical multi-hive field.
+    if mic:
+        put(f"mic_{n}_ok", mic.get("ok"))
+        put(f"mic_{n}_rms_dbfs", mic.get("rms_dbfs"))
+        put(f"mic_{n}_peak_dbfs", mic.get("peak_dbfs"))
+        put(f"mic_{n}_rms_normalized", mic.get("rms_normalized"))
+        put(f"mic_{n}_band_sub_bass_dbfs", mic.get("band_sub_bass_dbfs"))
+        put(f"mic_{n}_band_hum_dbfs", mic.get("band_hum_dbfs"))
+        put(f"mic_{n}_band_piping_dbfs", mic.get("band_piping_dbfs"))
+        put(f"mic_{n}_band_stress_dbfs", mic.get("band_stress_dbfs"))
+        put(f"mic_{n}_band_high_dbfs", mic.get("band_high_dbfs"))
+
+    if c:
+        put(f"bee_counter_{n}_ok", c.get("ok"))
+        put(f"bee_counter_{n}_total_in", c.get("total_in"))
+        put(f"bee_counter_{n}_total_out", c.get("total_out"))
+        put(f"bee_counter_{n}_interval_in", c.get("interval_in"))
+        put(f"bee_counter_{n}_interval_out", c.get("interval_out"))
 
 
 def attach_hive_readings(measurements: list[dict]) -> list[dict]:
