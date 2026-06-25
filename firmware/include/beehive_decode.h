@@ -30,6 +30,7 @@ struct HeartReading {
   float frequency_hz = NAN;
   long  energy       = 0;
   int   peak         = 0;
+  int   rssi_dbm     = 0;
   uint8_t fft[8]     = {0};
   bool  fft_present  = false;
 };
@@ -42,6 +43,7 @@ struct ScaleReading {
   float battery_v    = NAN;
   float weight_kg    = NAN;
   long  raw_weight   = 0;
+  int   rssi_dbm     = 0;
 };
 
 // Sign-extend the low `bits` of `v` to a signed int (e.g. the 12-bit temperature

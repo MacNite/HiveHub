@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import os
 import re
@@ -261,6 +262,7 @@ class HiveHeartIn(BaseModel):
     energy: Optional[int] = None
     peak: Optional[int] = None
     battery_v: Optional[float] = None
+    rssi_dbm: Optional[int] = None
     fft: Optional[list[int]] = Field(default=None, max_length=16)
 
 
@@ -273,6 +275,7 @@ class HiveScaleIn(BaseModel):
     humidity_percent: Optional[float] = None
     pressure_hpa: Optional[float] = None
     battery_v: Optional[float] = None
+    rssi_dbm: Optional[int] = None
 
 
 class HiveReadingIn(BaseModel):
@@ -477,6 +480,7 @@ class MeasurementIn(BaseModel):
     hiveheart_1_energy:           Optional[int]   = None
     hiveheart_1_peak:             Optional[int]   = None
     hiveheart_1_battery_v:        Optional[float] = None
+    hiveheart_1_rssi_dbm:         Optional[int]   = None
     hiveheart_1_temp_c:           Optional[float] = None
     hiveheart_1_humidity_percent: Optional[float] = None
     hiveheart_1_fft:              Optional[list[int]] = Field(default=None, max_length=16)
@@ -484,6 +488,7 @@ class MeasurementIn(BaseModel):
     hiveheart_2_energy:           Optional[int]   = None
     hiveheart_2_peak:             Optional[int]   = None
     hiveheart_2_battery_v:        Optional[float] = None
+    hiveheart_2_rssi_dbm:         Optional[int]   = None
     hiveheart_2_temp_c:           Optional[float] = None
     hiveheart_2_humidity_percent: Optional[float] = None
     hiveheart_2_fft:              Optional[list[int]] = Field(default=None, max_length=16)
@@ -494,12 +499,14 @@ class MeasurementIn(BaseModel):
     hivescale_1_humidity_percent: Optional[float] = None
     hivescale_1_pressure_hpa:     Optional[float] = None
     hivescale_1_battery_v:        Optional[float] = None
+    hivescale_1_rssi_dbm:         Optional[int]   = None
     hivescale_2_weight_kg:        Optional[float] = None
     hivescale_2_raw_weight:       Optional[int]   = None
     hivescale_2_temp_c:           Optional[float] = None
     hivescale_2_humidity_percent: Optional[float] = None
     hivescale_2_pressure_hpa:     Optional[float] = None
     hivescale_2_battery_v:        Optional[float] = None
+    hivescale_2_rssi_dbm:         Optional[int]   = None
 
     # ── Per-gate forensic arrays (one value per entrance gate) ───────────────
     # Sent only inside the measurement body and kept in raw_json (never promoted
@@ -2323,25 +2330,60 @@ HIVE_READINGS_SELECT = """
            ble_present, ble_sensor_type, ble_humidity_percent, ble_pressure_hpa,
            ble_battery_percent, ble_rssi_dbm,
            bee_counter_ok, bee_counter_total_in, bee_counter_total_out,
-           bee_counter_interval_in, bee_counter_interval_out
+           bee_counter_interval_in, bee_counter_interval_out, raw_json
     FROM hive_readings WHERE measurement_id = ANY(%s)
     ORDER BY measurement_id, hive_index
 """
 
 
+def _json_obj(v) -> dict:
+    if isinstance(v, dict):
+        return dict(v)
+    if isinstance(v, str) and v.strip():
+        try:
+            parsed = json.loads(v)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _merge_nested_sensor(out: dict, key: str, values: dict) -> None:
+    existing = out.get(key) if isinstance(out.get(key), dict) else {}
+    merged = dict(existing)
+    for k, v in values.items():
+        if v is not None or k not in merged:
+            merged[k] = v
+    if any(v is not None for v in merged.values()):
+        out[key] = merged
+
+
 def _hive_reading_row_to_dict(r) -> dict:
-    return {
+    # Preserve the original per-hive raw_json payload so nested telemetry that
+    # does not have dedicated hive_readings columns, such as HiveHeart acoustic
+    # fields and HiveScale/HiveHeart RSSI, survives the read API. Column values
+    # still override the canonical fields below because they are the indexed /
+    # migration-friendly representation.
+    out = _json_obj(r[28])
+    out.update({
         "index": r[1], "name": r[2], "weight_kg": r[3], "raw_weight": r[4],
         "scale_source": r[5], "temp_c": r[6], "temp_source": r[7],
         "humidity_percent": r[8],
-        "accel": {"ok": r[9], "sample_count": r[10], "range_g": r[11],
-                  "rms_mg": r[12], "peak_mg": r[13], "band_swarm_mg": r[14],
-                  "band_fanning_mg": r[15], "band_activity_mg": r[16]},
-        "ble": {"present": r[17], "sensor_type": r[18], "humidity_percent": r[19],
-                "pressure_hpa": r[20], "battery_percent": r[21], "rssi_dbm": r[22]},
-        "bee_counter": {"ok": r[23], "total_in": r[24], "total_out": r[25],
-                        "interval_in": r[26], "interval_out": r[27]},
-    }
+    })
+    _merge_nested_sensor(out, "accel", {
+        "ok": r[9], "sample_count": r[10], "range_g": r[11],
+        "rms_mg": r[12], "peak_mg": r[13], "band_swarm_mg": r[14],
+        "band_fanning_mg": r[15], "band_activity_mg": r[16],
+    })
+    _merge_nested_sensor(out, "ble", {
+        "present": r[17], "sensor_type": r[18], "humidity_percent": r[19],
+        "pressure_hpa": r[20], "battery_percent": r[21], "rssi_dbm": r[22],
+    })
+    _merge_nested_sensor(out, "bee_counter", {
+        "ok": r[23], "total_in": r[24], "total_out": r[25],
+        "interval_in": r[26], "interval_out": r[27],
+    })
+    return out
 
 
 def _synthesize_hives_from_flat(m: dict) -> list[dict]:
@@ -2364,27 +2406,76 @@ def _synthesize_hives_from_flat(m: dict) -> list[dict]:
               "total_out": m.get(f"bee_counter_{n}_total_out"),
               "interval_in": m.get(f"bee_counter_{n}_interval_in"),
               "interval_out": m.get(f"bee_counter_{n}_interval_out")}
+        hiveheart = {"temp_c": m.get(f"hiveheart_{n}_temp_c"),
+                     "humidity_percent": m.get(f"hiveheart_{n}_humidity_percent"),
+                     "frequency_hz": m.get(f"hiveheart_{n}_frequency_hz"),
+                     "energy": m.get(f"hiveheart_{n}_energy"),
+                     "peak": m.get(f"hiveheart_{n}_peak"),
+                     "battery_v": m.get(f"hiveheart_{n}_battery_v"),
+                     "rssi_dbm": m.get(f"hiveheart_{n}_rssi_dbm")}
+        hivescale = {"weight_kg": m.get(f"hivescale_{n}_weight_kg"),
+                     "raw_weight": m.get(f"hivescale_{n}_raw_weight"),
+                     "temp_c": m.get(f"hivescale_{n}_temp_c"),
+                     "humidity_percent": m.get(f"hivescale_{n}_humidity_percent"),
+                     "pressure_hpa": m.get(f"hivescale_{n}_pressure_hpa"),
+                     "battery_v": m.get(f"hivescale_{n}_battery_v"),
+                     "rssi_dbm": m.get(f"hivescale_{n}_rssi_dbm")}
         fields = [m.get(f"scale_{n}_weight_kg"), m.get(f"hive_{n}_temp_c"),
                   m.get(f"hive_{n}_humidity_percent"), m.get(f"scale_{n}_raw")]
         if not any(v is not None for v in fields + list(accel.values())
-                   + list(ble.values()) + list(bc.values())):
+                   + list(ble.values()) + list(bc.values())
+                   + list(hiveheart.values()) + list(hivescale.values())):
             continue
-        hives.append({
+        hive = {
             "index": n, "weight_kg": m.get(f"scale_{n}_weight_kg"),
             "raw_weight": m.get(f"scale_{n}_raw"), "temp_c": m.get(f"hive_{n}_temp_c"),
             "humidity_percent": m.get(f"hive_{n}_humidity_percent"),
             "accel": accel, "ble": ble, "bee_counter": bc,
-        })
+        }
+        if any(v is not None for v in hiveheart.values()):
+            hive["hiveheart"] = hiveheart
+        if any(v is not None for v in hivescale.values()):
+            hive["hivescale"] = hivescale
+        hives.append(hive)
     return hives
 
 
 def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
-    """Synthesize the flat scale_N_/hive_N_/accel_N_/bee_counter_N_ keys for hive
-    N>=3 from its hives[] entry, so the column-based insights / MQTT loops reach
-    every hive. Hives 1–2 already have authoritative legacy columns."""
+    """Synthesize flat per-hive keys from hives[].
+
+    Canonical scale_N_/hive_N_/accel_N_/bee_counter_N_ keys are generated for
+    hives N>=3 so existing column-shaped consumers can see multi-hive readings.
+    HiveHeart/HiveScale diagnostic keys are generated for every hive because the
+    multi-hive implementation stores those diagnostics in hive_readings.raw_json
+    rather than fixed measurements columns.
+    """
     n = h.get("index")
-    if not n or n < 3:
+    if not n:
         return
+
+    hh, hs = h.get("hiveheart") or {}, h.get("hivescale") or {}
+    if hh:
+        m[f"hiveheart_{n}_temp_c"] = hh.get("temp_c")
+        m[f"hiveheart_{n}_humidity_percent"] = hh.get("humidity_percent")
+        m[f"hiveheart_{n}_frequency_hz"] = hh.get("frequency_hz")
+        m[f"hiveheart_{n}_energy"] = hh.get("energy")
+        m[f"hiveheart_{n}_peak"] = hh.get("peak")
+        m[f"hiveheart_{n}_battery_v"] = hh.get("battery_v")
+        m[f"hiveheart_{n}_rssi_dbm"] = hh.get("rssi_dbm")
+        if hh.get("fft") is not None:
+            m[f"hiveheart_{n}_fft"] = hh.get("fft")
+    if hs:
+        m[f"hivescale_{n}_weight_kg"] = hs.get("weight_kg")
+        m[f"hivescale_{n}_raw_weight"] = hs.get("raw_weight")
+        m[f"hivescale_{n}_temp_c"] = hs.get("temp_c")
+        m[f"hivescale_{n}_humidity_percent"] = hs.get("humidity_percent")
+        m[f"hivescale_{n}_pressure_hpa"] = hs.get("pressure_hpa")
+        m[f"hivescale_{n}_battery_v"] = hs.get("battery_v")
+        m[f"hivescale_{n}_rssi_dbm"] = hs.get("rssi_dbm")
+
+    if n < 3:
+        return
+
     a, b, c = h.get("accel") or {}, h.get("ble") or {}, h.get("bee_counter") or {}
     m[f"scale_{n}_weight_kg"] = h.get("weight_kg")
     m[f"scale_{n}_raw"] = h.get("raw_weight")

@@ -13,7 +13,8 @@
 // two-slot globals are still populated elsewhere for old modules, but this GATT
 // client now reads the registry directly. Heart temperature/humidity feed the
 // per-hive JSON object in sensors.cpp; the raw readings also land in
-// hiveheart_*/hivescale_* fields for backwards-compatible visibility.
+// hiveheart_*/hivescale_* fields for backwards-compatible visibility, including
+// each BLE connection RSSI as *_rssi_dbm.
 //
 // Compiled out unless ENABLE_BEEHIVE_GATT is set.
 #pragma once

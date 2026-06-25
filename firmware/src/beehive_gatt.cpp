@@ -203,6 +203,7 @@ void runCycle(CycleResult& out) {
 
       if (isHeart) {
         if (decodeHeart(buf, len, out.heart[h])) {
+          out.heart[h].rssi_dbm = rssi;
           Serial.printf("[BHGATT] Hive%u Heart: T=%.1f H=%.1f%% f=%.1fHz V=%.3f RSSI=%d\n",
                         hive.index, out.heart[h].temp_c, out.heart[h].humidity_pct,
                         out.heart[h].frequency_hz, out.heart[h].battery_v, rssi);
@@ -212,6 +213,7 @@ void runCycle(CycleResult& out) {
         }
       } else if (isScale) {
         if (decodeScale(buf, len, out.scale[h])) {
+          out.scale[h].rssi_dbm = rssi;
           Serial.printf("[BHGATT] Hive%u Scale: W=%.2fkg T=%.1f P=%.1fhPa V=%.3f RSSI=%d\n",
                         hive.index, out.scale[h].weight_kg, out.scale[h].temp_c,
                         out.scale[h].pressure_hpa, out.scale[h].battery_v, rssi);
@@ -243,6 +245,7 @@ void writeToJson(JsonDocument& doc, const CycleResult& r) {
     doc[pfx + "energy"]           = heart.energy;
     doc[pfx + "peak"]             = heart.peak;
     doc[pfx + "battery_v"]        = heart.battery_v;
+    doc[pfx + "rssi_dbm"]         = heart.rssi_dbm;
     if (heart.fft_present) {
       JsonArray fft = doc[pfx + "fft"].to<JsonArray>();
       for (int j = 0; j < 8; j++) fft.add(heart.fft[j]);
@@ -260,6 +263,7 @@ void writeToJson(JsonDocument& doc, const CycleResult& r) {
     doc[pfx + "humidity_percent"] = sc.humidity_pct;
     doc[pfx + "pressure_hpa"]     = sc.pressure_hpa;
     doc[pfx + "battery_v"]        = sc.battery_v;
+    doc[pfx + "rssi_dbm"]         = sc.rssi_dbm;
   }
 }
 

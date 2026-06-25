@@ -159,6 +159,7 @@ static void writeBeehiveHeartToHive(JsonObject ho, const bhgatt::HeartReading& h
   obj["energy"] = heart.energy;
   obj["peak"] = heart.peak;
   obj["battery_v"] = heart.battery_v;
+  obj["rssi_dbm"] = heart.rssi_dbm;
   if (heart.fft_present) {
     JsonArray fft = obj["fft"].to<JsonArray>();
     for (int j = 0; j < 8; j++) fft.add(heart.fft[j]);
@@ -174,6 +175,7 @@ static void writeBeehiveScaleToHive(JsonObject ho, const bhgatt::ScaleReading& s
   obj["humidity_percent"] = sc.humidity_pct;
   obj["pressure_hpa"] = sc.pressure_hpa;
   obj["battery_v"] = sc.battery_v;
+  obj["rssi_dbm"] = sc.rssi_dbm;
 }
 #endif
 
