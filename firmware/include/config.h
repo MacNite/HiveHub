@@ -111,16 +111,17 @@
 // ==============================
 // HiveScale historically served exactly two hives (two HX711 load cells, two
 // DS18B20 probes, two BLE slots). v0.20.0 generalises this to a dynamic registry
-// of up to MAX_HIVES hives, each carrying one scale source and in-hive sensors,
-// configured from the provisioning portal and stored as a per-hive JSON blob in
+// of up to MAX_HIVES hives, each carrying one scale source and at most one
+// non-scale in-hive sensor, configured from the provisioning portal and stored as a per-hive JSON blob in
 // NVS (see firmware/src/hive_config.cpp).
 //
 //   - Scales: 2 HX711 (legacy pins) OR up to 18 I2C load-cell channels via the
 //     NAU7802 + TCA9548A path below.
 //   - Wired temperature: up to MAX_HIVES DS18B20 on the single ONE_WIRE_PIN bus,
 //     addressed by ROM (not by index) so each probe maps to a specific hive.
-//   - Wireless in-hive sensors: passive BLE beacons (unlimited — one shared scan)
-//     plus a capped number of serial GATT reads per cycle (see below).
+//   - In-hive sensors: one non-scale BLE/GATT sensor OR one DS18B20 per hive.
+//     BLE HiveScale selected as a scale source is stored separately from that
+//     in-hive sensor; serial GATT reads are still capped per cycle (see below).
 #ifndef MAX_HIVES
 #define MAX_HIVES 18
 #endif

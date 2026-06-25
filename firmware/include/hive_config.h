@@ -5,10 +5,8 @@
 //   - one SCALE, backed by an HX711 (legacy pins), a NAU7802 I2C channel
 //     (optionally behind a TCA9548A mux), or a paired beehivemonitoring.com
 //     HiveScale GATT sensor;
-//   - an optional wired DS18B20 temperature probe, addressed by its 1-Wire ROM
-//     (so a specific probe maps to a specific hive regardless of bus order);
-//   - zero or more wireless in-hive sensors (BLE beacons or GATT devices),
-//     each a {type, MAC} pairing.
+//   - at most one in-hive sensor: either a wired DS18B20 temperature probe
+//     addressed by its 1-Wire ROM, or one wireless BLE/GATT pairing;
 //
 // The whole registry is persisted as one compact JSON blob per hive in NVS
 // ("h0_cfg" .. "h17_cfg") plus a "hive_count" key, written by the provisioning
@@ -46,9 +44,11 @@ struct ScaleChannel {
   bool valid() const { return backend != ScaleBackend::None; }
 };
 
-// One wireless in-hive sensor pairing. `type` matches the portal vocabulary
-// (holyiot|ruuvitag|hiveinside|hiveheart|hivescale|beecounter). `isGatt()` marks
-// the connection-based types that count against MAX_GATT_READS_PER_CYCLE.
+// One wireless pairing. `type` matches the portal vocabulary
+// (holyiot|ruuvitag|hiveinside|hiveheart|hivescale|beecounter). A `hivescale`
+// pairing is a scale source; every other type is the hive's one in-hive BLE
+// sensor. `isGatt()` marks connection-based types that count against
+// MAX_GATT_READS_PER_CYCLE.
 struct BlePairing {
   String type;
   String mac;   // canonical "AA:BB:CC:DD:EE:FF"
@@ -56,7 +56,11 @@ struct BlePairing {
 };
 
 static const uint8_t MAX_SCALES_PER_HIVE = 1;
-static const uint8_t MAX_BLE_PER_HIVE     = 3;
+// Up to two BLE pairings may be persisted when a hive uses a wireless HiveScale
+// as its scale source plus one separate in-hive BLE sensor. Without a wireless
+// scale, hiveFromJson() and the portal accept only one in-hive BLE sensor.
+static const uint8_t MAX_BLE_PER_HIVE     = 2;
+static const uint8_t MAX_INHIVE_BLE_PER_HIVE = 1;
 
 struct Hive {
   uint8_t index = 0;          // 1..MAX_HIVES; 0 means "slot unused"
