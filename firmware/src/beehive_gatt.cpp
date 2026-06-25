@@ -3,7 +3,7 @@
 
 #if ENABLE_BEEHIVE_GATT
 
-#include "globals.h"
+#include "hive_config.h"
 #include <NimBLEDevice.h>
 #include <cctype>
 
@@ -162,11 +162,16 @@ String normalizeMac(const String& raw) {
 void runCycle(CycleResult& out) {
   out = CycleResult{};
 
-  const String hearts[2] = { heartMac0, heartMac1 };
-  const String scales[2] = { scaleMac0, scaleMac1 };
-
   bool anyPaired = false;
-  for (int i = 0; i < 2; i++) anyPaired |= hearts[i].length() || scales[i].length();
+  for (uint8_t h = 0; h < hivecfg::gHiveCount && h < MAX_HIVES; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    for (uint8_t b = 0; b < hive.bleCount; b++) {
+      const hivecfg::BlePairing& p = hive.ble[b];
+      if ((p.type == "hiveheart" || p.type == "hivescale") && p.mac.length()) {
+        anyPaired = true;
+      }
+    }
+  }
   if (!anyPaired) {
     Serial.println("[BHGATT] No HiveHeart/HiveScale paired; skipping");
     return;
@@ -176,24 +181,44 @@ void runCycle(CycleResult& out) {
   uint8_t buf[64];
   size_t len = 0;
   int rssi = 0;
+  uint8_t readAttempts = 0;
 
-  for (int i = 0; i < 2; i++) {
-    if (!hearts[i].length()) continue;
-    if (readNotification(hearts[i], buf, sizeof(buf), len, rssi)) {
-      if (decodeHeart(buf, len, out.heart[i])) {
-        Serial.printf("[BHGATT] Heart%d: T=%.1f H=%.1f%% f=%.1fHz V=%.3f\n",
-                      i + 1, out.heart[i].temp_c, out.heart[i].humidity_pct,
-                      out.heart[i].frequency_hz, out.heart[i].battery_v);
+  for (uint8_t h = 0; h < hivecfg::gHiveCount && h < MAX_HIVES; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    for (uint8_t b = 0; b < hive.bleCount; b++) {
+      const hivecfg::BlePairing& p = hive.ble[b];
+      const bool isHeart = p.type == "hiveheart";
+      const bool isScale = p.type == "hivescale";
+      if ((!isHeart && !isScale) || p.mac.length() == 0) continue;
+
+      if (readAttempts >= MAX_GATT_READS_PER_CYCLE) {
+        Serial.printf("[BHGATT] GATT read budget exhausted (%u); skipping hive %u %s %s\n",
+                      (unsigned)MAX_GATT_READS_PER_CYCLE, hive.index,
+                      p.type.c_str(), p.mac.c_str());
+        continue;
       }
-    }
-  }
-  for (int i = 0; i < 2; i++) {
-    if (!scales[i].length()) continue;
-    if (readNotification(scales[i], buf, sizeof(buf), len, rssi)) {
-      if (decodeScale(buf, len, out.scale[i])) {
-        Serial.printf("[BHGATT] Scale%d: W=%.2fkg T=%.1f P=%.1fhPa V=%.3f\n",
-                      i + 1, out.scale[i].weight_kg, out.scale[i].temp_c,
-                      out.scale[i].pressure_hpa, out.scale[i].battery_v);
+      readAttempts++;
+
+      if (!readNotification(p.mac, buf, sizeof(buf), len, rssi)) continue;
+
+      if (isHeart) {
+        if (decodeHeart(buf, len, out.heart[h])) {
+          Serial.printf("[BHGATT] Hive%u Heart: T=%.1f H=%.1f%% f=%.1fHz V=%.3f RSSI=%d\n",
+                        hive.index, out.heart[h].temp_c, out.heart[h].humidity_pct,
+                        out.heart[h].frequency_hz, out.heart[h].battery_v, rssi);
+        } else {
+          Serial.printf("[BHGATT] Hive%u Heart decode failed (%u B)\n",
+                        hive.index, (unsigned)len);
+        }
+      } else if (isScale) {
+        if (decodeScale(buf, len, out.scale[h])) {
+          Serial.printf("[BHGATT] Hive%u Scale: W=%.2fkg T=%.1f P=%.1fhPa V=%.3f RSSI=%d\n",
+                        hive.index, out.scale[h].weight_kg, out.scale[h].temp_c,
+                        out.scale[h].pressure_hpa, out.scale[h].battery_v, rssi);
+        } else {
+          Serial.printf("[BHGATT] Hive%u Scale decode failed (%u B)\n",
+                        hive.index, (unsigned)len);
+        }
       }
     }
   }
@@ -202,30 +227,32 @@ void runCycle(CycleResult& out) {
 }
 
 void writeToJson(JsonDocument& doc, const CycleResult& r) {
-  for (int i = 0; i < 2; i++) {
-    const HeartReading& h = r.heart[i];
-    if (!h.present) continue;
-    uint8_t s = i + 1;
+  for (uint8_t h = 0; h < hivecfg::gHiveCount && h < MAX_HIVES; h++) {
+    const HeartReading& heart = r.heart[h];
+    if (!heart.present) continue;
+    uint8_t s = hivecfg::gHives[h].index;
+    if (s == 0) continue;
     String pfx = String("hiveheart_") + s + "_";
-    // temp/humidity are also fed into hive_N_* by sensors.cpp, but only when no
-    // higher-priority wired/HolyIot source already filled those. Publishing the
-    // raw HiveHeart values here as well keeps the GATT reading independently
-    // visible (and verifiable) regardless of source precedence.
-    doc[pfx + "temp_c"]           = h.temp_c;
-    doc[pfx + "humidity_percent"] = h.humidity_pct;
-    doc[pfx + "frequency_hz"] = h.frequency_hz;
-    doc[pfx + "energy"]       = h.energy;
-    doc[pfx + "peak"]         = h.peak;
-    doc[pfx + "battery_v"]    = h.battery_v;
-    if (h.fft_present) {
+    // temp/humidity are also fed into hives[] by sensors.cpp, but only when no
+    // higher-priority wired/beacon source already filled those. Publishing the
+    // raw HiveHeart values here keeps the GATT reading independently visible in
+    // the serial JSON and in backends that accept the flat compatibility fields.
+    doc[pfx + "temp_c"]           = heart.temp_c;
+    doc[pfx + "humidity_percent"] = heart.humidity_pct;
+    doc[pfx + "frequency_hz"]     = heart.frequency_hz;
+    doc[pfx + "energy"]           = heart.energy;
+    doc[pfx + "peak"]             = heart.peak;
+    doc[pfx + "battery_v"]        = heart.battery_v;
+    if (heart.fft_present) {
       JsonArray fft = doc[pfx + "fft"].to<JsonArray>();
-      for (int j = 0; j < 8; j++) fft.add(h.fft[j]);
+      for (int j = 0; j < 8; j++) fft.add(heart.fft[j]);
     }
   }
-  for (int i = 0; i < 2; i++) {
-    const ScaleReading& sc = r.scale[i];
+  for (uint8_t h = 0; h < hivecfg::gHiveCount && h < MAX_HIVES; h++) {
+    const ScaleReading& sc = r.scale[h];
     if (!sc.present) continue;
-    uint8_t s = i + 1;
+    uint8_t s = hivecfg::gHives[h].index;
+    if (s == 0) continue;
     String pfx = String("hivescale_") + s + "_";
     doc[pfx + "weight_kg"]        = sc.weight_kg;
     doc[pfx + "raw_weight"]       = sc.raw_weight;

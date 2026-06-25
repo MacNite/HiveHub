@@ -149,6 +149,34 @@ static const blesensor::Snapshot* snapForHive(
 }
 #endif
 
+#if ENABLE_BEEHIVE_GATT
+static void writeBeehiveHeartToHive(JsonObject ho, const bhgatt::HeartReading& heart) {
+  JsonObject obj = ho["hiveheart"].to<JsonObject>();
+  obj["present"] = true;
+  obj["temp_c"] = heart.temp_c;
+  obj["humidity_percent"] = heart.humidity_pct;
+  obj["frequency_hz"] = heart.frequency_hz;
+  obj["energy"] = heart.energy;
+  obj["peak"] = heart.peak;
+  obj["battery_v"] = heart.battery_v;
+  if (heart.fft_present) {
+    JsonArray fft = obj["fft"].to<JsonArray>();
+    for (int j = 0; j < 8; j++) fft.add(heart.fft[j]);
+  }
+}
+
+static void writeBeehiveScaleToHive(JsonObject ho, const bhgatt::ScaleReading& sc) {
+  JsonObject obj = ho["hivescale"].to<JsonObject>();
+  obj["present"] = true;
+  obj["weight_kg"] = sc.weight_kg;
+  obj["raw_weight"] = sc.raw_weight;
+  obj["temp_c"] = sc.temp_c;
+  obj["humidity_percent"] = sc.humidity_pct;
+  obj["pressure_hpa"] = sc.pressure_hpa;
+  obj["battery_v"] = sc.battery_v;
+}
+#endif
+
 String createMeasurementJson() {
   Serial.println("[MEASURE] Reading sensors...");
 
@@ -180,7 +208,7 @@ String createMeasurementJson() {
   blesensor::scanPairedSensorsMulti(bleMacs, bleIsGatt, bleSnaps, MAX_GATT_READS_PER_CYCLE);
 #endif
 
-  // ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) — hives 1–2 ──
+  // ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) — all hives ──
 #if ENABLE_BEEHIVE_GATT
   bhgatt::CycleResult bh;
   bhgatt::runCycle(bh);
@@ -317,6 +345,9 @@ String createMeasurementJson() {
     doc["mic_right_band_high_dbfs"]     = micResult.right.bands.high_dbfs;
   }
 #endif
+#if ENABLE_BEEHIVE_GATT
+  bhgatt::writeToJson(doc, bh);
+#endif
 
   // ── Per-hive array — the heart of the multi-hive upload ────────────────────
   JsonArray hivesArr = doc["hives"].to<JsonArray>();
@@ -328,6 +359,10 @@ String createMeasurementJson() {
 
 #if ENABLE_BLE_SCAN
     const blesensor::Snapshot* sn = snapForHive(bleHiveOfMac, bleSnaps, h);
+#endif
+#if ENABLE_BEEHIVE_GATT
+    const bhgatt::HeartReading* bhHeart = (h < MAX_HIVES && bh.heart[h].present) ? &bh.heart[h] : nullptr;
+    const bhgatt::ScaleReading* bhScale = (h < MAX_HIVES && bh.scale[h].present) ? &bh.scale[h] : nullptr;
 #endif
 
     // Scales: sum every channel mapped to this hive (usually one).
@@ -350,6 +385,13 @@ String createMeasurementJson() {
       ho["raw_weight"]   = firstRaw;
       ho["scale_source"] = scaleSrc;
     }
+#if ENABLE_BEEHIVE_GATT
+    else if (bhScale) {
+      ho["weight_kg"]    = bhScale->weight_kg;
+      ho["raw_weight"]   = bhScale->raw_weight;
+      ho["scale_source"] = "hivescale_gatt";
+    }
+#endif
 
     // Temperature arbitration: BLE overrides the wired DS18B20 when configured;
     // otherwise the wired probe wins and BLE/HiveHeart are the fallback.
@@ -380,26 +422,29 @@ String createMeasurementJson() {
     if (isnan(t) && bleHasTemp) { t = sn->temp_c; tsrc = "ble"; }
 #endif
 #if ENABLE_BEEHIVE_GATT
-    if (isnan(t) && hive.index >= 1 && hive.index <= 2 && bh.heart[hive.index - 1].present) {
-      t = bh.heart[hive.index - 1].temp_c;
+    if (isnan(t) && bhHeart) {
+      t = bhHeart->temp_c;
       tsrc = "hiveheart";
     }
 #endif
     if (!isnan(t)) { ho["temp_c"] = t; if (tsrc) ho["temp_source"] = tsrc; }
 
-    // In-hive humidity (BLE sensor, or HiveHeart for hives 1–2).
+    // In-hive humidity (BLE sensor, or HiveHeart).
 #if ENABLE_BLE_SCAN
     if (sn && sn->present && !isnan(sn->humidity_pct)) ho["humidity_percent"] = sn->humidity_pct;
 #endif
 #if ENABLE_BEEHIVE_GATT
-    if (!ho["humidity_percent"].is<float>() && hive.index >= 1 && hive.index <= 2 &&
-        bh.heart[hive.index - 1].present)
-      ho["humidity_percent"] = bh.heart[hive.index - 1].humidity_pct;
+    if (!ho["humidity_percent"].is<float>() && bhHeart)
+      ho["humidity_percent"] = bhHeart->humidity_pct;
 #endif
 
     // Nested wireless/vibration/acoustic data.
 #if ENABLE_BLE_SCAN
     if (sn) blesensor::writeSnapshotToHive(ho, *sn);
+#endif
+#if ENABLE_BEEHIVE_GATT
+    if (bhHeart) writeBeehiveHeartToHive(ho, *bhHeart);
+    if (bhScale) writeBeehiveScaleToHive(ho, *bhScale);
 #endif
     // BeeCounter entrance gates (hives 1–2).
     if (hive.index == 1) beecnt::writeSnapshotToHive(ho, beeSnap1);

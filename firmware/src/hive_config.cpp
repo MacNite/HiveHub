@@ -175,11 +175,11 @@ static void migrateLegacy(Preferences& p) {
   Serial.println("[HIVECFG] Migrated legacy 2-slot config into the hive registry");
 }
 
-// Populate the pre-0.20 per-slot globals from the registry's first two hives so
-// the connection-based GATT modules (beehive_gatt for HiveHeart/HiveScale,
-// HiveTraffic bee counter) keep working for hives 1–2. The beacon path
-// (HolyIot/Ruuvi/HiveInside) is driven directly from the registry by sensors.cpp
-// and needs no globals.
+// Populate the pre-0.20 per-slot globals from the registry's first two hives for
+// legacy two-slot code paths that still consume them (beacon compatibility and
+// HiveTraffic bee counter). The beehivemonitoring.com HiveHeart/HiveScale GATT
+// client reads the dynamic registry directly, so those sensors can be mapped to
+// any hive up to MAX_HIVES.
 static void bridgeLegacyGlobals() {
   auto find = [](const Hive& h, const char* type) -> String {
     for (uint8_t b = 0; b < h.bleCount; b++)

@@ -252,6 +252,29 @@ class HiveBeeCounterIn(BaseModel):
     interval_out: Optional[int] = None
 
 
+class HiveHeartIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    present: Optional[bool] = None
+    temp_c: Optional[float] = None
+    humidity_percent: Optional[float] = None
+    frequency_hz: Optional[float] = None
+    energy: Optional[int] = None
+    peak: Optional[int] = None
+    battery_v: Optional[float] = None
+    fft: Optional[list[int]] = Field(default=None, max_length=16)
+
+
+class HiveScaleIn(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    present: Optional[bool] = None
+    weight_kg: Optional[float] = None
+    raw_weight: Optional[int] = None
+    temp_c: Optional[float] = None
+    humidity_percent: Optional[float] = None
+    pressure_hpa: Optional[float] = None
+    battery_v: Optional[float] = None
+
+
 class HiveReadingIn(BaseModel):
     model_config = ConfigDict(extra="ignore")
     index: int = Field(..., ge=1, le=64)
@@ -266,6 +289,8 @@ class HiveReadingIn(BaseModel):
     ble: Optional[HiveBleIn] = None
     mic: Optional[HiveMicIn] = None
     bee_counter: Optional[HiveBeeCounterIn] = None
+    hiveheart: Optional[HiveHeartIn] = None
+    hivescale: Optional[HiveScaleIn] = None
 
     @field_validator("temp_c")
     @classmethod

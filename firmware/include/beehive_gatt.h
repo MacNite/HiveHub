@@ -8,12 +8,12 @@
 //
 //   connect(mac) -> discover -> subscribe(513849EB-…-533D6E) -> notify -> close
 //
-// Up to two HiveHeart (in-hive, slot 1 -> hive 1, slot 2 -> hive 2) and up to two
-// HiveScale (wireless weight) devices are supported. MACs come from Preferences,
-// seeded from secrets.h (INHIVE_n_MAC / WSCALE_n_MAC) and/or set in the
-// provisioning portal. Heart temperature/humidity feed the existing
-// hive_{slot}_* fields; everything else lands in new hiveheart_*/hivescale_*
-// fields (see server migration 009).
+// HiveHeart (in-hive) and HiveScale (wireless weight) devices are resolved from
+// the dynamic hive registry, so they work on any hive up to MAX_HIVES. Legacy
+// two-slot globals are still populated elsewhere for old modules, but this GATT
+// client now reads the registry directly. Heart temperature/humidity feed the
+// per-hive JSON object in sensors.cpp; the raw readings also land in
+// hiveheart_*/hivescale_* fields for backwards-compatible visibility.
 //
 // Compiled out unless ENABLE_BEEHIVE_GATT is set.
 #pragma once
@@ -29,21 +29,23 @@
 namespace bhgatt {
 
 struct CycleResult {
-  HeartReading heart[2];
-  ScaleReading scale[2];
+  // Entries are keyed by hivecfg::gHives[] array position, not by hive.index - 1.
+  // That keeps sparse/non-renumbered hive indexes safe while iterating the live
+  // registry in sensors.cpp.
+  HeartReading heart[MAX_HIVES];
+  ScaleReading scale[MAX_HIVES];
 };
 
 // Connect to each paired Heart/Scale MAC in turn, decode one notification each,
 // and fill `out`. Initialises and de-initialises the NimBLE stack around the
-// whole batch so it coexists with the HolyIot scan and the WiFi upload. Slots
-// with an empty MAC stay !present. Safe to call when no device is paired.
+// whole batch so it coexists with the HolyIot scan and the WiFi upload. Hives
+// without a paired device stay !present. Safe to call when no device is paired.
+// At most MAX_GATT_READS_PER_CYCLE devices are read per wake cycle.
 void runCycle(CycleResult& out);
 
-// Write the decoded readings into the measurement JSON. Heart temperature and
-// humidity are written here on their own hiveheart_{slot}_temp_c /
-// hiveheart_{slot}_humidity_percent fields so the GATT reading stays visible;
-// sensors.cpp separately arbitrates the canonical hive_{slot}_temp_c /
-// hive_{slot}_humidity_percent across all in-hive sources.
+// Write decoded readings into top-level compatibility fields named by hive index
+// (hiveheart_N_* / hivescale_N_*). sensors.cpp separately writes the canonical
+// per-hive hives[] values and nested diagnostic objects for all hives.
 void writeToJson(JsonDocument& doc, const CycleResult& r);
 
 // Normalise a MAC string to "AA:BB:CC:DD:EE:FF" (uppercase, colon-separated) or
