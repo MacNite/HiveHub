@@ -111,7 +111,7 @@
 // ==============================
 // HiveScale historically served exactly two hives (two HX711 load cells, two
 // DS18B20 probes, two BLE slots). v0.20.0 generalises this to a dynamic registry
-// of up to MAX_HIVES hives, each carrying its own scale(s) and in-hive sensors,
+// of up to MAX_HIVES hives, each carrying one scale source and in-hive sensors,
 // configured from the provisioning portal and stored as a per-hive JSON blob in
 // NVS (see firmware/src/hive_config.cpp).
 //

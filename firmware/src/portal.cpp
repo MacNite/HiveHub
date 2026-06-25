@@ -687,12 +687,12 @@ void handleSetupRoot() {
   html += "</fieldset>";
 
   // ── Hive-centric mapping ───────────────────────────────────────────────────
-  // Top-level "+ Add hive"; each hive maps its scale(s) (HX711 / NAU7802 channels
-  // detected by the I2C scan that ran when this page loaded) and its in-hive
+  // Top-level "+ Add hive"; each hive maps exactly one scale source (HX711,
+  // NAU7802 channel, or beehivemonitoring.com HiveScale) and its in-hive
   // sensors (BLE beacons/GATT + a wired DS18B20 probe). The page submits one JSON
   // blob per hive in exactly the shape hivecfg::hiveFromJson() parses.
   html += "<fieldset><legend>Hives &amp; sensors</legend>";
-  html += "<p>Add a hive, then map its scale(s) and in-hive sensors. An I2C scan ran when this page loaded; ";
+  html += "<p>Add a hive, then choose its single scale source and map in-hive sensors. An I2C scan ran when this page loaded; ";
   html += "use <a href='/ble/scan'>Scan BLE</a> to find wireless sensors and <a href='/i2c/scan'>I2C scan details</a> to verify wiring. ";
   html += "Beacon sensors (HolyIot / RuuviTag) are recommended for in-hive readings &mdash; any number share one quick scan and keep deep sleep effective. ";
   html += "Connection-based GATT sensors are read serially and capped at " + String(MAX_GATT_READS_PER_CYCLE) + " per wake cycle.</p>";
@@ -706,50 +706,55 @@ void handleSetupRoot() {
   html += "var DETECTED_PROBES=" + detectedProbesJs() + ";";
   html += "var INITIAL_HIVES=" + initialHivesJs() + ";";
   html += "var MAX_HIVES=" + String(MAX_HIVES) + ";var MAX_BLE=" + String(hivecfg::MAX_BLE_PER_HIVE) + ";";
-  html += "var MAX_SCALES_PER_HIVE=" + String(hivecfg::MAX_SCALES_PER_HIVE) + ";";
-  // Fallback channel used by "Add scale" when the bus probe found nothing.
-#if ENABLE_HX711
-  html += "var DEFAULT_SCALE={b:'hx',hx:0,label:'HX711 #1'};";
-#else
-  html += "var DEFAULT_SCALE={b:'nau',mux:-1,adc:1,addr:" + String((int)NAU7802_I2C_ADDRESS) +
+  // Fallback channel used when the bus probe found no NAU7802 but the user still
+  // wants to pre-configure one.
+#if ENABLE_NAU7802
+  html += "var DEFAULT_NAU_SCALE={b:'nau',mux:-1,adc:1,addr:" + String((int)NAU7802_I2C_ADDRESS) +
           ",label:'NAU7802 main bus CH1'};";
+#else
+  html += "var DEFAULT_NAU_SCALE=null;";
 #endif
   html += "</script>";
 
   // Inline controller (no external assets — works on the offline captive portal).
   html += R"HVJS(<script>(function(){
-var TYPES=[["holyiot","HolyIot 25015 — beacon"],["ruuvitag","RuuviTag — beacon"],["hiveinside","HiveInside — GATT"],["hiveheart","HiveHeart — GATT"],["hivescale","HiveScale wireless scale — GATT"],["beecounter","HiveTraffic counter — GATT"]];
+var SENSOR_TYPES=[["holyiot","HolyIot 25015 — beacon"],["ruuvitag","RuuviTag — beacon"],["hiveinside","HiveInside — GATT"],["hiveheart","HiveHeart — GATT"],["beecounter","HiveTraffic counter — GATT"]];
 var host=document.getElementById("hives"),form=document.getElementById("cfgform");
 function clone(o){return JSON.parse(JSON.stringify(o));}
-var HIVES=(INITIAL_HIVES||[]).map(function(h){return {i:h.i,n:h.n||"",s:(h.s||[]).slice(),ds:h.ds||null,bl:(h.bl||[]).slice()};});
 function scaleKey(o){return o.b=="nau"?("nau:"+o.mux+":"+o.adc):("hx:"+o.hx);}
+function labelScale(o,nauCount){if(o.b=="hx")return "HX711 ("+(Number(o.hx)+1)+")";var loc=o.mux>=0?("mux ch "+o.mux+" CH"+o.adc):("main bus CH"+o.adc);return nauCount>1?"NAU7802 — "+loc:"NAU7802";}
+function allWiredScales(){var seen={},out=[],nau=0;DETECTED_SCALES.forEach(function(o){if(o.b=="nau")nau++;});var addDefaultNau=!nau&&DEFAULT_NAU_SCALE;if(addDefaultNau)nau=1;
+function add(o){var k=scaleKey(o);if(seen[k])return;var c=clone(o);c.label=labelScale(c,nau);seen[k]=1;out.push(c);}
+DETECTED_SCALES.forEach(add);if(addDefaultNau)add(DEFAULT_NAU_SCALE);return out;}
+function findScale(k){var scales=allWiredScales();for(var i=0;i<scales.length;i++)if(scaleKey(scales[i])==k)return clone(scales[i]);return null;}
+function normalizeHive(h){var s=(h.s||[]).slice(0,1),bl=[],wirelessMac="";(h.bl||[]).forEach(function(b){if(b.t=="hivescale"){if(!wirelessMac)wirelessMac=b.m||"";}else bl.push({t:b.t,m:b.m||""});});return {i:h.i,n:h.n||"",s:s,ds:h.ds||null,bl:bl,sk:s.length?scaleKey(s[0]):(wirelessMac?"ble":"none"),wm:wirelessMac};}
+var HIVES=(INITIAL_HIVES||[]).map(normalizeHive);
 function usedScales(){var u={};HIVES.forEach(function(h){h.s.forEach(function(o){u[scaleKey(o)]=1;});});return u;}
 function usedProbes(){var u={};HIVES.forEach(function(h){if(h.ds)u[h.ds]=1;});return u;}
-function nextScale(){var u=usedScales();for(var i=0;i<DETECTED_SCALES.length;i++){if(!u[scaleKey(DETECTED_SCALES[i])])return clone(DETECTED_SCALES[i]);}return DETECTED_SCALES.length?clone(DETECTED_SCALES[0]):clone(DEFAULT_SCALE);}
+function nextScale(){var u=usedScales(),scales=allWiredScales();for(var i=0;i<scales.length;i++){if(!u[scaleKey(scales[i])])return clone(scales[i]);}return scales.length?clone(scales[0]):null;}
 function nextProbe(){var u=usedProbes();for(var i=0;i<DETECTED_PROBES.length;i++){if(!u[DETECTED_PROBES[i]])return DETECTED_PROBES[i];}return DETECTED_PROBES[0]||"";}
 function nextIndex(){var m=0;HIVES.forEach(function(h){if(h.i>m)m=h.i;});return m+1;}
-function findScale(k){for(var i=0;i<DETECTED_SCALES.length;i++)if(scaleKey(DETECTED_SCALES[i])==k)return clone(DETECTED_SCALES[i]);return null;}
-function scaleOpts(sel){return DETECTED_SCALES.map(function(o){var k=scaleKey(o);return "<option value='"+k+"'"+(k==scaleKey(sel)?" selected":"")+">"+o.label+"</option>";}).join("");}
+function scaleOpts(h){var sel=h.sk||"none",html="<option value='none'"+(sel=="none"?" selected":"")+">(no scale)</option>",scales=allWiredScales(),seen={};scales.forEach(function(o){seen[scaleKey(o)]=1;});if(h.s[0]&&!seen[scaleKey(h.s[0])]){var saved=clone(h.s[0]);saved.label=labelScale(saved,1)+" (saved; not detected)";scales.unshift(saved);}scales.forEach(function(o){var k=scaleKey(o);html+="<option value='"+k+"'"+(k==sel?" selected":"")+">"+o.label+"</option>";});html+="<option value='ble'"+(sel=="ble"?" selected":"")+">BLE HiveScale from Beehivemonitoring</option>";return html;}
 function probeOpts(sel){if(!DETECTED_PROBES.length)return "<option value=''>(no DS18B20 detected)</option>";return DETECTED_PROBES.map(function(r){return "<option value='"+r+"'"+(r==sel?" selected":"")+">"+r+"</option>";}).join("");}
-function typeOpts(sel){return TYPES.map(function(t){return "<option value='"+t[0]+"'"+(t[0]==sel?" selected":"")+">"+t[1]+"</option>";}).join("");}
+function typeOpts(sel){return SENSOR_TYPES.map(function(t){return "<option value='"+t[0]+"'"+(t[0]==sel?" selected":"")+">"+t[1]+"</option>";}).join("");}
+function maxAuxBle(h){return Math.max(0,MAX_BLE-(h.sk=="ble"?1:0));}
+function setScaleChoice(h,val){h.sk=val;if(val=="ble"||val=="none"){h.s=[];return;}var n=findScale(val);if(n){var old=h.s[0]||{};n.off=old.off||0;n.fac=old.fac||-7050;h.s=[n];}}
 function render(){
 host.innerHTML="";
 HIVES.forEach(function(h,hi){
 var c=document.createElement("fieldset");c.className="wsrow";
 c.innerHTML="<legend>Hive "+h.i+"</legend>"+
 "<label>Name (optional)</label><input data-hn placeholder='e.g. Apiary A #3'>"+
-"<h3>Scales</h3><div data-scales></div><p><button type='button' class='button' data-addscale>&#10133; Add scale</button></p>"+
+"<h3>Scale</h3><div data-scale-wrap></div>"+
 "<h3>In-hive sensors</h3><div data-sensors></div><p><button type='button' class='button' data-addble>&#10133; Add BLE sensor</button> <button type='button' class='button' data-addds>&#10133; Add DS18B20</button></p>"+
 "<p><button type='button' class='button danger' data-delhive>Remove hive</button></p>";
 host.appendChild(c);
 var nm=c.querySelector("[data-hn]");nm.value=h.n||"";nm.addEventListener("input",function(){h.n=this.value;});
-var sc=c.querySelector("[data-scales]");
-h.s.forEach(function(o,si){var row=document.createElement("p");row.className="wnote";
-row.innerHTML="<select data-sc>"+scaleOpts(o)+"</select> <button type='button' class='button' data-rm>Remove</button>";
-sc.appendChild(row);
-var scs=row.querySelector("[data-sc]");scs.value=scaleKey(o);scs.addEventListener("change",function(){var n=findScale(scs.value);if(n){n.off=o.off||0;n.fac=o.fac||-7050;h.s[si]=n;}render();});
-row.querySelector("[data-rm]").addEventListener("click",function(){h.s.splice(si,1);render();});});
-c.querySelector("[data-addscale]").addEventListener("click",function(){if(h.s.length<MAX_SCALES_PER_HIVE){h.s.push(nextScale());render();}});
+var sw=c.querySelector("[data-scale-wrap]"),sr=document.createElement("p");sr.className="wnote";
+sr.innerHTML="<select data-scale>"+scaleOpts(h)+"</select>"+(h.sk=="ble"?" <input data-sm placeholder='AA:BB:CC:DD:EE:FF'>":"");
+sw.appendChild(sr);
+var ss=sr.querySelector("[data-scale]");ss.value=h.sk||"none";ss.addEventListener("change",function(){setScaleChoice(h,ss.value);render();});
+var sm=sr.querySelector("[data-sm]");if(sm){sm.value=h.wm||"";sm.addEventListener("input",function(){h.wm=this.value;});}
 var sn=c.querySelector("[data-sensors]");
 if(h.ds){var row=document.createElement("p");row.className="wnote";
 row.innerHTML="<b>Wired DS18B20</b> <select data-ds>"+probeOpts(h.ds)+"</select> <button type='button' class='button' data-rm>Remove</button>";
@@ -762,7 +767,7 @@ sn.appendChild(row);
 var bt=row.querySelector("[data-bt]");bt.value=b.t;bt.addEventListener("change",function(){b.t=bt.value;});
 var mi=row.querySelector("[data-bm]");mi.value=b.m||"";mi.addEventListener("input",function(){b.m=this.value;});
 row.querySelector("[data-rm]").addEventListener("click",function(){h.bl.splice(bi,1);render();});});
-c.querySelector("[data-addble]").addEventListener("click",function(){if(h.bl.length<MAX_BLE){h.bl.push({t:"holyiot",m:""});render();}});
+c.querySelector("[data-addble]").addEventListener("click",function(){if(h.bl.length<maxAuxBle(h)){h.bl.push({t:"holyiot",m:""});render();}});
 c.querySelector("[data-addds]").addEventListener("click",function(){if(!h.ds)h.ds=nextProbe();render();});
 c.querySelector("[data-delhive]").addEventListener("click",function(){HIVES.splice(hi,1);render();});
 });
@@ -770,12 +775,14 @@ document.getElementById("hempty").style.display=HIVES.length?"none":"block";
 document.getElementById("hfull").style.display=HIVES.length>=MAX_HIVES?"inline":"none";
 document.getElementById("addhive").disabled=HIVES.length>=MAX_HIVES;
 }
-document.getElementById("addhive").addEventListener("click",function(){if(HIVES.length<MAX_HIVES){HIVES.push({i:nextIndex(),n:"",s:[],ds:null,bl:[]});render();}});
+document.getElementById("addhive").addEventListener("click",function(){if(HIVES.length<MAX_HIVES){var s=nextScale();HIVES.push({i:nextIndex(),n:"",s:s?[s]:[],ds:null,bl:[],sk:s?scaleKey(s):"none",wm:""});render();}});
 form.addEventListener("submit",function(){
 var out=HIVES.map(function(h){var o={i:h.i,n:h.n||""};
-o.s=h.s.map(function(s){return s.b=="nau"?{b:"nau",mux:s.mux,adc:s.adc,addr:s.addr||42,off:s.off||0,fac:s.fac||-7050}:{b:"hx",hx:s.hx,off:s.off||0,fac:s.fac||-7050};});
+o.s=(h.sk!="ble"&&h.sk!="none"?h.s.slice(0,1):[]).map(function(s){return s.b=="nau"?{b:"nau",mux:s.mux,adc:s.adc,addr:s.addr||42,off:s.off||0,fac:s.fac||-7050}:{b:"hx",hx:s.hx,off:s.off||0,fac:s.fac||-7050};});
 if(h.ds)o.ds=h.ds;
-o.bl=h.bl.filter(function(b){return b.m&&b.m.length;}).map(function(b){return {t:b.t,m:b.m};});
+var bl=h.bl.filter(function(b){return b.m&&b.m.length;}).slice(0,maxAuxBle(h)).map(function(b){return {t:b.t,m:b.m};});
+if(h.sk=="ble"&&h.wm&&h.wm.length)bl.push({t:"hivescale",m:h.wm});
+o.bl=bl;
 return o;});
 document.getElementById("hives_json").value=JSON.stringify(out);});
 render();

@@ -1,7 +1,7 @@
 # Multi-hive support (up to 18 hives per ESP32)
 
 Firmware **v0.20.0** generalises HiveScale from a fixed two-hive device into a
-dynamic registry of **up to 18 hives**, each with its own scale(s) and in-hive
+dynamic registry of **up to 18 hives**, each with one scale source and in-hive
 sensors. This page covers the new hardware paths, the hive-centric provisioning
 portal, the BLE budget, and the data model.
 
@@ -11,7 +11,7 @@ portal, the BLE budget, and the data model.
 
 | Sensor | Max | How |
 | --- | --- | --- |
-| Scales | **18** | 1 NAU7802 on the main I2C bus (2 channels) **or** up to 8 NAU7802 behind a TCA9548A mux (2 channels each = 16), plus the 2 legacy HX711 pin channels |
+| Scales | **18** | One scale source per hive: HX711 (1), HX711 (2), NAU7802 channels (main bus or mux), or a paired beehivemonitoring.com BLE HiveScale |
 | Wired temperature | **18** | DS18B20 probes on the single 1-Wire bus, mapped to hives by ROM address |
 | In-hive BLE | effectively unlimited | passive beacons share one scan window (see [BLE budget](#ble-budget)) |
 | In-hive GATT | small (capped) | serial connect-read, capped per cycle |
@@ -70,9 +70,11 @@ The setup portal (AP mode → `http://192.168.4.1/`) is now organised **by hive*
    bus + each mux channel) and DS18B20 ROMs. Use **Scan BLE** for wireless
    sensors and **I2C scan details** to verify wiring.
 2. **➕ Add hive** creates a hive card.
-3. Inside each hive: **➕ Add scale** assigns the next free detected scale channel
-   (pick a specific one from the dropdown), and **➕ Add BLE sensor** /
-   **➕ Add DS18B20** add in-hive sensors.
+3. Inside each hive: choose exactly one **Scale** source from the dropdown. The
+   portal offers HX711 (1), HX711 (2), detected NAU7802 channels, and **BLE
+   HiveScale from Beehivemonitoring**; when the BLE HiveScale option is selected,
+   a MAC-address field appears for pairing. **➕ Add BLE sensor** / **➕ Add
+   DS18B20** still add non-scale in-hive sensors.
 4. **Save and reboot** writes one compact JSON blob per hive to NVS
    (`h0_cfg`..`h17_cfg` + `hive_count`).
 

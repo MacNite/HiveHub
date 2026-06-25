@@ -122,12 +122,26 @@ bool hiveFromJson(const String& json, Hive& out) {
   const char* ds = d["ds"] | (const char*)nullptr;
   if (ds && romFromHex(String(ds), out.dsRom)) out.hasDsRom = true;
 
+  bool scaleAssigned = out.scaleCount > 0;
+
   JsonArray bl = d["bl"].as<JsonArray>();
   for (JsonObject o : bl) {
     if (out.bleCount >= MAX_BLE_PER_HIVE) break;
-    out.ble[out.bleCount].type = o["t"] | "";
-    out.ble[out.bleCount].mac  = o["m"] | "";
-    if (out.ble[out.bleCount].mac.length()) out.bleCount++;
+    String type = o["t"] | "";
+    String mac  = o["m"] | "";
+    if (!mac.length()) continue;
+
+    // A beehivemonitoring.com HiveScale is a scale source, not an in-hive
+    // auxiliary sensor. Keep at most one scale source per hive: either the
+    // single wired channel above, or one wireless HiveScale pairing.
+    if (type == "hivescale") {
+      if (scaleAssigned) continue;
+      scaleAssigned = true;
+    }
+
+    out.ble[out.bleCount].type = type;
+    out.ble[out.bleCount].mac  = mac;
+    out.bleCount++;
   }
   return out.index >= 1;
 }

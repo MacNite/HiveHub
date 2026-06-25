@@ -2,8 +2,9 @@
 // mapped to each one. Replaces the old fixed "hive 1 / hive 2" model.
 //
 // Each hive owns:
-//   - one or two SCALE channels, each backed by an HX711 (legacy pins) or a
-//     NAU7802 I2C channel (optionally behind a TCA9548A mux) — see scale_bus.h;
+//   - one SCALE, backed by an HX711 (legacy pins), a NAU7802 I2C channel
+//     (optionally behind a TCA9548A mux), or a paired beehivemonitoring.com
+//     HiveScale GATT sensor;
 //   - an optional wired DS18B20 temperature probe, addressed by its 1-Wire ROM
 //     (so a specific probe maps to a specific hive regardless of bus order);
 //   - zero or more wireless in-hive sensors (BLE beacons or GATT devices),
@@ -54,7 +55,7 @@ struct BlePairing {
   bool isGatt() const;
 };
 
-static const uint8_t MAX_SCALES_PER_HIVE = 2;
+static const uint8_t MAX_SCALES_PER_HIVE = 1;
 static const uint8_t MAX_BLE_PER_HIVE     = 3;
 
 struct Hive {
@@ -91,7 +92,7 @@ String hiveToJson(const Hive& h);
 // Parse one hive blob into `out`; returns false on malformed input.
 bool   hiveFromJson(const String& json, Hive& out);
 
-// Convenience: total configured scale channels across all hives (<= MAX_SCALES).
+// Convenience: total configured wired scale channels across all hives (<= MAX_SCALES).
 uint8_t totalScaleChannels();
 
 // Format/parse a DS18B20 ROM as 16 hex chars ("28FF64...") for the portal/NVS.
