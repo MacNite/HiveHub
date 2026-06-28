@@ -434,8 +434,11 @@ Most breakout boards include SDA/SCL pull-ups. If multiple breakout boards are i
 
 Beyond the two HX711 pin channels, HiveScale can read load cells over I2C with the
 **NAU7802** 24-bit ADC, and fan out up to eight of them with a **TCA9548A** 1-to-8
-I2C multiplexer — up to **18 hives** total. See
-[multi-hive.md](multi-hive.md) for the full feature overview.
+I2C multiplexer. An all-NAU7802 setup tops out at **16 scales** (8 chips behind the
+mux); the full **18 wired channels** is reached by adding the 2 HX711 pin channels
+(**2 HX711 + 16 NAU7802**). See [multi-hive.md](multi-hive.md) for the full feature
+overview and the topology note explaining why a main-bus NAU7802 and the mux cannot
+be combined.
 
 ### NAU7802 (one chip = two load cells)
 
@@ -464,9 +467,11 @@ differential inputs (CH1/CH2):
 Pull-ups: keep 4.7 kΩ pull-ups on the **upstream** bus; each downstream channel
 needs its own pull-ups too (most NAU7802 breakouts include them).
 
-> All NAU7802s share `0x2A`, so do not also place a NAU7802 on the upstream bus
-> while populating mux channels — see the topology note in
-> [multi-hive.md](multi-hive.md).
+> All NAU7802s share `0x2A` (the chip has no address-select pin), so do **not**
+> also place a NAU7802 on the upstream bus while populating mux channels — the two
+> would collide. Use the mux (≤16 scales) **or** a single main-bus chip (2 scales),
+> not both. To reach 18, pair 16 muxed NAU7802s with the 2 HX711 channels. See the
+> topology note in [multi-hive.md](multi-hive.md).
 
 ### DS18B20 — up to 18 on one bus
 

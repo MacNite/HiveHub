@@ -74,13 +74,19 @@ static bool nauConfigure() {
   return true;
 }
 
-// Averaged raw read with a short settling discard after an input/mux switch.
+// Averaged raw read with a settling discard after an input/mux switch. The first
+// conversions after setChannel() still belong to the previous input's pipeline,
+// so discard a few before averaging (we do NOT re-run calibrateAFE() here: that
+// would re-zero the ADC and invalidate the per-channel tare offset stored in the
+// hive registry). The timeout bounds a missing/silent chip to ~1 s instead of 2 s
+// so a full sweep of all channels (e.g. the portal's live calibration read) stays
+// responsive; 15 samples at 80 SPS need only ~190 ms, well inside the budget.
 static long nauAverage(uint8_t samples) {
-  const uint8_t discard = 2;
+  const uint8_t discard = 4;
   long total = 0;
   int got = 0, seen = 0;
   uint32_t start = millis();
-  while (got < samples && (millis() - start) < 2000UL) {
+  while (got < samples && (millis() - start) < 1000UL) {
     if (!nau.available()) { delay(1); continue; }
     int32_t r = nau.getReading();
     if (seen++ < discard) continue;  // let the channel mux settle
@@ -128,7 +134,9 @@ long readRaw(const ScaleChannel& ch) {
 #if ENABLE_HX711
   if (ch.backend == ScaleBackend::HX711) {
     HX711& hx = (ch.hxIndex == 0) ? scale1 : scale2;
-    if (!hx.wait_ready_timeout(2000)) {
+    // 1 s is ample at the HX711's 10/80 SPS; bounds a sweep of many channels
+    // (e.g. the portal's live calibration read) when an amp is unpopulated.
+    if (!hx.wait_ready_timeout(1000)) {
       Serial.println("[SCALEBUS] HX711 not ready");
       return 0;
     }

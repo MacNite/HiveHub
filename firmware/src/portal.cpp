@@ -368,8 +368,15 @@ static String detectedScalesJs() {
 #if ENABLE_NAU7802
   scalebus::muxDisableAll();
   Wire.beginTransmission(NAU7802_I2C_ADDRESS);
-  if (Wire.endTransmission() == 0) { add(-1, 1); add(-1, 2); }
-  if (scalebus::muxPresent()) {
+  bool directPresent = (Wire.endTransmission() == 0);
+  if (directPresent) { add(-1, 1); add(-1, 2); }
+  // A NAU7802 on the main bus shares the fixed 0x2A address with every muxed
+  // NAU7802 and stays on the bus while a mux channel is enabled, so the two
+  // cannot coexist. When a direct chip is present, skip probing behind the mux:
+  // every channel would falsely ACK from the direct chip (phantom scales) and any
+  // muxed read would collide with it. Use EITHER one main-bus chip (2 scales) OR
+  // the mux (up to 16) — see the topology note in config.h / docs/multi-hive.md.
+  if (!directPresent && scalebus::muxPresent()) {
     for (int ch = 0; ch < 8; ch++) {
       scalebus::muxSelect((uint8_t)ch);
       Wire.beginTransmission(NAU7802_I2C_ADDRESS);

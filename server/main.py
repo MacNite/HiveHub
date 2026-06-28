@@ -208,6 +208,11 @@ if RATE_LIMIT_ENABLED:
     app.add_middleware(SlowAPIMiddleware)
 
 
+# Maximum hives a single device reports (mirrors MAX_HIVES in the firmware's
+# config.h). Used to bound the per-hive index and the hives[] array so a payload
+# cannot claim an out-of-range hive; keep in sync with the firmware if it changes.
+MAX_HIVES = 18
+
 # ── Per-hive nested models (firmware v0.20.0 "hives[]" array) ────────────────
 # A single ESP32 now reports up to 18 hives, each with its own scale(s) and
 # in-hive sensors, as a nested object in the "hives" array. The server fans these
@@ -280,7 +285,7 @@ class HiveScaleIn(BaseModel):
 
 class HiveReadingIn(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    index: int = Field(..., ge=1, le=64)
+    index: int = Field(..., ge=1, le=MAX_HIVES)
     name: Optional[str] = None
     weight_kg: Optional[float] = None
     raw_weight: Optional[int] = None
@@ -524,7 +529,7 @@ class MeasurementIn(BaseModel):
     # existing column-based read / insights / temp-comp keep working unchanged.
     # Old firmware keeps sending the flat fields and omits this.
     hive_count: Optional[int] = None
-    hives: Optional[list[HiveReadingIn]] = Field(default=None, max_length=64)
+    hives: Optional[list[HiveReadingIn]] = Field(default=None, max_length=MAX_HIVES)
 
     # Belt-and-suspenders for field devices running firmware that predates the
     # DS18B20 disconnect-sentinel fix: an enabled-but-unwired probe reports
