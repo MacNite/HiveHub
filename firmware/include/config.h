@@ -58,6 +58,22 @@
 #define ENABLE_INMP441_MICS 0
 #endif
 
+// ==============================
+// BOARD / ARCHITECTURE LABEL (OTA cross-flash guard)
+// ==============================
+// Reported to the backend during the OTA check (?board=...). The 30-pin ESP32 is
+// an Xtensa LX6 and the XIAO ESP32-C6 is RISC-V — their firmware images are NOT
+// interchangeable, and flashing the wrong one will not boot. The server only
+// serves a hivescale release whose `board` matches this label, so a device is
+// never offered an image built for the other architecture. Keep these strings in
+// sync with firmware/rename_firmware.py (BOARD_LABELS) and the server's
+// firmware_releases.board values ("esp32" / "esp32-c6").
+#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#define HIVESCALE_BOARD_LABEL "esp32-c6"
+#else
+#define HIVESCALE_BOARD_LABEL "esp32"
+#endif
+
 #ifndef CLAIM_CODE
 #define CLAIM_CODE ""
 #endif
