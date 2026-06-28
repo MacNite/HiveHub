@@ -13,6 +13,7 @@
 #include <HTTPClient.h>
 #include <Update.h>
 #include <esp_heap_caps.h>
+#include <esp_app_format.h>   // esp_image_header_t / ESP_CHIP_ID_* for the OTA arch guard
 #include <time.h>
 
 #include "bee_counter_client.h"
@@ -394,6 +395,37 @@ String absoluteUrl(String maybeRelativeUrl) {
   return trimTrailingSlash(apiBaseUrl) + maybeRelativeUrl;
 }
 
+// The esp-image chip_id this build belongs to. Used to reject a firmware image
+// compiled for a different SoC (e.g. an ESP32-C6/RISC-V image arriving at a 30-pin
+// ESP32/Xtensa) before a single byte is written to the OTA partition. Returns
+// ESP_CHIP_ID_INVALID when the target is unknown, in which case the check is
+// skipped rather than blocking OTA on an unrecognised build.
+static uint16_t expectedImageChipId() {
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+  return ESP_CHIP_ID_ESP32C6;
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+  return ESP_CHIP_ID_ESP32;
+#else
+  return ESP_CHIP_ID_INVALID;
+#endif
+}
+
+// Read the first `len` bytes of a stream into `buf`, tolerating the chunked
+// arrival of an HTTP body. Returns the number of bytes actually read.
+static size_t readStreamExact(WiFiClient* stream, uint8_t* buf, size_t len, uint32_t timeoutMs) {
+  size_t got = 0;
+  uint32_t start = millis();
+  while (got < len && (millis() - start) < timeoutMs) {
+    if (stream->available()) {
+      int n = stream->readBytes(buf + got, len - got);
+      if (n > 0) { got += (size_t)n; start = millis(); }
+    } else {
+      delay(5);
+    }
+  }
+  return got;
+}
+
 bool performFirmwareUpdate(const String& firmwareUrl) {
   if (!connectWifi()) return false;
 
@@ -425,14 +457,50 @@ bool performFirmwareUpdate(const String& firmwareUrl) {
     return false;
   }
 
+  WiFiClient* stream = http.getStreamPtr();
+
+  // Architecture guard: peek the esp-image header and confirm the image was built
+  // for THIS SoC before touching the OTA partition. Cross-architecture images
+  // (e.g. an ESP32-C6/RISC-V build reaching a 30-pin ESP32/Xtensa) would not boot;
+  // catching it here means a mislabeled or misrouted release never starts a write
+  // and the device keeps its current firmware. The server's per-board OTA matching
+  // is the primary defence; this is the on-device backstop.
+  esp_image_header_t imgHeader;
+  if ((int)sizeof(imgHeader) > contentLength) {
+    Serial.println("[OTA] Image smaller than its header; aborting");
+    http.end();
+    return false;
+  }
+  if (readStreamExact(stream, (uint8_t*)&imgHeader, sizeof(imgHeader), 8000UL) != sizeof(imgHeader)) {
+    Serial.println("[OTA] Timed out reading image header; aborting");
+    http.end();
+    return false;
+  }
+  if (imgHeader.magic != ESP_IMAGE_HEADER_MAGIC) {
+    Serial.printf("[OTA] Bad image magic 0x%02X (expected 0x%02X); aborting\n",
+                  imgHeader.magic, ESP_IMAGE_HEADER_MAGIC);
+    http.end();
+    return false;
+  }
+  uint16_t expectedChip = expectedImageChipId();
+  if (expectedChip != ESP_CHIP_ID_INVALID && imgHeader.chip_id != expectedChip) {
+    Serial.printf("[OTA] Wrong chip: image chip_id=0x%04X, this device=0x%04X (%s) — refusing to flash\n",
+                  (unsigned)imgHeader.chip_id, (unsigned)expectedChip, HIVESCALE_BOARD_LABEL);
+    http.end();
+    return false;
+  }
+
   if (!Update.begin(contentLength)) {
     Serial.printf("[OTA] Update.begin failed. Error %d\n", Update.getError());
     http.end();
     return false;
   }
 
-  WiFiClient* stream = http.getStreamPtr();
-  size_t written = Update.writeStream(*stream);
+  // Re-feed the header bytes we already consumed, then stream the remainder.
+  size_t written = Update.write((uint8_t*)&imgHeader, sizeof(imgHeader));
+  if (written == sizeof(imgHeader)) {
+    written += Update.writeStream(*stream);
+  }
 
   if (written != (size_t)contentLength) {
     Serial.printf("[OTA] Written only %u/%d bytes\n", (unsigned)written, contentLength);
@@ -669,7 +737,12 @@ void checkForOtaUpdate() {
   }
 
   JsonDocument doc;
-  String url = apiUrl(String("/api/v1/devices/") + deviceId + "/firmware?version=" + FIRMWARE_VERSION);
+  // Report the board/architecture so the backend only offers an image built for
+  // this SoC (see HIVESCALE_BOARD_LABEL in config.h). Without it the server cannot
+  // tell a 30-pin ESP32 from an ESP32-C6 and could hand over a non-bootable image.
+  String url = apiUrl(String("/api/v1/devices/") + deviceId +
+                      "/firmware?version=" + FIRMWARE_VERSION +
+                      "&board=" + HIVESCALE_BOARD_LABEL);
 
   Serial.println("[OTA] Checking for update");
   if (!httpGetJson(url, doc)) {

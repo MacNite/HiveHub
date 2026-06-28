@@ -595,6 +595,12 @@ class FirmwareReleaseIn(BaseModel):
     filename: str
     active: bool = True
     target: Literal["hivescale", "beecounter", "hiveinside"] = "hivescale"
+    # Board/architecture this image was built for ("esp32" / "esp32-c6"). Required
+    # in effect for the "hivescale" target so OTA never serves a 30-pin ESP32
+    # (Xtensa) image to an ESP32-C6 (RISC-V) or vice versa; left None for the
+    # single-architecture beecounter / hiveinside sub-device targets. When omitted
+    # for a hivescale release it is derived from the board-stamped filename.
+    board: Optional[str] = None
 
 
 class DeviceCommandIn(BaseModel):
@@ -1040,6 +1046,12 @@ def init_db():
                 -- a fielded device never auto-flashes an unapproved build.
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS approved_firmware_version TEXT;
 
+                -- Board/architecture the device last reported on its OTA check
+                -- (?board=esp32 / esp32-c6). Lets the HivePal status/approve flow
+                -- resolve the latest release for THIS device's board instead of
+                -- approving a version that only exists for the other architecture.
+                ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_board TEXT;
+
                 CREATE INDEX IF NOT EXISTS idx_measurements_device_time
                     ON measurements (device_id, measured_at DESC);
 
@@ -1138,20 +1150,42 @@ def init_db():
                 ALTER TABLE firmware_releases
                     ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
 
-                -- A release is identified by (owner_user_id, target, version): each
-                -- owner keeps their own release per (target, version), and the same
-                -- version can also exist as a global release (owner_user_id NULL).
+                -- Board/architecture a hivescale image was built for (esp32 vs
+                -- esp32-c6). These two SoCs (Xtensa vs RISC-V) take incompatible
+                -- images, so OTA must match on board; check_firmware filters on it.
+                -- NULL for the single-architecture beecounter / hiveinside targets.
+                ALTER TABLE firmware_releases
+                    ADD COLUMN IF NOT EXISTS board TEXT;
+
+                -- Backfill existing hivescale releases from their board-stamped
+                -- filename (rename_firmware.py: hivescale_esp32_<v> /
+                -- hivescale_esp32-c6_<v>). 'esp32-c6' contains 'esp32', so tag C6
+                -- first, then plain esp32 excluding the C6 names.
+                UPDATE firmware_releases SET board = 'esp32-c6'
+                    WHERE board IS NULL AND target = 'hivescale'
+                      AND (filename ILIKE '%esp32-c6%' OR filename ILIKE '%esp32c6%'
+                           OR filename ILIKE '%xiao%');
+                UPDATE firmware_releases SET board = 'esp32'
+                    WHERE board IS NULL AND target = 'hivescale'
+                      AND filename ILIKE '%esp32%'
+                      AND filename NOT ILIKE '%esp32-c6%' AND filename NOT ILIKE '%esp32c6%';
+
+                -- A release is identified by (owner_user_id, target, board, version):
+                -- each owner keeps their own release per (target, board, version),
+                -- and the same version can also exist as a global release
+                -- (owner_user_id NULL) and per board (one esp32 + one esp32-c6 build).
                 -- NULLs are distinct in a plain unique index, so we key on
-                -- COALESCE(owner_user_id, '') to collapse global rows to one per
-                -- (target, version). The upsert relies on this index for its
-                -- ON CONFLICT (COALESCE(owner_user_id, ''), target, version) inference.
-                -- Drop the legacy globally-unique version constraint and the older
-                -- (target, version) index it was replaced by.
+                -- COALESCE(owner_user_id, '') / COALESCE(board, '') to collapse
+                -- global / boardless rows to one per (target, version). The upsert
+                -- relies on this index for its ON CONFLICT inference. Drop the legacy
+                -- globally-unique version constraint and the older indexes it
+                -- replaced (including the pre-board (owner, target, version) one).
                 ALTER TABLE firmware_releases
                     DROP CONSTRAINT IF EXISTS firmware_releases_version_key;
                 DROP INDEX IF EXISTS firmware_releases_target_version_key;
-                CREATE UNIQUE INDEX IF NOT EXISTS firmware_releases_owner_target_version_key
-                    ON firmware_releases (COALESCE(owner_user_id, ''), target, version);
+                DROP INDEX IF EXISTS firmware_releases_owner_target_version_key;
+                CREATE UNIQUE INDEX IF NOT EXISTS firmware_releases_owner_target_board_version_key
+                    ON firmware_releases (COALESCE(owner_user_id, ''), target, COALESCE(board, ''), version);
 
                 CREATE TABLE IF NOT EXISTS device_commands (
                     id BIGSERIAL PRIMARY KEY,
@@ -2702,28 +2736,59 @@ def get_device_owner_id(device_id: str) -> Optional[str]:
     return r[0] if r else None
 
 
-def latest_release_for_owner(target: str, owner_user_id: Optional[str]):
+def latest_release_for_owner(target: str, owner_user_id: Optional[str],
+                             board: Optional[str] = None):
     """Most recent active release for a target, owner-first with global fallback.
 
     Returns the owner's own release when one exists, otherwise the newest global
     (owner_user_id IS NULL) "official" release. ``ORDER BY (owner_user_id IS NULL)``
     sorts owner-specific rows (false) ahead of global rows (true). Returns a
     (version, filename, crc32, owner_user_id) tuple, or None when nothing matches.
+
+    When ``board`` is given (the dual-board ``hivescale`` target), only releases
+    built for that exact board match — a 30-pin ESP32 (Xtensa) is never offered an
+    ESP32-C6 (RISC-V) image or vice versa. ``board=None`` (single-architecture
+    sub-device targets) applies no board filter.
+    """
+    sql = (
+        "SELECT version, filename, crc32, owner_user_id "
+        "FROM firmware_releases "
+        "WHERE active = true AND target = %s "
+        "  AND (owner_user_id = %s OR owner_user_id IS NULL) "
+    )
+    params: list = [target, owner_user_id]
+    if board is not None:
+        sql += "  AND board = %s "
+        params.append(board)
+    sql += "ORDER BY (owner_user_id IS NULL), created_at DESC, id DESC LIMIT 1;"
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            return cur.fetchone()
+
+
+def record_device_board(device_id: str, board: str) -> None:
+    """Persist the board/architecture a device reported on its OTA check.
+
+    No-op when the row does not exist (unclaimed device) or the value is unchanged.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT version, filename, crc32, owner_user_id
-                FROM firmware_releases
-                WHERE active = true AND target = %s
-                  AND (owner_user_id = %s OR owner_user_id IS NULL)
-                ORDER BY (owner_user_id IS NULL), created_at DESC, id DESC
-                LIMIT 1;
-                """,
-                (target, owner_user_id),
+                "UPDATE devices SET last_board = %s "
+                "WHERE device_id = %s AND last_board IS DISTINCT FROM %s;",
+                (board, device_id, board),
             )
-            return cur.fetchone()
+            conn.commit()
+
+
+def get_device_board(device_id: str) -> Optional[str]:
+    """Return the board this device last reported on its OTA check, or None."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT last_board FROM devices WHERE device_id = %s;", (device_id,))
+            r = cur.fetchone()
+    return r[0] if r and r[0] in FIRMWARE_BOARDS else None
 
 
 def get_approved_firmware_version(device_id: str) -> Optional[str]:
@@ -2750,15 +2815,35 @@ def set_approved_firmware_version(device_id: str, version: str) -> None:
 
 @app.get("/api/v1/devices/{device_id}/firmware", dependencies=[Depends(require_device_key)])
 def check_firmware(device_id: str, version: str = Query("0.0.0"),
-                   target: str = Query("hivescale")):
+                   target: str = Query("hivescale"),
+                   board: str = Query("")):
     ensure_device_config(device_id)
+    no_update = {"update": False, "update_available": False}
+    # Per-board OTA gating for the dual-board hivescale target: the device must
+    # report which architecture it is so we never serve a cross-arch (non-bootable)
+    # image. A request without a recognized board is not matched against any
+    # release — safer than guessing and risking a bricked flash. (Field devices on
+    # firmware that predates the ?board= param therefore stop auto-updating until
+    # they are reflashed once via the AP portal; the single-architecture
+    # beecounter / hiveinside relays are unaffected.)
+    board = (board or "").strip().lower()
+    if target == "hivescale":
+        if board not in FIRMWARE_BOARDS:
+            logger.info("OTA check from %s without a known board (%r); no update served",
+                        device_id, board)
+            return no_update
+        match_board: Optional[str] = board
+        # Remember the board so the HivePal status/approve flow can resolve the
+        # latest release for THIS device's architecture.
+        record_device_board(device_id, board)
+    else:
+        match_board = None
     owner_id = get_device_owner_id(device_id)
-    r = latest_release_for_owner(target, owner_id)
+    r = latest_release_for_owner(target, owner_id, match_board)
     # NOTE: the "update" and "update_available" keys carry the same value. The
     # ESP32 firmware reads doc["update"] while older clients/docs use
     # "update_available"; we emit both so a field-name mismatch can never
-    # silently disable OTA again. Keep both keys if you change this.
-    no_update = {"update": False, "update_available": False}
+    # silently disable OTA again. (no_update is defined at the top of this handler.)
     if not r:
         return no_update
     latest_version, filename = r[0], r[1]
@@ -2786,6 +2871,65 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
 # multipart upload endpoint below.
 FIRMWARE_TARGETS = ("hivescale", "beecounter", "hiveinside")
 
+# Board/architecture labels for the dual-board "hivescale" target. These MUST match
+# the firmware's HIVESCALE_BOARD_LABEL (config.h) and rename_firmware.py BOARD_LABELS
+# so a device's ?board=... query lines up with the release it should receive.
+FIRMWARE_BOARDS = ("esp32", "esp32-c6")
+
+
+def board_from_filename(filename: str) -> Optional[str]:
+    """Infer the board/architecture from a board-stamped firmware filename.
+
+    rename_firmware.py names hivescale artifacts ``hivescale_esp32_<v>.bin`` and
+    ``hivescale_esp32-c6_<v>.bin``. 'esp32-c6' contains the substring 'esp32', so
+    the C6 variants are matched first. Returns None when the name carries no
+    recognizable board token.
+    """
+    n = (filename or "").lower()
+    if "esp32-c6" in n or "esp32c6" in n or "xiao" in n:
+        return "esp32-c6"
+    if "esp32" in n:
+        return "esp32"
+    return None
+
+
+def resolve_hivescale_board(target: str, declared_board: Optional[str],
+                            filename: str) -> Optional[str]:
+    """Determine and validate the board for a release at registration time.
+
+    Publish guard (defence against shipping a cross-architecture image): for the
+    dual-board ``hivescale`` target the board must be known AND consistent with the
+    board-stamped filename. A declared board that disagrees with the filename, an
+    unknown board value, or a filename with no board token are all rejected, so a
+    C6 binary can never be registered as an ``esp32`` release. Non-hivescale
+    (single-architecture) targets carry no board.
+    """
+    if target != "hivescale":
+        return None
+    from_name = board_from_filename(filename)
+    declared = (declared_board or "").strip().lower() or None
+    if declared is not None and declared not in FIRMWARE_BOARDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"board must be one of {', '.join(FIRMWARE_BOARDS)}",
+        )
+    if declared is not None and from_name is not None and declared != from_name:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"board '{declared}' does not match the board in filename "
+                    f"'{filename}' ('{from_name}') — refusing to publish a "
+                    "possibly cross-architecture image"),
+        )
+    board = declared or from_name
+    if board is None:
+        raise HTTPException(
+            status_code=400,
+            detail=("cannot determine board for a hivescale release: pass board= "
+                    "or name the file like hivescale_esp32_<v>.bin / "
+                    "hivescale_esp32-c6_<v>.bin"),
+        )
+    return board
+
 # A conservative filename pattern. Firmware filenames are referenced verbatim in
 # download URLs and joined onto FIRMWARE_DIR, so we reject anything that is not a
 # plain basename with a safe character set. This prevents path traversal
@@ -2808,27 +2952,31 @@ def crc32_of_file(path: Path) -> int:
 
 def upsert_firmware_release(version: str, filename: str, active: bool,
                             target: str, crc: int,
-                            owner_user_id: Optional[str] = None) -> None:
-    """Insert or update a firmware_releases row keyed on (owner_user_id, target, version).
+                            owner_user_id: Optional[str] = None,
+                            board: Optional[str] = None) -> None:
+    """Insert or update a firmware_releases row keyed on
+    (owner_user_id, target, board, version).
 
-    Releases are unique per (owner_user_id, target, version), so re-uploading the
-    same version for the same owner+target replaces it, while the same version
-    number can coexist across different targets (hivescale / beecounter /
-    hiveinside) and across owners. ``owner_user_id=None`` registers a global /
-    "official" release that any device may fall back to.
+    Releases are unique per (owner_user_id, target, board, version), so the same
+    version can coexist across targets (hivescale / beecounter / hiveinside),
+    across the two hivescale boards (esp32 / esp32-c6), and across owners.
+    Re-uploading the same (owner, target, board, version) replaces it.
+    ``owner_user_id=None`` registers a global / "official" release that any device
+    may fall back to. ``board`` is the architecture for the dual-board hivescale
+    target (None for single-architecture sub-device targets).
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO firmware_releases (version, filename, active, target, crc32, owner_user_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (COALESCE(owner_user_id, ''), target, version) DO UPDATE SET
+                INSERT INTO firmware_releases (version, filename, active, target, crc32, owner_user_id, board)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (COALESCE(owner_user_id, ''), target, COALESCE(board, ''), version) DO UPDATE SET
                     filename = EXCLUDED.filename,
                     active   = EXCLUDED.active,
                     crc32    = EXCLUDED.crc32;
                 """,
-                (version, filename, active, target, crc, owner_user_id),
+                (version, filename, active, target, crc, owner_user_id, board),
             )
             conn.commit()
 
@@ -2838,11 +2986,16 @@ def create_firmware_release(payload: FirmwareReleaseIn):
     path = FIRMWARE_DIR / payload.filename
     if not path.exists():
         raise HTTPException(status_code=400, detail=f"Firmware file '{payload.filename}' not found in firmware directory")
+    # Publish guard: a hivescale release must carry a board that matches its
+    # board-stamped filename, so a C6 image can never be registered as esp32.
+    board = resolve_hivescale_board(payload.target, payload.board, payload.filename)
     crc = crc32_of_file(path)
     upsert_firmware_release(
-        payload.version, payload.filename, payload.active, payload.target, crc
+        payload.version, payload.filename, payload.active, payload.target, crc,
+        board=board,
     )
-    return {"status": "ok", "version": payload.version, "target": payload.target, "crc32": crc}
+    return {"status": "ok", "version": payload.version, "target": payload.target,
+            "board": board, "crc32": crc}
 
 
 @app.get("/firmware/{filename}")
@@ -3354,6 +3507,7 @@ async def upload_firmware_from_app(
     version: str = Form(...),
     target: str = Form("hivescale"),
     active: bool = Form(True),
+    board: str = Form(""),
     user_id: str = Depends(require_user_id),
 ):
     """Upload a firmware binary from HivePal and register it as a release.
@@ -3403,6 +3557,11 @@ async def upload_firmware_from_app(
     if dest.resolve().parent != firmware_root:
         raise HTTPException(status_code=400, detail="Invalid firmware filename")
 
+    # Publish guard: resolve + validate the board BEFORE writing the image to disk,
+    # so a hivescale release whose declared board contradicts its filename (or which
+    # carries no board token at all) is rejected and leaves nothing behind.
+    release_board = resolve_hivescale_board(target, board, filename)
+
     FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
 
     # Stream the upload to disk in bounded chunks so large images do not have to
@@ -3446,13 +3605,14 @@ async def upload_firmware_from_app(
 
     crc = crc32_of_file(dest)
     upsert_firmware_release(normalized_version, filename, active, target, crc,
-                            owner_user_id=owner_user_id)
+                            owner_user_id=owner_user_id, board=release_board)
 
     return {
         "status": "ok",
         "version": normalized_version,
         "filename": filename,
         "target": target,
+        "board": release_board,
         "active": active,
         "size_bytes": bytes_written,
         "crc32": crc,
@@ -3487,7 +3647,10 @@ def firmware_status_from_app(device_id: str, user_id: str = Depends(require_user
     current_version = row[0]
 
     owner_id = get_device_owner_id(device_id)
-    release = latest_release_for_owner("hivescale", owner_id)
+    # Resolve the latest release for this device's reported board so a C6 device is
+    # never shown an esp32-only build as "available" (and vice versa). Falls back to
+    # board-agnostic when the device has not yet checked in with the board param.
+    release = latest_release_for_owner("hivescale", owner_id, get_device_board(device_id))
     latest_version = release[0] if release else None
     latest_is_official = bool(release) and release[3] is None
     approved_version = get_approved_firmware_version(device_id)
@@ -3523,7 +3686,9 @@ def approve_firmware_from_app(device_id: str, user_id: str = Depends(require_use
     """
     require_device_role(user_id, device_id, ["owner", "admin"])
     owner_id = get_device_owner_id(device_id)
-    release = latest_release_for_owner("hivescale", owner_id)
+    # Approve the latest release built for this device's board, so we never record
+    # an approval for a version that only exists for the other architecture.
+    release = latest_release_for_owner("hivescale", owner_id, get_device_board(device_id))
     if not release:
         raise HTTPException(
             status_code=404, detail="No firmware release available for this device"
