@@ -11,7 +11,7 @@ portal, the BLE budget, and the data model.
 
 | Sensor | Max | How |
 | --- | --- | --- |
-| Scales | **18** | One scale source per hive: HX711 (1), HX711 (2), NAU7802 channels (main bus or mux), or a paired beehivemonitoring.com BLE HiveScale |
+| Scales | **18** | One scale source per hive: HX711 (1), HX711 (2), NAU7802 channels (main bus **or** mux — not both, see topology note), or a paired beehivemonitoring.com BLE HiveScale. Wired NAU7802-only tops out at **16** (mux); 18 wired channels needs the 2 HX711 channels too |
 | Wired temperature | **18** | One DS18B20 probe per hive on the single 1-Wire bus, mapped by ROM address |
 | In-hive BLE/GATT | **18** | One non-scale BLE/GATT sensor per hive. Passive beacons share one scan window; connection-based GATT reads remain cycle-capped |
 
@@ -29,15 +29,25 @@ an alternative/complement to the HX711:
 
 - **No mux:** one NAU7802 on the main bus = **2 scales**.
 - **With a TCA9548A** 1-to-8 mux (`0x70`): up to **8 NAU7802 behind it = 16
-  scales**. Writing `1<<channel` to the mux connects exactly one downstream chip
-  at a time; the driver disables all channels between hives.
+  scales** — the maximum for an all-NAU7802 setup. Writing `1<<channel` to the
+  mux connects exactly one downstream chip at a time; the driver disables all
+  channels between hives.
 
-> **Topology note.** Every NAU7802 lives at `0x2A`, so a chip on the *main* bus and
-> a chip *behind a mux channel* both answer at `0x2A` whenever that channel is
-> enabled — a conflict. In practice use **either** one main-bus chip (2 scales,
-> no mux) **or** put all NAU7802s behind the mux (up to 16). Reaching the full 18
-> needs a second mux or leaving the main-bus chip's reads isolated (the driver
-> opens all mux channels for a main-bus read).
+> **Topology note.** The NAU7802 has **no address-select pin** — it is hardwired
+> to `0x2A`, so two of them can never share one bus segment. A chip on the *main*
+> bus and a chip *behind a mux channel* both answer at `0x2A` whenever that
+> channel is enabled, which collides. So use **either** one main-bus chip (2
+> scales, no mux) **or** put all NAU7802s behind the mux (up to **16**) — never
+> both. (When a main-bus chip *is* present, the driver reads it only with the mux
+> fully disabled, and the provisioning portal hides the mux channels to avoid
+> phantom detections.)
+>
+> **Reaching the full 18 wired channels** therefore means combining the two HX711
+> pin channels (which use dedicated GPIOs, not I2C, so they never collide with
+> `0x2A`) with 16 muxed NAU7802 channels — i.e. **2 HX711 + 16 NAU7802 = 18** on
+> the classic ESP32 board. An all-NAU7802 path to 18 would require a **second
+> TCA9548A** strapped to a different address; the firmware models a single mux
+> address today, so that is not yet supported.
 
 The firmware reads NAU7802s **raw** and applies the same `offset`/`factor`
 calibration as the HX711 path (`weightFromRaw`), so calibration is per scale

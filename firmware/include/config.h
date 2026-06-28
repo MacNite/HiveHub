@@ -115,8 +115,9 @@
 // non-scale in-hive sensor, configured from the provisioning portal and stored as a per-hive JSON blob in
 // NVS (see firmware/src/hive_config.cpp).
 //
-//   - Scales: 2 HX711 (legacy pins) OR up to 18 I2C load-cell channels via the
-//     NAU7802 + TCA9548A path below.
+//   - Scales: HX711 (legacy pins) and/or NAU7802 I2C channels via the
+//     NAU7802 + TCA9548A path below. See the wired-channel topology note on
+//     MAX_SCALES — all-NAU7802 tops out at 16; 18 needs the 2 HX711 channels.
 //   - Wired temperature: up to MAX_HIVES DS18B20 on the single ONE_WIRE_PIN bus,
 //     addressed by ROM (not by index) so each probe maps to a specific hive.
 //   - In-hive sensors: one non-scale BLE/GATT sensor OR one DS18B20 per hive.
@@ -125,8 +126,18 @@
 #ifndef MAX_HIVES
 #define MAX_HIVES 18
 #endif
-// Upper bound on physically attached load-cell channels (2 direct NAU7802
-// channels + 8 muxed NAU7802 × 2 channels = 18).
+// Upper bound on physically attached WIRED load-cell channels.
+//
+// IMPORTANT — how to actually reach 18 (the NAU7802 has NO address-select pin;
+// it is hardwired to 0x2A, so two NAU7802s cannot share one bus segment):
+//   - All-NAU7802 via ONE TCA9548A: max 16 (8 chips × 2 channels, mux-only). A
+//     NAU7802 on the main bus shares 0x2A with every muxed chip and stays on the
+//     bus while a mux channel is enabled, so a direct chip and the mux CANNOT be
+//     mixed. Use EITHER one main-bus chip (2 scales, no mux) OR the mux (≤16).
+//   - 18 wired channels: classic ESP32 board only — 2 HX711 (dedicated pins, no
+//     I2C address, so no 0x2A collision) + 16 muxed NAU7802 = 18.
+//   - 18 all-NAU7802 would need a SECOND TCA9548A at a different address; the
+//     firmware models a single mux address today, so that is not yet supported.
 #ifndef MAX_SCALES
 #define MAX_SCALES 18
 #endif
@@ -167,12 +178,16 @@
 // ==============================
 // TCA9548A 1-to-8 I2C MULTIPLEXER (fan out 8 more NAU7802s)
 // ==============================
-// Because every NAU7802 lives at 0x2A, more than one can only share the bus
-// behind a TCA9548A mux. The mux exposes 8 downstream channels (0–7); writing
-// (1<<channel) to its control register connects exactly one. With one NAU7802 per
-// mux channel that is 8×2 = 16 extra scales, plus the 2 channels of a NAU7802 on
-// the main bus = 18 total. Only ONE mux channel may be enabled at a time; the
-// driver disables all channels (write 0x00) between hives.
+// Because every NAU7802 lives at 0x2A (no address-select pin), more than one can
+// only share the bus behind a TCA9548A mux. The mux exposes 8 downstream channels
+// (0–7); writing (1<<channel) to its control register connects exactly one. With
+// one NAU7802 per mux channel that is 8×2 = 16 scales — the maximum for an
+// all-NAU7802 setup. A NAU7802 directly on the main bus CANNOT be added on top:
+// it shares 0x2A and stays on the bus while a mux channel is enabled, so its
+// reads would collide with the muxed chip's. To reach 18 wired channels, use the
+// 2 HX711 pin channels (no I2C address) alongside the 16 muxed NAU7802s. Only ONE
+// mux channel may be enabled at a time; the driver disables all channels (write
+// 0x00) between hives, so a main-bus chip is only ever read with the mux closed.
 #ifndef ENABLE_I2C_MUX
 #define ENABLE_I2C_MUX 1
 #endif
@@ -582,7 +597,13 @@ static const char* BACKUP_FILE = "/measurements.ndjson";
 static const bool SD_KEEP_PERSISTENT_BACKUP = true;
 static const size_t BACKUP_WARN_SIZE_BYTES = 50UL * 1024UL * 1024UL;
 static const size_t CACHE_MAX_BYTES = 512UL * 1024UL;
-static const size_t CACHE_MAX_LINE_BYTES = 4096UL;
+// One measurement = one NDJSON line. A fully-populated multi-hive upload (up to
+// 18 hives, each with nested ble/accel/hiveheart/hivescale objects) is far larger
+// than the old two-hive line, so this cap was raised from 4 KB to keep such lines
+// from being refused by the SD retry cache / persistent backup (data loss while
+// offline) or dropped from the last-measurement panel. The live HTTPS upload is
+// not bounded by this; it only gates on-SD storage and the cached "last reading".
+static const size_t CACHE_MAX_LINE_BYTES = 16384UL;
 static const uint16_t CACHE_UPLOAD_MAX_LINES_PER_CYCLE = 25;
 static const uint16_t CAPTIVE_DNS_PORT = 53;
 static const size_t LAST_MEASUREMENT_TAIL_BYTES = CACHE_MAX_LINE_BYTES * 2;
