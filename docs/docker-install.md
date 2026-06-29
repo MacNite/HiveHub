@@ -1,6 +1,6 @@
-# HiveScale — Docker Installation Guide
+# HiveHub — Docker Installation Guide
 
-This guide covers deploying the HiveScale backend on any Linux system with Docker and Docker Compose. The process is essentially the same as the [TrueNAS installation](truenas-install.md), but without the TrueNAS-specific UI steps.
+This guide covers deploying the HiveHub backend on any Linux system with Docker and Docker Compose. The process is essentially the same as the [TrueNAS installation](truenas-install.md), but without the TrueNAS-specific UI steps.
 
 ---
 
@@ -192,7 +192,7 @@ curl -X POST http://localhost:31115/api/v1/firmware/releases \
 ```
 
 `target` defaults to `hivescale`; use `beecounter` to publish an image that the
-HiveScale relays to a BeeCounter over I2C. App clients (HivePal) can also upload
+HiveHub relays to a BeeCounter over I2C. App clients (HivePal) can also upload
 the binary directly via `POST /api/v1/app/devices/{id}/firmware` instead of
 copying it into `FIRMWARE_DIR` first — see [api.md](api.md).
 

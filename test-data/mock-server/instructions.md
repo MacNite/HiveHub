@@ -1,9 +1,9 @@
-# HiveScale mock server — setup & usage
+# HiveHub mock server — setup & usage
 
-A **lightweight, self-contained mock of the HiveScale backend**, pre-loaded with
+A **lightweight, self-contained mock of the HiveHub backend**, pre-loaded with
 realistic dummy data for one dual-channel scale. It exists so the
 [HivePal](https://github.com/martinhrvn/hive-pal) maintainer can explore and
-develop against the HiveScale interface — the `/api/v1/app/...` endpoints HivePal
+develop against the HiveHub interface — the `/api/v1/app/...` endpoints HivePal
 calls, the auth model, the response shapes, and the insights engine — **without
 running PostgreSQL or any hardware**.
 
@@ -14,7 +14,7 @@ running PostgreSQL or any hardware**.
 * Interactive API explorer (Swagger UI) at **`/docs`**.
 
 > This is a **review/demo tool**, not a production backend: data lives in memory
-> and resets on restart. To get the same dummy data into a *real* HiveScale
+> and resets on restart. To get the same dummy data into a *real* HiveHub
 > stack instead, see [Option B](#option-b--seed-a-real-hivescale-backend).
 
 ---
@@ -43,7 +43,7 @@ Everything you need:
 > **every device serves the same demo dataset, and any `X-User-Id` may read any
 > device** — so whichever device you claim from HivePal (and whatever user IDs
 > HivePal uses) the charts and insights populate. No claim is even required; the
-> devices already appear in `GET /api/v1/app/devices`. (The real HiveScale
+> devices already appear in `GET /api/v1/app/devices`. (The real HiveHub
 > backend enforces per-user `owner/admin/viewer` roles — see the fidelity note
 > below.)
 
@@ -51,7 +51,7 @@ Everything you need:
 
 ## What's inside
 
-A dual-channel HiveScale unit (a "dual beehive scale", so each measurement
+A dual-channel HiveHub unit (a "dual beehive scale", so each measurement
 carries both `scale_1_*` / Hive A and `scale_2_*` / Hive B), with:
 
 * a full **seasonal weight curve** (winter decline → spring build-up → honey
@@ -110,7 +110,7 @@ curl http://localhost:31115/                 # orientation: demo ids, keys, data
 
 ## Connecting HivePal to the mock
 
-HivePal's backend talks to HiveScale through two settings (see
+HivePal's backend talks to HiveHub through two settings (see
 `apps/backend/.env.example` in hive-pal):
 
 ```bash
@@ -118,7 +118,7 @@ HIVESCALE_API_BASE_URL=http://localhost:31115
 HIVESCALE_SERVICE_API_KEY=demo-hivepal-service-key
 ```
 
-Set those, start HivePal, and its HiveScale features (device list, charts,
+Set those, start HivePal, and its HiveHub features (device list, charts,
 insights, calibration, firmware, sharing) will be driven by this mock. Both demo
 devices already appear in HivePal's device list and serve the full dataset, so
 the charts populate immediately. To exercise the pairing flow, claim a device
@@ -169,14 +169,14 @@ Auth behaves like production: missing/invalid `X-API-Key` or
 
 ---
 
-## Option B — seed a real HiveScale backend
+## Option B — seed a real HiveHub backend
 
-If you'd rather load the **same dummy data into a production-faithful HiveScale**
+If you'd rather load the **same dummy data into a production-faithful HiveHub**
 (the real `server/` + PostgreSQL), use `seed.py`. It replays the data as device
 measurements through `POST /api/v1/measurements` (exactly as the ESP32 firmware
 would), so the device is auto-created and becomes claimable from HivePal.
 
-1. Start a real HiveScale backend (from the repo root):
+1. Start a real HiveHub backend (from the repo root):
 
    ```bash
    cd docker

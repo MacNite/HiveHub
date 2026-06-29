@@ -1,6 +1,6 @@
-# HiveScale off-grid power telemetry
+# HiveHub off-grid power telemetry
 
-Off-grid builds add **power telemetry** to the normal HiveScale measurement
+Off-grid builds add **power telemetry** to the normal HiveHub measurement
 cycle: solar/load monitoring with an INA219 and LiPo fuel-gauge monitoring with a
 MAX17048. Both are optional I2C modules and are disabled by default. Enable them
 per device in `firmware/include/secrets.h`.

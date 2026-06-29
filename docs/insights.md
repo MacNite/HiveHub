@@ -1,9 +1,9 @@
-# HiveScale Insights
+# HiveHub Insights
 
 **Preview - the skeleton for this exists, the final evaluation / testing / implementation is WIP**
 
 The **Insights** panel in HivePal surfaces rule-based alerts derived from the
-time-series your HiveScale device already records: weight (per channel),
+time-series your HiveHub device already records: weight (per channel),
 internal hive temperature (per channel), and ambient temperature/humidity.
 
 Insights are computed in [`server/insights.py`](../server/insights.py) and
@@ -528,7 +528,7 @@ record. It is optional too: no detector *requires* it. See
   Day-night weight-delta foraging algorithm.
 - **Kulkarni & Murphy** — time-series benchmark, weight + in-hive temp +
   entrance traffic. PMC 11479372 (Frontiers, open access). Recommended
-  validation dataset because the sensor stack matches HiveScale most closely.
+  validation dataset because the sensor stack matches HiveHub most closely.
 - **MSPB multi-modal dataset** — arXiv 2311.10876. Audio + temperature +
   humidity across 53 hives over 1 year; cited as validation for the
   temperature-based queenlessness fallback.

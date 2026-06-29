@@ -4,11 +4,11 @@ Scale Module (for xiao esp32-c6): v0.4 - currently untested
 Scale Module (for esp32 30pin): V0.3 ok
 Power Module: V0.3 ok
 
-# HiveScale PCB Design — Scale Module V0.2
+# HiveHub PCB Design — Scale Module V0.2
 
-This directory contains the KiCad schematic and PCB layout for the HiveScale **Scale Module**. It is a breakout board that accepts off-the-shelf modules on pin headers — no SMD soldering required. All modules are simply plugged in.
+This directory contains the KiCad schematic and PCB layout for the HiveHub **Scale Module**. It is a breakout board that accepts off-the-shelf modules on pin headers — no SMD soldering required. All modules are simply plugged in.
 
-The Scale Module is the central board of the HiveScale system. Power and connectivity (LTE, solar, battery) are handled by a separate **Power Module**, which connects to this board via I2C or ESPnow.
+The Scale Module is the central board of the HiveHub system. Power and connectivity (LTE, solar, battery) are handled by a separate **Power Module**, which connects to this board via I2C or ESPnow.
 
 ---
 
@@ -95,7 +95,7 @@ The BeeCounter module connects via three pins:
 
 > Note: GPIO13 is shared with INMP441 WS. In firmware, the I2S peripheral takes ownership of GPIO13 during audio sampling. Confirm that the BeeCounter firmware logic does not conflict with the I2S peripheral when both are active. If conflicts arise during development, move BeeCounter to one of the GPIO pins exposed on the expansion header (J18).
 
-> **Firmware integration note:** the current HiveScale firmware
+> **Firmware integration note:** the current HiveHub firmware
 > (`firmware/src/bee_counter_client.cpp`) communicates with the BeeCounter as an
 > **I2C slave** at addresses `0x30` (hive 1) / `0x31` (hive 2) on the shared bus
 > (SDA GPIO21 / SCL GPIO22) — including the OTA-over-I2C firmware relay. Reconcile

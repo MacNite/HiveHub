@@ -1,6 +1,6 @@
-# HiveScale — TrueNAS Scale Installation Guide
+# HiveHub — TrueNAS Scale Installation Guide
 
-This guide walks you through deploying the HiveScale backend on **TrueNAS Scale** using the built-in **Custom App** feature (which uses Docker Compose under the hood via Helm/Kubernetes). No external tooling is required.
+This guide walks you through deploying the HiveHub backend on **TrueNAS Scale** using the built-in **Custom App** feature (which uses Docker Compose under the hood via Helm/Kubernetes). No external tooling is required.
 
 ---
 
@@ -8,7 +8,7 @@ This guide walks you through deploying the HiveScale backend on **TrueNAS Scale*
 
 - TrueNAS Scale (any recent version with the Apps feature enabled)
 - A dataset on your pool for persistent database storage (e.g. `tank/hivescale-db`)
-- The HiveScale Docker image is public on GHCR — no authentication required to pull it
+- The HiveHub Docker image is public on GHCR — no authentication required to pull it
 
 ---
 

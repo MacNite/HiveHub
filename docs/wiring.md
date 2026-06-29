@@ -1,4 +1,4 @@
-# HiveScale wiring reference
+# HiveHub wiring reference
 
 This document covers wiring for both supported hardware variants:
 
@@ -432,7 +432,7 @@ Most breakout boards include SDA/SCL pull-ups. If multiple breakout boards are i
 
 ## Multi-hive I2C scales (NAU7802 + TCA9548A) — firmware v0.20.0+
 
-Beyond the two HX711 pin channels, HiveScale can read load cells over I2C with the
+Beyond the two HX711 pin channels, HiveHub can read load cells over I2C with the
 **NAU7802** 24-bit ADC, and fan out up to eight of them with a **TCA9548A** 1-to-8
 I2C multiplexer. An all-NAU7802 setup tops out at **16 scales** (8 chips behind the
 mux); the full **18 wired channels** is reached by adding the 2 HX711 pin channels

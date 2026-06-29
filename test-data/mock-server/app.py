@@ -1,11 +1,11 @@
 """
-HiveScale mock API — a lightweight, self-contained stand-in for the real
-HiveScale FastAPI backend (``server/main.py``), backed by in-memory dummy data
+HiveHub mock API — a lightweight, self-contained stand-in for the real
+HiveHub FastAPI backend (``server/main.py``), backed by in-memory dummy data
 instead of PostgreSQL.
 
 Purpose
 -------
-It lets the HivePal maintainer explore and develop against the exact HiveScale
+It lets the HivePal maintainer explore and develop against the exact HiveHub
 interface (request/response shapes, auth model, the ``/api/v1/app/...``
 endpoints HivePal calls, and the insights engine) without provisioning a
 database or real hardware. The response shapes mirror ``measurement_row_to_dict``
@@ -41,10 +41,10 @@ DEMO_USER_ID = os.environ.get("DEMO_USER_ID", "demo-user")
 INTERVAL_MINUTES = int(os.environ.get("INTERVAL_MINUTES", "30"))
 
 app = FastAPI(
-    title="HiveScale API (mock / demo)",
+    title="HiveHub API (mock / demo)",
     description=(
-        "Lightweight in-memory mock of the HiveScale backend for reviewing the "
-        "HivePal <-> HiveScale interface. Pre-loaded with one dual-channel demo "
+        "Lightweight in-memory mock of the HiveHub backend for reviewing the "
+        "HivePal <-> HiveHub interface. Pre-loaded with one dual-channel demo "
         "device and realistic dummy data for 2025-01-01 .. 2026-05-31.\n\n"
         "Auth: device endpoints need `X-API-Key`; HivePal app endpoints "
         "(`/api/v1/app/...`) need `X-HivePal-Service-Key` + `X-User-Id`."
@@ -182,7 +182,7 @@ def require_device_role(user_id: str, device_id: str, allowed_roles: list[str]):
     # Intentionally lenient for a review mock: any caller with a valid service
     # key + user id may access any demo device, so the data and interface are
     # visible without wiring up HivePal user IDs or per-device roles. The real
-    # HiveScale backend enforces owner/admin/viewer roles here.
+    # HiveHub backend enforces owner/admin/viewer roles here.
     _ensure_app_device(device_id)
 
 
@@ -305,7 +305,7 @@ class AppCalibrationModeStartIn(BaseModel):
 def root():
     measurements = STORE["measurements"]
     return {
-        "service": "HiveScale mock API",
+        "service": "HiveHub mock API",
         "note": "Demo/review server with in-memory dummy data. See /docs for the interactive API.",
         "demo_device_id": hive_data.DEVICE_ID,
         "demo_claim_code": hive_data.CLAIM_CODE,

@@ -52,7 +52,7 @@ def main() -> None:
     m = hive_data.generate_measurements(args.interval_minutes)
     fig, axes = plt.subplots(2, 2, figsize=(16, 9))
     fig.suptitle(
-        f"HiveScale mock — dummy data for {hive_data.DEVICE_ID} "
+        f"HiveHub mock — dummy data for {hive_data.DEVICE_ID} "
         f"({m[0]['measured_at'].date()} → {m[-1]['measured_at'].date()})",
         fontsize=14, fontweight="bold",
     )

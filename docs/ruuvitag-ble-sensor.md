@@ -1,13 +1,13 @@
 # RuuviTag in-hive BLE sensor
 
-HiveScale can read up to **two RuuviTag sensors** — one per hive — as optional
+HiveHub can read up to **two RuuviTag sensors** — one per hive — as optional
 in-hive sensors, exactly like the [HolyIot 25015](holyiot-ble-sensor.md). The
 RuuviTag is a four-in-one BLE beacon (temperature, humidity, pressure and 3-axis
 acceleration), so it folds into the same passive **BLE bridge**: no wiring, just
 a battery beacon in/near the hive that the logger scans for once per upload
 cycle.
 
-| On-board sensor | Measures | HiveScale field |
+| On-board sensor | Measures | HiveHub field |
 |---|---|---|
 | Temperature | temperature | `hive_{1,2}_temp_c` (shared with / replacing the wired DS18B20) |
 | Humidity | relative humidity | `ble_{1,2}_humidity_percent` |
@@ -28,7 +28,7 @@ pre-swarm detector (`detect_lowrate_accel_swarm`) described in the HolyIot doc.
    no extra flag. It is auto-detected by Ruuvi's registered Bluetooth company id
    (`RUUVI_COMPANY_ID`, `0x0499`).
 2. **Pair from the setup portal.** Open the provisioning portal (short-press the
-   setup button, join the `HiveScale-Setup-XXXX` AP, browse to
+   setup button, join the `HiveHub-Setup-XXXX` AP, browse to
    `http://192.168.4.1/`). Under **Wireless sensors**:
    - Click **scan for wireless sensors**; a RuuviTag broadcasting a parseable
      payload is flagged as `RuuviTag` in the type column.

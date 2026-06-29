@@ -1,14 +1,14 @@
 """
-Realistic dummy data generator for a single (dual-channel) HiveScale device.
+Realistic dummy data generator for a single (dual-channel) HiveHub device.
 
 This module is intentionally dependency-free (standard library only) so it can
 be imported both by the lightweight mock API (``app.py``) and by the seeding
-script (``seed.py``) that pushes the same data into a real HiveScale backend.
+script (``seed.py``) that pushes the same data into a real HiveHub backend.
 
 ----------------------------------------------------------------------------
 What it models
 ----------------------------------------------------------------------------
-One physical HiveScale unit ("dual beehive scale") with two load cells, so a
+One physical HiveHub unit ("dual beehive scale") with two load cells, so a
 single measurement row carries both ``scale_1_*`` (Hive A) and ``scale_2_*``
 (Hive B). The data spans 2025-01-01 .. 2026-05-31 and reproduces the behaviour
 documented for real "scale hives":

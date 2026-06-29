@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Seed a *real* HiveScale backend with the same dummy data the mock serves.
+Seed a *real* HiveHub backend with the same dummy data the mock serves.
 
 This replays the generated time-series as device measurements through the
 public device API (``POST /api/v1/measurements``, authenticated with
@@ -8,7 +8,7 @@ public device API (``POST /api/v1/measurements``, authenticated with
 carries the demo ``claim_code``, the backend auto-creates the device and makes
 it claimable from HivePal (``POST /api/v1/app/devices/claim``).
 
-Use this when you want the data inside a production-faithful HiveScale stack
+Use this when you want the data inside a production-faithful HiveHub stack
 (``server/`` + PostgreSQL, see ../docker) rather than the in-memory mock.
 
 Standard library only - no extra dependencies.
@@ -67,11 +67,11 @@ def post_measurement(base_url: str, api_key: str, payload: dict, timeout: float 
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Seed a real HiveScale backend with dummy data.")
+    ap = argparse.ArgumentParser(description="Seed a real HiveHub backend with dummy data.")
     ap.add_argument("--base-url", default="http://localhost:31115",
-                    help="HiveScale base URL (default: http://localhost:31115)")
+                    help="HiveHub base URL (default: http://localhost:31115)")
     ap.add_argument("--api-key", default="Super-Secret-Key",
-                    help="HiveScale device API key (X-API-Key). Must match the server's API_KEY.")
+                    help="HiveHub device API key (X-API-Key). Must match the server's API_KEY.")
     ap.add_argument("--interval-minutes", type=int, default=30,
                     help="Sample cadence to generate (default 30 = ~24.8k measurements; "
                          "raise to 60/120 for fewer requests).")

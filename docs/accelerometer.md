@@ -10,7 +10,7 @@
 > [holyiot-ble-sensor.md](holyiot-ble-sensor.md). This document is kept for the
 > vibration science and the FFT-band insight, which apply to any high-rate source.
 
-HiveScale can carry **one MEMS accelerometer per hive** on the shared I2C bus to
+HiveHub can carry **one MEMS accelerometer per hive** on the shared I2C bus to
 measure low-frequency comb/wall vibration. The feature is optional and compiled
 out unless `ENABLE_LIS3DH_ACCEL` is set in `secrets.h`.
 
@@ -27,7 +27,7 @@ catalogue see [insights.md](insights.md).
 
 ## Why an accelerometer in addition to the microphones?
 
-HiveScale already has two INMP441 microphones (50–3000 Hz FFT bands). The
+HiveHub already has two INMP441 microphones (50–3000 Hz FFT bands). The
 accelerometer is not a duplicate — it covers the **sub‑audible band the
 microphones miss**, which the literature identifies as the single most useful
 swarm‑prediction signal.
@@ -45,7 +45,7 @@ surveys the field and concludes (emphasis added):
 
 Key findings that motivate this module:
 
-| Finding | Source (via the review) | Consequence for HiveScale |
+| Finding | Source (via the review) | Consequence for HiveHub |
 |---|---|---|
 | A ~**20 Hz** comb vibration is the strongest known **multi‑day swarm predictor**; an alarm fired in >90 % of swarms and never on non‑swarming hives | Ramsey et al. (2020), *Sci. Rep.* 10:9798 | Dedicated **8–30 Hz "swarm" band** + a rising‑trend detector |
 | The 20 Hz signal is **not captured by most microphones** (≈50 Hz floor) | Ramsey et al. (2020); review §4.5 | Accelerometer, not a mic, is the right sensor for this band |

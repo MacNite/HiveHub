@@ -2,7 +2,7 @@
 
 HiveTraffic is the wireless variant of the entrance bee counter (the
 `2026-easy-bee-counter` / *HiveTraffic* board). Instead of the wired I2C link,
-HiveScale reads it over Bluetooth LE: once per upload cycle it acts as a **GATT
+HiveHub reads it over Bluetooth LE: once per upload cycle it acts as a **GATT
 client**, connects to each paired HiveTraffic MAC, reads one JSON measurement
 characteristic and folds the counts into the same `bee_counter_{slot}_*` fields
 the wired counter uses.
@@ -40,7 +40,7 @@ The characteristic returns a compact JSON document — **totals only**:
   "gates_healthy":3, "total_in":100, "total_out":95, "glitches":2 }
 ```
 
-HiveScale reads it, fills a totals-only `beecnt::Snapshot`, and disconnects. No
+HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects. No
 `CMD_LATCH` reset is written.
 
 ## Intervals are differenced server-side
@@ -68,7 +68,7 @@ arrive `NULL` for HiveTraffic readings; the derived interval is authoritative.
 
 ## Relationship to the other BLE subsystems
 
-HiveScale already connects out over GATT for HiveInside and the
+HiveHub already connects out over GATT for HiveInside and the
 beehivemonitoring.com sensors (see `beehivemonitoring-gatt.md`). HiveTraffic
 reuses the same connect-by-MAC pattern (`bee_counter_client.cpp::bleRunCycle`,
 modelled on `beehive_gatt.cpp`), bringing the NimBLE stack up once per cycle for

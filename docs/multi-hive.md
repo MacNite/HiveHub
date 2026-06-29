@@ -1,6 +1,6 @@
 # Multi-hive support (up to 18 hives per ESP32)
 
-Firmware **v0.20.0** generalises HiveScale from a fixed two-hive device into a
+Firmware **v0.20.0** generalises HiveHub from a fixed two-hive device into a
 dynamic registry of **up to 18 hives**, each with one scale source and at most
 one in-hive sensor. This page covers the new hardware paths, the hive-centric provisioning
 portal, the BLE budget, and the data model.

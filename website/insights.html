@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Insights — rule-based colony detection — HiveScale</title>
-<meta name="description" content="How the HiveScale Insights module turns weight, temperature, sound, entrance traffic and comb vibration into rule-based colony alerts: twelve detectors for swarming, queenlessness, robbing, foraging, winter risk and harvest timing." />
+<title>Insights — rule-based colony detection — HiveHub</title>
+<meta name="description" content="How the HiveHub Insights module turns weight, temperature, sound, entrance traffic and comb vibration into rule-based colony alerts: twelve detectors for swarming, queenlessness, robbing, foraging, winter risk and harvest timing." />
 <link rel="stylesheet" href="assets/style.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E" />
 </head>
@@ -12,7 +12,7 @@
 
 <header class="site-nav">
   <div class="wrap">
-    <a class="brand" href="index.html"><span class="logo">🐝</span> HiveScale</a>
+    <a class="brand" href="index.html"><span class="logo">🐝</span> HiveHub</a>
     <nav>
       <a href="index.html">Home</a>
       <a href="#detectors">Detectors</a>
@@ -30,7 +30,7 @@
     <span class="badge">🔬 Preview — the rules exist; evaluation &amp; tuning are work in progress</span>
     <h1>From raw sensors<br>to colony insights.</h1>
     <p class="lead">
-      The Insights module turns the time-series your HiveScale already records — weight,
+      The Insights module turns the time-series your HiveHub already records — weight,
       hive temperature, ambient conditions, in-hive sound, entrance traffic and comb
       vibration — into a ranked list of plain-language alerts. Twelve rule-based detectors,
       each watching one colony behaviour, computed independently for both hives.
@@ -249,11 +249,11 @@
       <div class="card"><h3>Seeley (2010)</h3><p><em>Honeybee Democracy.</em> The behavioural basis — swarming is a deliberate, days-long preparation, not a sudden event.</p></div>
       <div class="card"><h3>Stalidzans &amp; Berzonis (2013)</h3><p>A persistent temperature rise above the brood nest precedes swarming — the basis for the pre-swarm temperature detectors.</p></div>
       <div class="card"><h3>Meikle et al. (2008)</h3><p>Within-day hive-weight variation as a measure of colony activity — the day/night weight-delta foraging method.</p></div>
-      <div class="card"><h3>Kulkarni &amp; Murphy</h3><p>A multi-sensor benchmark (weight + in-hive temp + entrance traffic) — the closest match to the HiveScale stack for validation.</p></div>
+      <div class="card"><h3>Kulkarni &amp; Murphy</h3><p>A multi-sensor benchmark (weight + in-hive temp + entrance traffic) — the closest match to the HiveHub stack for validation.</p></div>
       <div class="card"><h3>MSPB dataset (2023)</h3><p>53 hives, one year of audio + temperature + humidity — validation for the temperature-only queenlessness fallback.</p></div>
       <div class="card"><h3>Ramsey et al. (2020)</h3><p>A rising ~20 Hz night-time comb vibration predicted &gt; 90% of swarms and never misfired — the basis for the vibration detector.</p></div>
       <div class="card"><h3>Bencsik et al. (2011)</h3><p>Comb vibration diverges from baseline days ahead of swarming — justifies a trend / baseline comparison over a fixed threshold.</p></div>
-      <div class="card"><h3>Uthoff et al. (2023)</h3><p>A review recommending a low-frequency accelerometer to capture the ~20 Hz signal microphones miss — why HiveScale added one.</p></div>
+      <div class="card"><h3>Uthoff et al. (2023)</h3><p>A review recommending a low-frequency accelerometer to capture the ~20 Hz signal microphones miss — why HiveHub added one.</p></div>
     </div>
 
     <h3 style="margin-top:1.8rem">What the research agrees on</h3>
@@ -305,7 +305,7 @@ HARVEST_FLOW_KG_PER_WEEK        = 2.0
 
 <footer>
   <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
-    <span>🐝 HiveScale — MIT © 2026 Maximilian Nitschke</span>
+    <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
     <span><a href="index.html">Home</a> · <a href="https://github.com/MacNite/HiveScale">GitHub</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
   </div>
 </footer>

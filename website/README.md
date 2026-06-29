@@ -1,9 +1,9 @@
-# HiveScale website
+# HiveHub website
 
-A small, dependency-free static site for HiveScale:
+A small, dependency-free static site for HiveHub:
 
 - **`index.html`** — landing page describing the features and a step-by-step
-  "set up your own HiveScale" guide.
+  "set up your own HiveHub" guide.
 - **`insights.html`** — a page explaining the rule-based Insights module: the
   four severities, the twelve-detector catalogue (grouped by swarming, queen /
   brood, activity and overwintering), how optional sensors are fused in, and the

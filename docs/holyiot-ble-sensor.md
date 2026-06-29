@@ -1,13 +1,13 @@
 # HolyIot 25015 in-hive BLE sensor
 
-HiveScale can read up to **two HolyIot 25015 BLE sensors** — one per hive — as
+HiveHub can read up to **two HolyIot 25015 BLE sensors** — one per hive — as
 optional in-hive sensors. The ESP32 acts as a passive **BLE bridge**: no wiring
 into the hive, just a battery beacon sitting on/near the comb that the logger
 scans for once per upload cycle.
 
 The 25015 (nRF54L15) carries three sensors:
 
-| On-board chip | Measures | HiveScale field |
+| On-board chip | Measures | HiveHub field |
 |---|---|---|
 | SHT40 | temperature | `hive_{1,2}_temp_c` (shared with / replacing the wired DS18B20) |
 | SHT40 | relative humidity | `ble_{1,2}_humidity_percent` |
@@ -27,7 +27,7 @@ It replaces the previous wired LIS3DH/LIS2DH12 accelerometer
    independent optional features — turn them off if a build relies on the BLE
    sensor instead.
 2. **Pair from the setup portal.** Open the provisioning portal (short-press the
-   setup button, join the `HiveScale-Setup-XXXX` AP, browse to
+   setup button, join the `HiveHub-Setup-XXXX` AP, browse to
    `http://192.168.4.1/`). Under **Wireless sensors**:
    - Click **scan for wireless sensors** to list advertising BLE devices; sensors
      carrying a parseable 25015 payload are flagged.

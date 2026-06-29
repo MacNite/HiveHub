@@ -59,7 +59,7 @@ Demonstrates that internal hive temperature patterns change before swarming, esp
 - Absolute temperature matters less than:
   - **trend deviations from baseline**.
 
-### Relevance for HiveScale
+### Relevance for HiveHub
 Highly relevant because:
 - Uses the same sensing modality (temperature).
 - Supports anomaly-based swarm detection models.
@@ -94,7 +94,7 @@ The paper establishes the basis for:
 - slope-based weight interpretation
 - activity signatures from load-cell data.
 
-### Relevance for HiveScale
+### Relevance for HiveHub
 Extremely relevant for:
 - swarm prediction,
 - foraging estimation,
@@ -136,7 +136,7 @@ This is one of the strongest validation datasets for practical ML pipelines beca
 - data is longitudinal,
 - synchronized measurements enable sensor fusion.
 
-### Relevance for HiveScale
+### Relevance for HiveHub
 Likely the best available benchmark for:
 - swarm prediction,
 - sensor fusion validation,
@@ -173,7 +173,7 @@ The paper supports the idea that:
 - queenless colonies show altered thermoregulation behaviour,
 - temperature variability increases when colony organization weakens.
 
-### Relevance for HiveScale
+### Relevance for HiveHub
 Particularly useful for:
 - fallback queenlessness detection,
 - validating temperature-only inference systems,
@@ -196,7 +196,7 @@ The first study to **accurately predict swarming days-to-weeks in advance** from
 - A trained alarm fired in **>90 %** of swarming events and **never** for hives that did not swarm.
 - Crucially, ~20 Hz is **below the usable range of most hive microphones** (~50 Hz floor), so it is only reliably captured with a **low-frequency accelerometer**.
 
-### Relevance for HiveScale
+### Relevance for HiveHub
 Direct basis for the per-hive **LIS3DH / LIS2DH12 accelerometer** and the
 `detect_vibration_swarm_prediction` insight: compare a recent **night-time** mean
 of the 8–30 Hz band to a longer baseline and warn on a sustained rise.
@@ -213,7 +213,7 @@ A rising night-time ~20 Hz comb vibration is the strongest known multi-day swarm
 - Comb **vibration patterns diverge from baseline 5–10 hours to ~11 days before** swarming.
 - Established that accelerometer time-series carry a **pre-swarm** signature, not just a swarm-moment one.
 
-### Relevance for HiveScale
+### Relevance for HiveHub
 Justifies a **trend/baseline** comparison over days (rather than an instantaneous threshold) for the vibration swarm detector.
 
 ---
@@ -226,12 +226,12 @@ Justifies a **trend/baseline** comparison over days (rather than an instantaneou
 - Highlights that the predictive **~20 Hz** band "**cannot be recorded by most microphones**" and explicitly recommends **adding low-frequency accelerometers** to "maximise the data quality".
 - Notes the strongest signals (queen warble, swarm vibration) appear **at night**.
 
-### Relevance for HiveScale
+### Relevance for HiveHub
 The review that motivated adding the accelerometer alongside the existing
 microphones, and the source for the night-time analysis window.
 
 ### Main Takeaway
-To capture the best swarm-prediction signal, combine microphones with a **low-frequency accelerometer** — which HiveScale now does.
+To capture the best swarm-prediction signal, combine microphones with a **low-frequency accelerometer** — which HiveHub now does.
 
 ---
 
@@ -274,7 +274,7 @@ rather than static thresholds.
 
 ---
 
-# Practical Implications for HiveScale
+# Practical Implications for HiveHub
 
 ## Most Defensible Sensor Stack
 Based on the literature:

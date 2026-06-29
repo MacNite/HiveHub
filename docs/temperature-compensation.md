@@ -6,7 +6,7 @@ and the mechanical structure of the cell change as it warms and cools, so an
 this drift looks like nectar income through the warm afternoon and like
 consumption overnight — a daily sawtooth riding on top of the real signal.
 
-HiveScale corrects for this in the **backend**, not on the device.
+HiveHub corrects for this in the **backend**, not on the device.
 
 ## Why the backend, not the firmware
 
@@ -28,7 +28,7 @@ Because the raw values are stored untouched, the backend can:
 Doing it on-device would bake a fixed guess into the transmitted weight forever
 and add code to the deep-sleep path for no benefit. The only case for on-device
 compensation is a deployment that reads weights straight off the device with no
-backend — which is not how HiveScale is used.
+backend — which is not how HiveHub is used.
 
 ## The model
 

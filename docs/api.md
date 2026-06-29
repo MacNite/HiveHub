@@ -1,6 +1,6 @@
-# HiveScale API reference
+# HiveHub API reference
 
-The HiveScale backend exposes a FastAPI REST API and Swagger UI at `http://<host>:31115/docs`.
+The HiveHub backend exposes a FastAPI REST API and Swagger UI at `http://<host>:31115/docs`.
 
 ---
 
@@ -23,7 +23,7 @@ Replace `<host>` with the server IP address or domain name.
 
 ## Authentication
 
-HiveScale uses separate credentials for device traffic and HivePal app traffic.
+HiveHub uses separate credentials for device traffic and HivePal app traffic.
 
 ### Device key
 
@@ -62,8 +62,8 @@ X-HivePal-Service-Key: your-hivepal-service-key
 Authorization: Bearer <hivepal-jwt>
 ```
 
-The service key must match HiveScale's `HIVEPAL_SERVICE_API_KEY`. The JWT is the
-access token HivePal issues to its own users; HiveScale verifies its signature
+The service key must match HiveHub's `HIVEPAL_SERVICE_API_KEY`. The JWT is the
+access token HivePal issues to its own users; HiveHub verifies its signature
 with the shared `HIVEPAL_JWT_SECRET` (HS256) and reads the user ID from the
 token's `sub` claim to enforce per-device ownership and roles. The legacy
 plaintext `X-User-Id` header is no longer accepted.
@@ -440,7 +440,7 @@ Downloads a firmware binary. This endpoint has no API-key requirement; the URL i
 
 ### `POST /api/v1/devices/{device_id}/commands/update-beecounter`
 
-Queues an `update_beecounter` command that tells the HiveScale to relay the active
+Queues an `update_beecounter` command that tells the HiveHub to relay the active
 BeeCounter firmware image to the BeeCounter at the given slot over I2C. The image
 URL, version, and CRC-32 are looked up server-side and embedded in the command payload.
 
@@ -458,10 +458,10 @@ Returns `404` if there is no active `beecounter` release. Response on success:
 
 ### `POST /api/v1/devices/{device_id}/commands/update-hiveinside`
 
-Queues an `update_hiveinside` command that tells the HiveScale to relay the active
+Queues an `update_hiveinside` command that tells the HiveHub to relay the active
 HiveInside firmware image to the HiveInside sensor paired in the given slot over
 BLE GATT. The image URL, version, and CRC-32 are looked up server-side and embedded
-in the command payload; the HiveScale resolves the BLE MAC locally.
+in the command payload; the HiveHub resolves the BLE MAC locally.
 
 **Auth:** `X-API-Key` (master/admin key)
 
@@ -475,7 +475,7 @@ Returns `404` if there is no active `hiveinside` release. Response on success:
 { "id": 72, "status": "pending" }
 ```
 
-> The HiveScale reports the command result **after** the relay finishes, so the
+> The HiveHub reports the command result **after** the relay finishes, so the
 > command transitions `pending` → `claimed` → `done`/`failed` reflecting the real
 > outcome. A failed relay records a specific cause in the command result message
 > (e.g. `HiveInside not found in scan (asleep or out of range?)`,
@@ -820,7 +820,7 @@ Requires `owner` or `admin`. Returns `404` if there is no release available.
 
 ### `POST /api/v1/app/devices/{device_id}/commands/update-hiveinside`
 
-Queues an `update_hiveinside` command so the HiveScale relays the active HiveInside
+Queues an `update_hiveinside` command so the HiveHub relays the active HiveInside
 release to the paired sensor over BLE. This is the app-facing counterpart of the
 device-key `…/commands/update-hiveinside` helper; it authenticates with the HivePal
 service key + user JWT and requires `owner` or `admin` on the device.
