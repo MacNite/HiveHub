@@ -50,8 +50,13 @@ function viewHead(title, desc) {
 }
 
 function hiveLabel(state, n) {
-  const ch = state.device?.channels || {};
-  return (n === 1 ? ch.scale_1 : ch.scale_2) || `Hive ${n}`;
+  // Prefer the live channels endpoint (kept fresh after edits), then the name
+  // embedded in the device list, then a generic fallback.
+  const c = state.channels || {};
+  const fromChannels = n === 1 ? c.scale_1_display_name : c.scale_2_display_name;
+  const dev = state.device?.channels || {};
+  const fromDevice = n === 1 ? dev.scale_1 : dev.scale_2;
+  return fromChannels || fromDevice || `Hive ${n}`;
 }
 
 // hives shown given the top-bar hive selector ("all" | "1" | "2")
@@ -219,20 +224,28 @@ function renderEnvironment(root, state) {
   root.append(tsView("Environment", "Humidity and air pressure", state, { cards, charts }));
 }
 
+// The stereo microphone's left / right channels map to hive 1 / hive 2, so the
+// audio + frequency views label them with the hive names like every other view.
+function micSide(n) {
+  return n === 1 ? "left" : "right";
+}
+
 function renderAudio(root, state) {
   const m = state.latest || {};
-  const cards = [
-    metricCard("Left RMS", fmt(m.mic_left_rms_dbfs, 1), "dBFS", isNum(m.mic_left_peak_dbfs) ? `Peak ${fmt(m.mic_left_peak_dbfs, 1)}` : "Sound level"),
-    metricCard("Right RMS", fmt(m.mic_right_rms_dbfs, 1), "dBFS", isNum(m.mic_right_peak_dbfs) ? `Peak ${fmt(m.mic_right_peak_dbfs, 1)}` : "Sound level"),
-    metricCard("Sample rate", fmtInt(m.mic_sample_rate_hz), "Hz", isNum(m.mic_sample_frames) ? `${fmtInt(m.mic_sample_frames)} frames` : "Microphone"),
-  ];
+  const hives = selectedHives(state);
+  const cards = hives.map((n) => {
+    const s = micSide(n);
+    return metricCard(`${hiveLabel(state, n)} RMS`, fmt(m[`mic_${s}_rms_dbfs`], 1), "dBFS",
+      isNum(m[`mic_${s}_peak_dbfs`]) ? `Peak ${fmt(m[`mic_${s}_peak_dbfs`], 1)}` : "Sound level");
+  });
+  cards.push(metricCard("Sample rate", fmtInt(m.mic_sample_rate_hz), "Hz",
+    isNum(m.mic_sample_frames) ? `${fmtInt(m.mic_sample_frames)} frames` : "Microphone"));
+
+  const rms = hives.map((n, i) => seriesFrom(state.measurements, `mic_${micSide(n)}_rms_dbfs`, hiveLabel(state, n), PALETTE[i]));
+  const peak = hives.map((n, i) => seriesFrom(state.measurements, `mic_${micSide(n)}_peak_dbfs`, hiveLabel(state, n), PALETTE[i]));
   const charts = [
-    chartCard("Sound level (RMS)", "Per-channel microphone RMS",
-      [seriesFrom(state.measurements, "mic_left_rms_dbfs", "Left", PALETTE[0]),
-       seriesFrom(state.measurements, "mic_right_rms_dbfs", "Right", PALETTE[1])], { unit: "dBFS", yDigits: 0 }),
-    chartCard("Peak level", "Per-channel microphone peak",
-      [seriesFrom(state.measurements, "mic_left_peak_dbfs", "Left", PALETTE[0]),
-       seriesFrom(state.measurements, "mic_right_peak_dbfs", "Right", PALETTE[1])], { unit: "dBFS", yDigits: 0 }),
+    chartCard("Sound level (RMS)", "Per-hive microphone RMS", rms, { unit: "dBFS", yDigits: 0 }),
+    chartCard("Peak level", "Per-hive microphone peak", peak, { unit: "dBFS", yDigits: 0 }),
   ];
   root.append(tsView("Audio", "Hive sound levels", state, { cards, charts }));
 }
@@ -258,17 +271,18 @@ function barChart(title, sub, items) {
 
 function renderFrequency(root, state) {
   const m = state.latest || {};
+  const hives = selectedHives(state);
   const charts = [];
-  for (const side of ["left", "right"]) {
-    const items = BANDS.map(([k, label]) => ({ label, value: m[`mic_${side}_band_${k}_dbfs`] }));
+  for (const n of hives) {
+    const items = BANDS.map(([k, label]) => ({ label, value: m[`mic_${micSide(n)}_band_${k}_dbfs`] }));
     if (items.some((i) => isNum(i.value))) {
-      charts.push(barChart(`Frequency bands — ${side}`, "Latest per-band energy (dBFS)", items));
+      charts.push(barChart(`Frequency bands — ${hiveLabel(state, n)}`, "Latest per-band FFT energy (dBFS)", items));
     }
   }
   if (!charts.length) {
     charts.push(el("div", { class: "card" }, el("p", { class: "muted-text" }, "No frequency-band data reported by this device.")));
   }
-  root.append(tsView("Frequency bar", "FFT energy by acoustic band", state, { charts }));
+  root.append(tsView("Frequency bands", "FFT energy by acoustic band", state, { charts }));
 }
 
 function renderBattery(root, state) {
@@ -354,16 +368,80 @@ function renderDevice(root, state) {
   const node = el("div", {});
   node.append(viewHead("Device & admin", "Configuration, firmware and calibration"));
 
-  // Config (read-only)
-  const cfgRows = [
-    ["Device ID", state.device?.device_id || DASH],
-    ["Send interval", isNum(cfg.send_interval_seconds) ? `${cfg.send_interval_seconds} s` : DASH],
-    ["Config version", cfg.config_version ?? DASH],
-    ["Scale 1 offset / factor", `${cfg.scale1_offset ?? DASH} / ${cfg.scale1_factor ?? DASH}`],
-    ["Scale 2 offset / factor", `${cfg.scale2_offset ?? DASH} / ${cfg.scale2_factor ?? DASH}`],
-    ["Temp compensation", cfg.tempco_enabled ? "Enabled" : "Disabled"],
-    ["Tempco source / ref", `${cfg.tempco_source ?? DASH} / ${isNum(cfg.tempco_ref_temp_c) ? cfg.tempco_ref_temp_c + " °C" : DASH}`],
-  ];
+  // Editable configuration form
+  const cfgInputs = {};
+  const numRow = (label, key, isInt) => {
+    const input = el("input", {
+      type: "number", step: isInt ? "1" : "any",
+      value: cfg[key] != null ? String(cfg[key]) : "",
+    });
+    cfgInputs[key] = { input, int: !!isInt };
+    return el("div", { class: "form-row" }, el("label", {}, label), input);
+  };
+  const tcEnabled = el("input", { type: "checkbox" });
+  tcEnabled.checked = !!cfg.tempco_enabled;
+  const tcSource = el("select", { class: "full" },
+    ...["ambient", "hive_1", "hive_2"].map((v) =>
+      el("option", { value: v, selected: cfg.tempco_source === v ? true : null }, v)));
+  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
+
+  const cfgForm = el("form", {},
+    el("div", { class: "rows" },
+      el("div", { class: "row" }, el("span", { class: "k" }, "Device ID"), el("span", { class: "v" }, state.device?.device_id || DASH)),
+      el("div", { class: "row" }, el("span", { class: "k" }, "Config version"), el("span", { class: "v" }, cfg.config_version ?? DASH))),
+    numRow("Send interval (s)", "send_interval_seconds", true),
+    numRow("Scale 1 offset", "scale1_offset", true),
+    numRow("Scale 1 factor", "scale1_factor"),
+    numRow("Scale 2 offset", "scale2_offset", true),
+    numRow("Scale 2 factor", "scale2_factor"),
+    el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
+    el("div", { class: "form-row" }, el("label", {}, "Tempco source"), tcSource),
+    numRow("Tempco ref temp (°C)", "tempco_ref_temp_c"),
+    numRow("Scale 1 tempco (kg/°C)", "scale1_tempco_kg_per_c"),
+    numRow("Scale 2 tempco (kg/°C)", "scale2_tempco_kg_per_c"),
+    el("p", { class: "note" }, "Saving bumps the config version; the device applies it on its next check-in."),
+    el("div", { class: "form-actions" }, cfgSaveBtn));
+
+  cfgForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const patch = {};
+    for (const [key, { input, int }] of Object.entries(cfgInputs)) {
+      const raw = input.value.trim();
+      if (raw === "") continue;
+      const v = int ? parseInt(raw, 10) : parseFloat(raw);
+      if (!Number.isFinite(v) || v === cfg[key]) continue;
+      patch[key] = v;
+    }
+    if (tcEnabled.checked !== !!cfg.tempco_enabled) patch.tempco_enabled = tcEnabled.checked;
+    if (tcSource.value !== cfg.tempco_source) patch.tempco_source = tcSource.value;
+    if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
+    cfgSaveBtn.disabled = true;
+    try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload(); }
+    catch (err) { state.toast(err.message, "error"); cfgSaveBtn.disabled = false; }
+  });
+  const configCard = el("div", { class: "card" }, el("h2", {}, "Configuration"), cfgForm);
+
+  // Hive (scale-channel) names
+  const chData = state.channels || {};
+  const ch1 = el("input", { type: "text", value: chData.scale_1_display_name ?? "", placeholder: "Hive 1" });
+  const ch2 = el("input", { type: "text", value: chData.scale_2_display_name ?? "", placeholder: "Hive 2" });
+  const chBtn = el("button", { class: "btn", type: "submit" }, "Save names");
+  const chForm = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Hive 1 name"), ch1),
+    el("div", { class: "form-row" }, el("label", {}, "Hive 2 name"), ch2),
+    el("p", { class: "note" }, "Shown as the hive labels across every chart and card."),
+    el("div", { class: "form-actions" }, chBtn));
+  chForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {};
+    if (ch1.value !== (chData.scale_1_display_name ?? "")) payload.scale_1_display_name = ch1.value;
+    if (ch2.value !== (chData.scale_2_display_name ?? "")) payload.scale_2_display_name = ch2.value;
+    if (!Object.keys(payload).length) { state.toast("No changes to save"); return; }
+    chBtn.disabled = true;
+    try { await state.actions.updateChannels(payload); state.toast("Hive names saved", "success"); state.reload(); }
+    catch (err) { state.toast(err.message, "error"); chBtn.disabled = false; }
+  });
+  const channelsCard = el("div", { class: "card" }, el("h2", {}, "Hive names"), chForm);
 
   // Firmware panel
   const fwBadgeCls = fw.update_available ? (fw.pending_approval ? "warn" : "info") : "good";
@@ -469,8 +547,9 @@ function renderDevice(root, state) {
     el("p", { class: "note" }, "Regress raw weight against temperature to derive a load-cell coefficient."), fitForm);
 
   node.append(
-    el("div", { class: "grid wide" }, rowsCard("Configuration", cfgRows), fwPanel),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, uploadCard, calCard, fitCard));
+    el("div", { class: "grid wide" }, configCard, channelsCard),
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, fwPanel, uploadCard),
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard));
   root.append(node);
 }
 
@@ -483,7 +562,7 @@ export const GROUPS = [
   { id: "weight", label: "Weight", icon: "⚖️", render: renderWeight },
   { id: "environment", label: "Environment", icon: "💧", render: renderEnvironment },
   { id: "audio", label: "Audio", icon: "🔊", render: renderAudio },
-  { id: "frequency", label: "Frequency bar", icon: "📊", render: renderFrequency },
+  { id: "frequency", label: "Frequency bands", icon: "📊", render: renderFrequency },
   { id: "battery", label: "Battery & power", icon: "🔋", render: renderBattery },
   { id: "connectivity", label: "Connectivity", icon: "📶", render: renderConnectivity },
   { id: "counter", label: "Counter", icon: "🐝", render: renderCounter },

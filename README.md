@@ -68,7 +68,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Insights** — backend auto-evaluation of weight, temperature, sound, vibration, and entrance traffic per hive, based on [these publications](docs/insights-sources-tldr.md).
 - **Optional off-grid mode** — solar/LiPo charging with INA219 solar telemetry and MAX17048 LiPo telemetry.
 - **Optional entrance bee counters** — wired [BeeCounter](https://github.com/MacNite/2026-easy-bee-counter) (I2C) or wireless HiveTraffic (BLE/GATT).
-- **Built-in web dashboard (optional)** — a login-free, dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts: device dropdown, per-hive selection, charts for every data group, plus firmware/OTA and calibration controls. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
+- **Built-in web dashboard (optional)** — a login-free, dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts: device dropdown, per-hive selection, charts for every data group, plus device-config editing, hive renaming, firmware/OTA and calibration controls. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
 - **[HivePal](https://github.com/martinhrvn/hive-pal) integration** — dedicated `/api/v1/app/...` endpoints using a HivePal service key, per-user JWTs, and per-user access roles.
 - **Optional MQTT bridge** — mirror every reading to an MQTT broker (Home Assistant, Node-RED, openHAB…) with Home Assistant auto-discovery, alongside the built-in PostgreSQL store. Off by default; see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration).
 - **Breakout PCB design** — KiCad Scale Module + Power Module with fabrication outputs.
@@ -404,7 +404,8 @@ Enabled only when `ENABLE_LOCAL_DASHBOARD=true`. **No authentication** and **not
 |---|---|---|
 | `GET` | `/api/v1/local/devices` | List all devices + scale-channel names |
 | `GET` | `/api/v1/local/devices/{id}/measurements[/latest]` | Measurements (date filter) / latest |
-| `GET` | `/api/v1/local/devices/{id}/config` | Device configuration |
+| `GET`/`PATCH` | `/api/v1/local/devices/{id}/config` | Read / update device config (interval, scale offsets/factors, temp comp) |
+| `GET`/`PATCH` | `/api/v1/local/devices/{id}/channels` | Read / rename the scale-channel (hive) display names |
 | `GET` | `/api/v1/local/devices/{id}/insights/summary` | Highest-severity insight summary |
 | `GET`/`POST` | `/api/v1/local/devices/{id}/firmware/status` · (upload) · `/approve` | OTA status / upload binary / approve |
 | `POST` | `/api/v1/local/devices/{id}/calibration/start` · `/stop` | Start / stop calibration mode |

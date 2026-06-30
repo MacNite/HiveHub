@@ -140,9 +140,17 @@ export const api = {
     device_id: deviceId, send_interval_seconds: 900,
     scale1_offset: 12345, scale1_factor: 21.3,
     scale2_offset: 12010, scale2_factor: 21.7,
-    config_version: 4, tempco_enabled: true, tempco_source: "hive_1_temp_c",
+    config_version: 4, tempco_enabled: true, tempco_source: "hive_1",
     tempco_ref_temp_c: 25.0, scale1_tempco_kg_per_c: -0.012, scale2_tempco_kg_per_c: -0.011,
   }),
+
+  channels: (deviceId) => {
+    const dev = findDevice(deviceId);
+    return wrap({
+      scale_1_display_name: dev.channels.scale_1,
+      scale_2_display_name: dev.channels.scale_2,
+    });
+  },
 
   insightsSummary: (deviceId) => wrap({
     device_id: deviceId, computed_at: new Date().toISOString(),
@@ -166,4 +174,6 @@ export const api = {
   startCalibration: demoErr,
   stopCalibration: demoErr,
   fitTempCompensation: demoErr,
+  updateConfig: demoErr,
+  updateChannels: demoErr,
 };

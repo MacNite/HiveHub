@@ -51,10 +51,11 @@ async function loadData() {
   const start = new Date(Date.now() - days * 86400000).toISOString();
   const id = state.deviceId;
 
-  const [measurements, latest, config, insights, firmware] = await Promise.all([
+  const [measurements, latest, config, channels, insights, firmware] = await Promise.all([
     api.measurements(id, { start, limit }).catch(() => []),
     api.latest(id, 1).catch(() => []),
     api.config(id).catch(() => null),
+    api.channels(id).catch(() => null),
     api.insightsSummary(id).catch(() => null),
     api.firmwareStatus(id).catch(() => null),
   ]);
@@ -66,6 +67,7 @@ async function loadData() {
     measurements: measurements || [],
     latest: (latest && latest[0]) || null,
     config,
+    channels,
     insights,
     firmware,
   };
@@ -89,6 +91,7 @@ function buildState() {
     measurements: d.measurements || [],
     latest: d.latest,
     config: d.config,
+    channels: d.channels,
     insights: d.insights,
     firmware: d.firmware,
     toast,
@@ -99,6 +102,8 @@ function buildState() {
       startCalibration: (p) => api.startCalibration(state.deviceId, p),
       stopCalibration: () => api.stopCalibration(state.deviceId),
       fitTempComp: (p) => api.fitTempCompensation(state.deviceId, p),
+      updateConfig: (p) => api.updateConfig(state.deviceId, p),
+      updateChannels: (p) => api.updateChannels(state.deviceId, p),
     },
   };
 }

@@ -4,7 +4,7 @@ A small, dependency-free single-page dashboard that ships **inside** the HiveHub
 server, so a self-hosted install gets a nice web UI without running HivePal.
 
 It mirrors the data groups of beehivemonitoring.com / HivePal — a fixed sidebar
-(Overview, Temperature, Weight, Environment, Audio, Frequency bar, Battery &
+(Overview, Temperature, Weight, Environment, Audio, Frequency bands, Battery &
 power, Connectivity, Counter, Insights, Device & admin) with a device dropdown
 and a hive selector in the top bar — but has **no user accounts and no login**.
 
@@ -33,10 +33,14 @@ and `/dashboard` is not mounted, so a normal deployment is unaffected.
 
 ## What it can do
 
-- **Read-only:** latest-value cards and time-series charts (day / 7 days / month
+- **Monitoring:** latest-value cards and time-series charts (day / 7 days / month
   / year / 5 years) for weight, temperatures, humidity & pressure, audio levels,
   FFT frequency bands, battery & solar, connectivity and bee-counter traffic,
   plus the rule-based insight summary.
+- **Configuration:** edit device config (send interval, scale offsets/factors,
+  temperature-compensation settings) and rename the two hives (scale channels) —
+  the labels used across every chart and card. Saving bumps the config version
+  so the device applies it on its next check-in.
 - **Firmware:** upload a `.bin`, see current-vs-latest status and approve an OTA
   update (queues the device to flash on its next check-in).
 - **Calibration:** start/stop calibration mode and fit a load-cell temperature
