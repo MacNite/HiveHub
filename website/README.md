@@ -13,6 +13,10 @@ A small, dependency-free static site for HiveHub:
   `secrets.h` from a form (device identity, Wi-Fi, sensors, BLE/GATT options,
   off-grid power modules) and lets you copy or download it. Everything runs
   client-side; no values are sent anywhere.
+- **`build.html`** — a "Build your own" landing page. Currently a **placeholder**
+  for a future parts/BOM configurator (choose hive count + sensors → tailored
+  bill of materials) alongside assembly and setup tutorials. For now it links to
+  the existing hardware BOM, wiring, multi-hive guide, PCB design and config tool.
 - **`assets/`** — shared stylesheet and the configurator JavaScript.
 
 There is no build step — it is plain HTML/CSS/JS.
