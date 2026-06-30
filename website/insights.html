@@ -18,8 +18,9 @@
       <a href="#detectors">Detectors</a>
       <a href="#severities">Severities</a>
       <a href="#science">Science</a>
+      <a href="build.html">Build your own</a>
       <a href="configurator.html">Config tool</a>
-      <a href="https://github.com/MacNite/HiveScale">GitHub</a>
+      <a href="https://github.com/MacNite/HiveHub">GitHub</a>
     </nav>
   </div>
 </header>
@@ -33,11 +34,11 @@
       The Insights module turns the time-series your HiveHub already records — weight,
       hive temperature, ambient conditions, in-hive sound, entrance traffic and comb
       vibration — into a ranked list of plain-language alerts. Twelve rule-based detectors,
-      each watching one colony behaviour, computed independently for both hives.
+      each watching one colony behaviour, computed independently for every hive (up to 18 per ESP32).
     </p>
     <div class="cta">
       <a class="btn" href="#detectors">🧠 See the detectors</a>
-      <a class="btn ghost" href="https://github.com/MacNite/HiveScale/blob/main/docs/insights.md">📄 Full reference</a>
+      <a class="btn ghost" href="https://github.com/MacNite/HiveHub/blob/main/docs/insights.md">📄 Full reference</a>
     </div>
   </div>
 </section>
@@ -243,7 +244,7 @@
     <p class="sub">
       The thresholds are starting values calibrated against a project spec and the public
       research below. A one-paragraph TL;DR of each lives in
-      <a href="https://github.com/MacNite/HiveScale/blob/main/docs/insights-sources-tldr.md">insights-sources-tldr.md</a>.
+      <a href="https://github.com/MacNite/HiveHub/blob/main/docs/insights-sources-tldr.md">insights-sources-tldr.md</a>.
     </p>
     <div class="grid">
       <div class="card"><h3>Seeley (2010)</h3><p><em>Honeybee Democracy.</em> The behavioural basis — swarming is a deliberate, days-long preparation, not a sudden event.</p></div>
@@ -295,10 +296,10 @@ HARVEST_FLOW_KG_PER_WEEK        = 2.0
   <div class="wrap">
     <h2>Read more</h2>
     <div class="grid">
-      <div class="card"><h3>📄 Insights reference</h3><p>The authoritative detector catalogue with every threshold and source.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/insights.md">docs/insights.md →</a></p></div>
-      <div class="card"><h3>📚 Sources TL;DR</h3><p>One-paragraph summaries of every paper behind the rules.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/insights-sources-tldr.md">insights-sources-tldr.md →</a></p></div>
-      <div class="card"><h3>📳 Accelerometer</h3><p>The ~20 Hz pre-swarm vibration signal and the hardware behind detectors 11 &amp; 12.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
-      <div class="card"><h3>🐍 insights.py</h3><p>The implementation — pure Python, one function per detector.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/server/insights.py">server/insights.py →</a></p></div>
+      <div class="card"><h3>📄 Insights reference</h3><p>The authoritative detector catalogue with every threshold and source.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/insights.md">docs/insights.md →</a></p></div>
+      <div class="card"><h3>📚 Sources TL;DR</h3><p>One-paragraph summaries of every paper behind the rules.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/insights-sources-tldr.md">insights-sources-tldr.md →</a></p></div>
+      <div class="card"><h3>📳 Accelerometer</h3><p>The ~20 Hz pre-swarm vibration signal and the hardware behind detectors 11 &amp; 12.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
+      <div class="card"><h3>🐍 insights.py</h3><p>The implementation — pure Python, one function per detector.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/server/insights.py">server/insights.py →</a></p></div>
     </div>
   </div>
 </section>
@@ -306,7 +307,7 @@ HARVEST_FLOW_KG_PER_WEEK        = 2.0
 <footer>
   <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
     <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
-    <span><a href="index.html">Home</a> · <a href="https://github.com/MacNite/HiveScale">GitHub</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
+    <span><a href="index.html">Home</a> · <a href="https://github.com/MacNite/HiveHub">GitHub</a> · <a href="build.html">Build your own</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
   </div>
 </footer>
 

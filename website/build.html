@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Build your own — HiveHub</title>
+<meta name="description" content="Build your own HiveHub: a guided parts configurator and step-by-step assembly and setup tutorials are coming. For now, jump to the hardware BOM, wiring reference and the firmware config tool." />
+<link rel="stylesheet" href="assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%9D%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+
+<header class="site-nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="logo">🐝</span> HiveHub</a>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="index.html#hardware">Hardware</a>
+      <a href="index.html#setup">Setup</a>
+      <a href="build.html">Build your own</a>
+      <a href="insights.html">Insights</a>
+      <a href="configurator.html">Config tool</a>
+      <a href="https://github.com/MacNite/HiveHub">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<a id="top"></a>
+<section class="hero" style="border-top:none">
+  <div class="wrap">
+    <span class="badge">🚧 Coming soon — this page is a placeholder</span>
+    <h1>Build your own HiveHub.</h1>
+    <p class="lead">
+      A guided builder is on the way: choose how many hives (up to 18) and which
+      sensors you want, and HiveHub will generate the exact parts list, wiring and
+      firmware config — backed by step-by-step assembly and setup tutorials.
+    </p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/MacNite/HiveHub#hardware">📦 Current BOM</a>
+      <a class="btn ghost" href="configurator.html">⚙️ Config tool</a>
+      <a class="btn ghost" href="index.html#setup">🚀 Setup guide</a>
+    </div>
+  </div>
+</section>
+
+<section id="planned">
+  <div class="wrap">
+    <h2>What's coming here</h2>
+    <p class="sub">This page will grow into a complete "build your own" hub. The
+       plan, roughly in order:</p>
+    <div class="grid">
+      <div class="card"><div class="ico">🧮</div><h3>Parts configurator</h3><p>Pick your hive count (up to 18) and sensors and get a tailored bill of materials — quantities, modules and buy links — matched to your build.</p></div>
+      <div class="card"><div class="ico">🔧</div><h3>Assembly tutorials</h3><p>Step-by-step guides for the Scale Module and Power Module: module placement, load cells, I2C sensors, wiring and the enclosure.</p></div>
+      <div class="card"><div class="ico">⚡</div><h3>Flashing &amp; setup</h3><p>From PlatformIO upload to the on-device provisioning portal, sensor pairing and claiming the device in HivePal.</p></div>
+      <div class="card"><div class="ico">🔌</div><h3>Wiring diagrams</h3><p>Per-sensor wiring and pin maps generated to match the exact build you configured — no guessing from a generic table.</p></div>
+    </div>
+    <p class="sub" style="margin-top:1.5rem">Have ideas for what the builder should
+       cover? Open an issue on
+       <a href="https://github.com/MacNite/HiveHub/issues">GitHub</a>.</p>
+  </div>
+</section>
+
+<section id="meantime">
+  <div class="wrap">
+    <h2>In the meantime</h2>
+    <p class="sub">The guided builder isn't ready yet — but everything you need to
+       build a HiveHub already exists in the repository:</p>
+    <div class="grid">
+      <div class="card"><h3>📦 Hardware &amp; BOM</h3><p>The full parts list with core and optional modules.</p><p><a href="https://github.com/MacNite/HiveHub#hardware">repository README →</a></p></div>
+      <div class="card"><h3>🐝 Multi-hive guide</h3><p>How up to 18 hives per ESP32 works — NAU7802 I2C scales and the TCA9548A mux.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/multi-hive.md">docs/multi-hive.md →</a></p></div>
+      <div class="card"><h3>🔌 Wiring</h3><p>Full pin map, pull-ups and the load-cell wiring reference.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md →</a></p></div>
+      <div class="card"><h3>🧩 PCB design</h3><p>KiCad Scale Module + Power Module and fabrication outputs.</p><p><a href="https://github.com/MacNite/HiveHub/tree/main/pcb-design">pcb-design/ →</a></p></div>
+      <div class="card"><h3>⚙️ Config tool</h3><p>Generate a firmware <code>secrets.h</code> in your browser, no values leave your machine.</p><p><a href="configurator.html">Open the config tool →</a></p></div>
+      <div class="card"><h3>🚀 Setup steps</h3><p>The five-step clone-to-live-data guide on the home page.</p><p><a href="index.html#setup">Set up your own HiveHub →</a></p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
+    <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
+    <span><a href="index.html">Home</a> · <a href="https://github.com/MacNite/HiveHub">GitHub</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

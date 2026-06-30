@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>HiveHub — ESP32 dual beehive scale</title>
-<meta name="description" content="HiveHub is an open-source ESP32 dual beehive scale: weight, temperature, sound, vibration and power monitoring with a self-hosted FastAPI backend." />
+<title>HiveHub — ESP32 data collector for up to 18 beehives</title>
+<meta name="description" content="HiveHub is an open-source ESP32 data collector for up to 18 beehives: weight, temperature, sound, vibration and power monitoring with a self-hosted FastAPI backend." />
 <link rel="stylesheet" href="assets/style.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%9D%3C/text%3E%3C/svg%3E" />
 </head>
@@ -17,9 +17,10 @@
       <a href="#features">Features</a>
       <a href="#hardware">Hardware</a>
       <a href="#setup">Setup</a>
+      <a href="build.html">Build your own</a>
       <a href="insights.html">Insights</a>
       <a href="configurator.html">Config tool</a>
-      <a href="https://github.com/MacNite/HiveScale">GitHub</a>
+      <a href="https://github.com/MacNite/HiveHub">GitHub</a>
     </nav>
   </div>
 </header>
@@ -28,16 +29,17 @@
 <section class="hero" style="border-top:none">
   <div class="wrap">
     <span class="badge">⚠ Work in progress — PCBs are not yet field-tested</span>
-    <h1>Weigh two beehives.<br>Self-hosted. Open source.</h1>
+    <h1>Collect data from up to 18 beehives.<br>Self-hosted. Open source.</h1>
     <p class="lead">
-      HiveHub is an ESP32-based dual beehive scale system. It tracks weight,
-      temperature, humidity, in-hive sound and vibration, and power state for two
-      hives, and sends everything to your own FastAPI + PostgreSQL backend.
+      HiveHub is an ESP32-based data collector for beehive sensors and scales. It
+      tracks weight, temperature, humidity, in-hive sound and vibration, and power
+      state for up to 18 hives per ESP32, and sends everything to your own
+      FastAPI + PostgreSQL backend.
     </p>
     <div class="cta">
       <a class="btn" href="#setup">🚀 Get started</a>
-      <a class="btn ghost" href="configurator.html">⚙️ Config tool</a>
-      <a class="btn ghost" href="https://github.com/MacNite/HiveScale">★ Star on GitHub</a>
+      <a class="btn ghost" href="build.html">🔧 Build your own</a>
+      <a class="btn ghost" href="https://github.com/MacNite/HiveHub">★ Star on GitHub</a>
     </div>
   </div>
 </section>
@@ -45,10 +47,10 @@
 <section id="features">
   <div class="wrap">
     <h2>What it measures</h2>
-    <p class="sub">Two independent hives, one ESP32. Every sensor below is optional and
+    <p class="sub">Up to 18 hives per ESP32. Every sensor below is optional and
        compiled in per device — start with weight and add the rest as you build.</p>
     <div class="grid">
-      <div class="card"><div class="ico">⚖️</div><h3>Dual load cells</h3><p>Two HX711 amplifiers drive two independent hive scales for per-colony weight trends.</p></div>
+      <div class="card"><div class="ico">⚖️</div><h3>Up to 18 scales</h3><p>HX711 and NAU7802 load-cell channels (I2C, with an optional mux) give each colony its own scale — up to 18 hives per ESP32.</p></div>
       <div class="card"><div class="ico">🌡️</div><h3>Per-hive temperature</h3><p>DS18B20 probes on a shared 1-Wire bus, or an in-hive BLE sensor as an alternative source.</p></div>
       <div class="card"><div class="ico">🔊</div><h3>In-hive sound</h3><p>Stereo INMP441 I2S microphones with per-band FFT energy to catch piping and stress.</p></div>
       <div class="card"><div class="ico">📳</div><h3>Comb vibration</h3><p>An in-hive BLE sensor (e.g. HiveInside) captures the ~20 Hz pre-swarm signal microphones miss.</p></div>
@@ -70,14 +72,14 @@
     <p class="sub">A mains-or-solar ESP32 dev board plus off-the-shelf modules on pin headers —
        no SMD soldering required for the core build.</p>
     <div class="grid">
-      <div class="card"><h3>Core</h3><p>ESP32 dev board · 2× HX711 + load cells · 2× DS18B20 probes · 2× INMP441 mics · SHT4x · DS3231 RTC · microSD module · setup button · 3.3 V supply.</p></div>
+      <div class="card"><h3>Core</h3><p>ESP32 dev board · HX711 + NAU7802 load-cell channels (scale to 18 hives) · DS18B20 probes · INMP441 mics · SHT4x · DS3231 RTC · microSD module · setup button · 3.3 V supply.</p></div>
       <div class="card"><h3>Optional off-grid</h3><p>INA219 solar telemetry · MAX17048 LiPo gauge · CN3791 solar charger · TPS63020 buck-boost · TP4056 · LiPo + solar panel.</p></div>
       <div class="card"><h3>Boards</h3><p>KiCad <strong>Scale Module</strong> (central, header-based) and a <strong>Power Module</strong> (solar / battery / LTE) connected over I2C / ESP-NOW. Fabrication outputs included.</p></div>
     </div>
     <p style="margin-top:1.5rem">
       Full pin mapping, wiring diagrams and the BOM live in the
-      <a href="https://github.com/MacNite/HiveScale#hardware">repository README</a> and
-      <a href="https://github.com/MacNite/HiveScale/blob/main/docs/wiring.md">docs/wiring.md</a>.
+      <a href="https://github.com/MacNite/HiveHub#hardware">repository README</a> and
+      <a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md</a>.
     </p>
   </div>
 </section>
@@ -92,8 +94,8 @@
       <div class="step"><div class="n">1</div><div>
         <h3>Get the code</h3>
         <p>Clone the repository and open the firmware project in PlatformIO (VS Code extension or CLI).</p>
-        <pre>git clone https://github.com/MacNite/HiveScale.git
-cd HiveScale</pre>
+        <pre>git clone https://github.com/MacNite/HiveHub.git
+cd HiveHub</pre>
       </div></div>
 
       <div class="step"><div class="n">2</div><div>
@@ -103,7 +105,7 @@ cd HiveScale</pre>
 cp .env.example .env
 # edit API_KEY, HIVEPAL_SERVICE_API_KEY, DB password, volumes
 docker compose up -d</pre>
-        <p class="muted">See <a href="https://github.com/MacNite/HiveScale/blob/main/docs/docker-install.md">docker-install.md</a> or <a href="https://github.com/MacNite/HiveScale/blob/main/docs/truenas-install.md">truenas-install.md</a> for hosting details.</p>
+        <p class="muted">See <a href="https://github.com/MacNite/HiveHub/blob/main/docs/docker-install.md">docker-install.md</a> or <a href="https://github.com/MacNite/HiveHub/blob/main/docs/truenas-install.md">truenas-install.md</a> for hosting details.</p>
       </div></div>
 
       <div class="step"><div class="n">3</div><div>
@@ -144,12 +146,12 @@ pio device monitor   # 115200 baud</pre>
   <div class="wrap">
     <h2>Dig deeper</h2>
     <div class="grid">
-      <div class="card"><h3>📘 API reference</h3><p>Device &amp; HivePal endpoints, schemas and the measurement payload.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/api.md">docs/api.md →</a></p></div>
-      <div class="card"><h3>🔌 Wiring</h3><p>Full pin map, pull-ups and the load-cell wiring reference.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/wiring.md">docs/wiring.md →</a></p></div>
-      <div class="card"><h3>📳 Accelerometer</h3><p>Per-hive vibration monitoring and the ~20 Hz swarm signal.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
-      <div class="card"><h3>📶 BLE sensor</h3><p>Pairing the HolyIot 25015 in-hive beacon.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/holyiot-ble-sensor.md">docs/holyiot-ble-sensor.md →</a></p></div>
+      <div class="card"><h3>📘 API reference</h3><p>Device &amp; HivePal endpoints, schemas and the measurement payload.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/api.md">docs/api.md →</a></p></div>
+      <div class="card"><h3>🔌 Wiring</h3><p>Full pin map, pull-ups and the load-cell wiring reference.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md →</a></p></div>
+      <div class="card"><h3>📳 Accelerometer</h3><p>Per-hive vibration monitoring and the ~20 Hz swarm signal.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
+      <div class="card"><h3>📶 BLE sensor</h3><p>Pairing the HolyIot 25015 in-hive beacon.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/holyiot-ble-sensor.md">docs/holyiot-ble-sensor.md →</a></p></div>
       <div class="card"><h3>🧠 Insights</h3><p>The rule-based colony detector catalogue and its sources.</p><p><a href="insights.html">How insights work →</a></p></div>
-      <div class="card"><h3>🛰️ Off-grid notes</h3><p>Solar (INA219) and LiPo (MAX17048) power-telemetry behaviour.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/offgrid-firmware-notes.md">docs/offgrid-firmware-notes.md →</a></p></div>
+      <div class="card"><h3>🛰️ Off-grid notes</h3><p>Solar (INA219) and LiPo (MAX17048) power-telemetry behaviour.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/offgrid-firmware-notes.md">docs/offgrid-firmware-notes.md →</a></p></div>
     </div>
   </div>
 </section>
@@ -157,7 +159,7 @@ pio device monitor   # 115200 baud</pre>
 <footer>
   <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
     <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
-    <span><a href="https://github.com/MacNite/HiveScale">GitHub</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
+    <span><a href="https://github.com/MacNite/HiveHub">GitHub</a> · <a href="build.html">Build your own</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
   </div>
 </footer>
 
