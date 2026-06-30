@@ -2,7 +2,7 @@
 // local API and renders the active data-group view.
 
 import { api } from "./api.js";
-import { el } from "./format.js";
+import { el, relAge } from "./format.js";
 import { GROUPS, clearCharts, drawCharts } from "./views.js";
 
 const RANGES = {
@@ -48,12 +48,25 @@ async function loadData() {
   state.loading = true;
   setStatus("Loading…");
   const { days, limit } = RANGES[state.range];
-  const start = new Date(Date.now() - days * 86400000).toISOString();
   const id = state.deviceId;
 
-  const [measurements, latest, config, channels, insights, firmware] = await Promise.all([
-    api.measurements(id, { start, limit }).catch(() => []),
-    api.latest(id, 1).catch(() => []),
+  // Fetch the latest reading first and anchor the chart window to ITS timestamp
+  // rather than the browser's wall-clock now. A device whose measurement
+  // timestamps don't line up with the browser clock (clock skew, timezone, a
+  // brief reporting gap) would otherwise leave a now-based window empty even
+  // though the latest-value cards — fetched without a window — still populate.
+  const latest = await api.latest(id, 1).catch(() => []);
+  if (state.deviceId !== id) return;
+  const latestRow = (latest && latest[0]) || null;
+  const anchorMs = latestRow ? new Date(latestRow.measured_at).getTime() : Date.now();
+  const start = new Date(anchorMs - days * 86400000).toISOString();
+
+  // Don't silently swallow a failed time-series fetch into an empty chart — keep
+  // the error so the status bar can explain why the graph is blank.
+  let measurements = [];
+  let measError = null;
+  const [, config, channels, insights, firmware] = await Promise.all([
+    api.measurements(id, { start, limit }).then((r) => { measurements = r || []; }, (e) => { measError = e; }),
     api.config(id).catch(() => null),
     api.channels(id).catch(() => null),
     api.insightsSummary(id).catch(() => null),
@@ -63,16 +76,15 @@ async function loadData() {
   // ignore the response if the user switched device/range while we were loading
   if (state.deviceId !== id) return;
 
-  state.data = {
-    measurements: measurements || [],
-    latest: (latest && latest[0]) || null,
-    config,
-    channels,
-    insights,
-    firmware,
-  };
+  state.data = { measurements, latest: latestRow, config, channels, insights, firmware };
   state.loading = false;
-  setStatus(`${state.data.measurements.length} points · updated ${new Date().toLocaleTimeString()}`);
+  if (measError) {
+    const code = measError.status ? ` (HTTP ${measError.status})` : "";
+    setStatus(`Chart data failed to load${code}: ${measError.message}`);
+    toast(`Could not load chart data${code}: ${measError.message}`, "error");
+  } else {
+    setStatus(`${measurements.length} points · latest reading ${relAge(latestRow && latestRow.measured_at)}`);
+  }
   render();
 }
 
