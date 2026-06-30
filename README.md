@@ -68,6 +68,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Insights** — backend auto-evaluation of weight, temperature, sound, vibration, and entrance traffic per hive, based on [these publications](docs/insights-sources-tldr.md).
 - **Optional off-grid mode** — solar/LiPo charging with INA219 solar telemetry and MAX17048 LiPo telemetry.
 - **Optional entrance bee counters** — wired [BeeCounter](https://github.com/MacNite/2026-easy-bee-counter) (I2C) or wireless HiveTraffic (BLE/GATT).
+- **Built-in web dashboard (optional)** — a login-free, dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts: device dropdown, per-hive selection, charts for every data group, plus firmware/OTA and calibration controls. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
 - **[HivePal](https://github.com/martinhrvn/hive-pal) integration** — dedicated `/api/v1/app/...` endpoints using a HivePal service key, per-user JWTs, and per-user access roles.
 - **Optional MQTT bridge** — mirror every reading to an MQTT broker (Home Assistant, Node-RED, openHAB…) with Home Assistant auto-discovery, alongside the built-in PostgreSQL store. Off by default; see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration).
 - **Breakout PCB design** — KiCad Scale Module + Power Module with fabrication outputs.
@@ -81,8 +82,10 @@ Every sensor is optional and compiled in per device — start with weight and ad
 HiveHub/
 ├── firmware/                   # ESP32 PlatformIO project (src/, include/)
 ├── server/                     # Python FastAPI backend, insights, migrations
+│   └── dashboard/              # Built-in login-free web dashboard (served at /dashboard)
 ├── docker/                     # Docker Compose deployment
 ├── website/                    # Static site + secrets.h configurator (GitHub Pages)
+│   └── dashboard-demo/         # Backend-free dashboard demo (sample data)
 ├── docs/                       # Hardware, API, deployment, and feature docs
 ├── pcb-design/                 # KiCad breakout PCB design and fabrication files
 ├── test-data/                  # Mock server and decoder/insight unit tests
@@ -295,6 +298,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | Optional | DB connection pool bounds (default `1` / `10`) |
 | `RATE_LIMIT_ENABLED` / `RATE_LIMIT_DEFAULT` | Optional | Per-client-IP rate limit (default on, `120/minute`) |
 | `MAX_BODY_BYTES` / `MAX_FIRMWARE_BYTES` | Optional | Request-body and firmware-upload size caps (default 256 KiB / 16 MiB) |
+| `ENABLE_LOCAL_DASHBOARD` | Optional | Serve the built-in login-free dashboard at `/dashboard` and the auth-free `/api/v1/local/*` read API (default off — single-owner self-hosts on a trusted LAN only) |
 | `INSIGHTS_RECONCILE_*` | Optional | Background insight-history reconciliation (see `server/.env.example`) |
 | `MQTT_*` | Optional | MQTT bridge to Home Assistant / Node-RED / openHAB (off by default — see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration)) |
 | `TZ` | Optional | Server timezone, for example `Europe/Berlin` |
@@ -392,6 +396,20 @@ Require both `X-HivePal-Service-Key` and a per-user `Authorization: Bearer <hive
 | `POST` | `/api/v1/app/devices/{id}/commands/update-beecounter` · `/update-hiveinside` | Trigger a sub-device OTA relay |
 | `GET` | `/api/v1/app/devices/{id}/insights[/summary\|/history]` | Rule-based colony insights, summary, and history |
 
+### Local dashboard endpoints (optional, auth-free)
+
+Enabled only when `ENABLE_LOCAL_DASHBOARD=true`. **No authentication** and **not scoped to a user** — they serve every device on the server, so keep them on a trusted LAN / behind your own reverse proxy. They power the built-in `/dashboard` UI and mirror the read paths above. When disabled, every route returns `404`.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/local/devices` | List all devices + scale-channel names |
+| `GET` | `/api/v1/local/devices/{id}/measurements[/latest]` | Measurements (date filter) / latest |
+| `GET` | `/api/v1/local/devices/{id}/config` | Device configuration |
+| `GET` | `/api/v1/local/devices/{id}/insights/summary` | Highest-severity insight summary |
+| `GET`/`POST` | `/api/v1/local/devices/{id}/firmware/status` · (upload) · `/approve` | OTA status / upload binary / approve |
+| `POST` | `/api/v1/local/devices/{id}/calibration/start` · `/stop` | Start / stop calibration mode |
+| `POST` | `/api/v1/local/devices/{id}/temp-compensation/fit` | Fit a load-cell temperature coefficient |
+
 ---
 
 ## Measurement payload highlights
@@ -457,6 +475,7 @@ A full index is in [docs/README.md](docs/README.md). Highlights:
 
 - [docs/wiring.md](docs/wiring.md) — full wiring reference.
 - [docs/api.md](docs/api.md) — complete API reference.
+- [server/dashboard/README.md](server/dashboard/README.md) — the built-in web dashboard ([live demo](https://macnite.github.io/HiveHub/dashboard-demo/)).
 - [docs/insights.md](docs/insights.md) — rule-based colony insights and detector catalogue.
 - [docs/holyiot-ble-sensor.md](docs/holyiot-ble-sensor.md) · [docs/ruuvitag-ble-sensor.md](docs/ruuvitag-ble-sensor.md) · [docs/beehivemonitoring-gatt.md](docs/beehivemonitoring-gatt.md) — in-hive BLE sensors.
 - [docs/hivetraffic-bee-counter.md](docs/hivetraffic-bee-counter.md) — wireless entrance counter.

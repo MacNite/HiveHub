@@ -41,6 +41,7 @@ hardware list, firmware/server setup, and API summary, start with the
 
 ## Backend, API & insights
 
+- [../server/dashboard/README.md](../server/dashboard/README.md) — the optional **built-in web dashboard** (auth-free `/api/v1/local/*` API served at `/dashboard`) for single-owner self-hosts; [try the live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
 - [api.md](api.md) — complete REST API reference (device + HivePal app endpoints, payload, schema).
 - [temperature-compensation.md](temperature-compensation.md) — backend load-cell temperature-drift correction and the fit endpoint.
 - [insights.md](insights.md) — rule-based colony insight detector catalogue.

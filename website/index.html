@@ -18,6 +18,7 @@
       <a href="#hardware">Hardware</a>
       <a href="#setup">Setup</a>
       <a href="build.html">Build your own</a>
+      <a href="dashboard-demo/">Dashboard demo</a>
       <a href="insights.html">Insights</a>
       <a href="configurator.html">Config tool</a>
       <a href="https://github.com/MacNite/HiveHub">GitHub</a>
@@ -38,6 +39,7 @@
     </p>
     <div class="cta">
       <a class="btn" href="#setup">🚀 Get started</a>
+      <a class="btn ghost" href="dashboard-demo/">📊 Try the dashboard demo</a>
       <a class="btn ghost" href="build.html">🔧 Build your own</a>
       <a class="btn ghost" href="https://github.com/MacNite/HiveHub">★ Star on GitHub</a>
     </div>
@@ -62,6 +64,7 @@
       <div class="card"><div class="ico">🔑</div><h3>Claim-code pairing</h3><p>Claim devices from HivePal without touching the database — just a pairing code.</p></div>
       <div class="card"><div class="ico">📡</div><h3>OTA &amp; remote commands</h3><p>Over-the-air updates, remote calibration, reboot, Wi-Fi reset and config versioning.</p></div>
       <div class="card"><div class="ico">🧠</div><h3>Rule-based insights</h3><p>The backend auto-evaluates weight, temperature, sound and vibration into colony insights.</p></div>
+      <div class="card"><div class="ico">📊</div><h3>Built-in dashboard</h3><p>An optional, login-free web dashboard served straight from the backend — charts, status and OTA/calibration controls. <a href="dashboard-demo/">Try the demo →</a></p></div>
     </div>
   </div>
 </section>
@@ -131,9 +134,14 @@ pio device monitor   # 115200 baud</pre>
 
       <div class="step"><div class="n">5</div><div>
         <h3>Claim &amp; watch the data</h3>
-        <p>On first boot the device sends measurements with its claim code. Claim it from
+        <p>On first boot the device sends measurements with its claim code. Two ways to watch it:</p>
+        <p><strong>Built-in dashboard (no account):</strong> set <code>ENABLE_LOCAL_DASHBOARD=true</code>
+           and open <code>http://&lt;your-host&gt;:31115/dashboard</code> — a login-free web UI with
+           charts, status, OTA and calibration for a single-owner self-host
+           (<a href="dashboard-demo/">see the live demo</a>).</p>
+        <p><strong>HivePal (multi-user app):</strong> claim the device from
            <a href="https://github.com/martinhrvn/hive-pal">HivePal</a> with
-           <code>POST /api/v1/app/devices/claim</code>, then explore live charts and rule-based insights.</p>
+           <code>POST /api/v1/app/devices/claim</code> for accounts, sharing and mobile access.</p>
         <p class="muted">Field configuration without reflashing: press the setup button (GPIO27) to open the
            <code>HiveHub-Setup-XXXX</code> Wi-Fi provisioning portal at <code>http://192.168.4.1</code>.</p>
       </div></div>
@@ -146,6 +154,7 @@ pio device monitor   # 115200 baud</pre>
   <div class="wrap">
     <h2>Dig deeper</h2>
     <div class="grid">
+      <div class="card"><h3>📊 Built-in dashboard</h3><p>The login-free web dashboard served from the backend — how to enable and use it.</p><p><a href="dashboard-demo/">Live demo →</a> · <a href="https://github.com/MacNite/HiveHub/blob/main/server/dashboard/README.md">docs →</a></p></div>
       <div class="card"><h3>📘 API reference</h3><p>Device &amp; HivePal endpoints, schemas and the measurement payload.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/api.md">docs/api.md →</a></p></div>
       <div class="card"><h3>🔌 Wiring</h3><p>Full pin map, pull-ups and the load-cell wiring reference.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md →</a></p></div>
       <div class="card"><h3>📳 Accelerometer</h3><p>Per-hive vibration monitoring and the ~20 Hz swarm signal.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
@@ -159,7 +168,7 @@ pio device monitor   # 115200 baud</pre>
 <footer>
   <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
     <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
-    <span><a href="https://github.com/MacNite/HiveHub">GitHub</a> · <a href="build.html">Build your own</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
+    <span><a href="https://github.com/MacNite/HiveHub">GitHub</a> · <a href="build.html">Build your own</a> · <a href="dashboard-demo/">Dashboard demo</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
   </div>
 </footer>
 

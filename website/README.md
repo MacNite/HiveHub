@@ -17,6 +17,12 @@ A small, dependency-free static site for HiveHub:
   for a future parts/BOM configurator (choose hive count + sensors → tailored
   bill of materials) alongside assembly and setup tutorials. For now it links to
   the existing hardware BOM, wiring, multi-hive guide, PCB design and config tool.
+- **`dashboard-demo/`** — a backend-free, click-through demo of the built-in
+  HiveHub dashboard (`server/dashboard/`) running on generated sample data. This
+  is what the site's **"Dashboard demo"** links point at. Its shared CSS/JS are
+  verbatim copies of `server/dashboard/assets/*`; only `index.html` and
+  `assets/api.js` (the sample-data source) are demo-specific. See
+  [`dashboard-demo/README.md`](dashboard-demo/README.md) for how to keep it in sync.
 - **`assets/`** — shared stylesheet and the configurator JavaScript.
 
 There is no build step — it is plain HTML/CSS/JS.
