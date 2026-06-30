@@ -1,4 +1,4 @@
-"""Helpers for bulk-importing measurements parsed from a HiveScale SD card.
+"""Helpers for bulk-importing measurements parsed from a HiveHub SD card.
 
 The ESP32 keeps an append-only ``/measurements.ndjson`` backup on its SD card.
 A beekeeper can pull that file in AP mode and upload it later through the HivePal

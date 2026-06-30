@@ -125,7 +125,7 @@
 // ==============================
 // MULTI-HIVE CAPACITY (up to 18 hives per ESP32)
 // ==============================
-// HiveScale historically served exactly two hives (two HX711 load cells, two
+// HiveHub historically served exactly two hives (two HX711 load cells, two
 // DS18B20 probes, two BLE slots). v0.20.0 generalises this to a dynamic registry
 // of up to MAX_HIVES hives, each carrying one scale source and at most one
 // non-scale in-hive sensor, configured from the provisioning portal and stored as a per-hive JSON blob in
@@ -331,20 +331,20 @@
 // ==============================
 // HIVEINSIDE GATT CLIENT (optional, requires HiveInside BLE_MODE=BLE_MODE_GATT)
 // ==============================
-// When enabled, HiveScale connects to a paired HiveInside sensor as a GATT
+// When enabled, HiveHub connects to a paired HiveInside sensor as a GATT
 // central *after* the passive scan locates it by MAC address. It reads the full
 // JSON measurement characteristic (every FFT band, RMS, peak, mic bands) and
 // then disconnects. Only devices found by MAC without recognisable advertising
 // data trigger a connection attempt, so HolyIot and advertising-mode HiveInside
 // sensors are unaffected. Set to 0 to use passive advertising scan exclusively.
 //
-// Both HiveScale (this flag) and HiveInside (BLE_MODE_GATT) must be compiled
+// Both HiveHub (this flag) and HiveInside (BLE_MODE_GATT) must be compiled
 // with matching modes; pairing itself (MAC address) is unchanged.
 //
 // Defaults to 1: current HiveInside firmware is GATT-ONLY (its broadcast/beacon
 // advertising mode was removed), so it never emits the manufacturer-data blob
 // parseHiveInside() expects. Without the GATT client a paired HiveInside is
-// found by MAC during the scan but yields no measurement, so HiveScale uploads
+// found by MAC during the scan but yields no measurement, so HiveHub uploads
 // nothing for it. HolyIot beacons are unaffected — they carry advertising data,
 // so the post-scan GATT step is skipped for them.
 #ifndef HIVEINSIDE_USE_GATT
@@ -357,9 +357,9 @@
 #define HIVEINSIDE_GATT_CONNECT_TIMEOUT_S 5
 #endif
 
-// Seconds before HiveScale's next scan that HiveInside should already be awake
+// Seconds before HiveHub's next scan that HiveInside should already be awake
 // and listening. Written to the wake-sync characteristic each cycle as
-// (sendInterval - lead). HiveScale holds a fixed boot-to-boot cadence (see
+// (sendInterval - lead). HiveHub holds a fixed boot-to-boot cadence (see
 // enterDeepSleepUntilNextCycle in storage_power.cpp), so this lead need only
 // cover the small in-cycle scan offset plus one interval of HiveInside RC-timer
 // drift in the "HiveInside wakes late" direction; the "wakes early" direction is
@@ -373,10 +373,10 @@
 // ==============================
 // HIVEINSIDE FIRMWARE-OVER-BLE (OTA relay)
 // ==============================
-// HiveScale (the only WiFi node) relays a HiveInside firmware image to a paired
+// HiveHub (the only WiFi node) relays a HiveInside firmware image to a paired
 // HiveInside ESP32-C6 over GATT, the same way it relays a BeeCounter image over
 // I2C (see updateBeeCounter / bee_counter_client). The backend queues an
-// `update_hiveinside` command with the image URL + CRC-32; HiveScale STREAMS the
+// `update_hiveinside` command with the image URL + CRC-32; HiveHub STREAMS the
 // HTTPS download straight into the HiveInside OTA characteristics (it never
 // buffers the whole >1 MB image — the WROOM has no PSRAM), and the HiveInside
 // device verifies the end-to-end CRC before swapping its OTA slot.
