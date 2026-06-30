@@ -1,12 +1,16 @@
 // Thin client for the HiveHub local dashboard API (/api/v1/local/*).
-// Served from the same origin as the API, so all paths are relative and no
-// credentials/headers are needed — the local API is auth-free by design.
+// Served from the same origin as the API, so all paths are relative. The login
+// session rides in an HttpOnly cookie (credentials: same-origin); a 401 means
+// the session is missing/expired, which we broadcast so the app can re-prompt.
 
 const BASE = "/api/v1/local";
 
 async function req(path, opts = {}) {
-  const res = await fetch(BASE + path, opts);
+  const res = await fetch(BASE + path, { credentials: "same-origin", ...opts });
   if (!res.ok) {
+    if (res.status === 401) {
+      window.dispatchEvent(new CustomEvent("dashboard-unauthorized"));
+    }
     let detail = res.statusText;
     try {
       const body = await res.json();

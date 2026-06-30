@@ -25,9 +25,8 @@
       <label class="field">
         <span class="field-label">Hive</span>
         <select id="hive-select" aria-label="Select hive">
+          <!-- populated by app.js from the device's reported hives (up to 18) -->
           <option value="all">All hives</option>
-          <option value="1">Hive 1</option>
-          <option value="2">Hive 2</option>
         </select>
       </label>
 
@@ -45,6 +44,11 @@
       <button id="refresh-btn" class="btn small" type="button" title="Refresh">
         ↻ Refresh
       </button>
+
+      <div class="user-area" id="user-area" hidden>
+        <span class="user-chip" id="user-chip"></span>
+        <button id="logout-btn" class="btn small ghost" type="button" title="Sign out">Sign out</button>
+      </div>
     </div>
   </header>
 

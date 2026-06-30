@@ -2,8 +2,9 @@
 // local API and renders the active data-group view.
 
 import { api } from "./api.js";
+import { auth } from "./auth.js";
 import { el } from "./format.js";
-import { GROUPS, clearCharts, drawCharts } from "./views.js";
+import { GROUPS, clearCharts, drawCharts, availableHives, hiveLabel } from "./views.js";
 
 const RANGES = {
   "1d":    { days: 1,    limit: 2000 },
@@ -14,10 +15,14 @@ const RANGES = {
 };
 
 const ui = {
+  topbarControls: document.querySelector(".topbar-controls"),
   deviceSelect: document.getElementById("device-select"),
   hiveSelect: document.getElementById("hive-select"),
   rangeGroup: document.getElementById("range-group"),
   refreshBtn: document.getElementById("refresh-btn"),
+  userArea: document.getElementById("user-area"),
+  userChip: document.getElementById("user-chip"),
+  logoutBtn: document.getElementById("logout-btn"),
   sidebar: document.getElementById("sidebar"),
   content: document.getElementById("content"),
   status: document.getElementById("device-status"),
@@ -31,6 +36,7 @@ const state = {
   group: "overview",
   data: null,       // { measurements, latest, config, insights, firmware }
   loading: false,
+  authUser: null,   // { username, role } once logged in
 };
 
 // ── toast ────────────────────────────────────────────────────────────────────
@@ -44,7 +50,7 @@ function toast(msg, kind = "") {
 
 // ── data loading ──────────────────────────────────────────────────────────────
 async function loadData() {
-  if (!state.deviceId) return;
+  if (!state.deviceId || !state.authUser) return;
   state.loading = true;
   setStatus("Loading…");
   const { days, limit } = RANGES[state.range];
@@ -94,6 +100,7 @@ function buildState() {
     channels: d.channels,
     insights: d.insights,
     firmware: d.firmware,
+    authUser: state.authUser,
     toast,
     reload: loadData,
     actions: {
@@ -104,6 +111,12 @@ function buildState() {
       fitTempComp: (p) => api.fitTempCompensation(state.deviceId, p),
       updateConfig: (p) => api.updateConfig(state.deviceId, p),
       updateChannels: (p) => api.updateChannels(state.deviceId, p),
+      // Dashboard account management (auth API). User-management calls require
+      // the admin role server-side.
+      listUsers: () => auth.listUsers(),
+      createUser: (u, p, r) => auth.createUser(u, p, r),
+      deleteUser: (id) => auth.deleteUser(id),
+      changePassword: (cur, next) => auth.changePassword(cur, next),
     },
   };
 }
@@ -118,6 +131,18 @@ function renderSidebar() {
     }));
 }
 
+// Rebuild the hive selector from the hives the current device actually reports
+// (up to 18), labelled with their names. Preserves the current selection, or
+// falls back to "All hives" when that hive is no longer present (device switch).
+function populateHiveSelect(vstate) {
+  const hives = availableHives(vstate);
+  if (state.hive !== "all" && !hives.includes(Number(state.hive))) state.hive = "all";
+  const options = [el("option", { value: "all" }, "All hives")];
+  for (const n of hives) options.push(el("option", { value: String(n) }, hiveLabel(vstate, n)));
+  ui.hiveSelect.replaceChildren(...options);
+  ui.hiveSelect.value = state.hive;
+}
+
 function render() {
   renderSidebar();
   clearCharts();
@@ -128,8 +153,10 @@ function render() {
   } else if (!state.data) {
     container.append(el("div", { class: "empty-state" }, "Loading…"));
   } else {
+    const vstate = buildState();
+    populateHiveSelect(vstate);
     try {
-      group.render(container, buildState());
+      group.render(container, vstate);
     } catch (err) {
       container.append(el("div", { class: "empty-state" }, "Failed to render this view: " + err.message));
       console.error(err);
@@ -166,26 +193,147 @@ function wireEvents() {
     loadData();
   });
   ui.refreshBtn.addEventListener("click", loadData);
+  if (ui.logoutBtn) {
+    ui.logoutBtn.addEventListener("click", async () => {
+      try { await auth.logout(); } catch (_) { /* ignore — clear locally anyway */ }
+      state.authUser = null;
+      state.data = null;
+      state.devices = [];
+      renderLogin({ message: "You have been signed out." });
+    });
+  }
+  // Session expired or missing (a data call returned 401): drop back to login.
+  window.addEventListener("dashboard-unauthorized", () => {
+    if (!state.authUser) return;
+    state.authUser = null;
+    state.data = null;
+    renderLogin({ message: "Your session has expired. Please sign in again." });
+  });
   window.addEventListener("resize", () => requestAnimationFrame(drawCharts));
   // auto-refresh every 60s
   setInterval(() => { if (!document.hidden && !state.loading) loadData(); }, 60000);
 }
 
-async function init() {
-  wireEvents();
+// ── auth gate (login / first-run setup) ───────────────────────────────────────
+function showAuthScreen(node) {
+  if (ui.topbarControls) ui.topbarControls.hidden = true;
+  if (ui.userArea) ui.userArea.hidden = true;
+  ui.sidebar.replaceChildren();
+  ui.status.hidden = true;
+  ui.content.replaceChildren(el("div", { class: "auth-wrap" }, node));
+}
+
+function renderUserArea() {
+  if (!ui.userArea) return;
+  if (!state.authUser) { ui.userArea.hidden = true; return; }
+  ui.userChip.textContent = `${state.authUser.username} · ${state.authUser.role}`;
+  ui.userArea.hidden = false;
+}
+
+function authField(labelText, input) {
+  return el("label", { class: "auth-field" }, el("span", {}, labelText), input);
+}
+
+function renderLogin(opts = {}) {
+  const u = el("input", { type: "text", autocomplete: "username", required: true });
+  const p = el("input", { type: "password", autocomplete: "current-password", required: true });
+  const btn = el("button", { class: "btn", type: "submit" }, "Sign in");
+  const errLine = el("p", { class: "auth-error" }, opts.message || "");
+  const form = el("form", { class: "auth-card" },
+    el("h1", {}, "HiveHub Dashboard"),
+    el("p", { class: "auth-sub" }, "Sign in to view and manage your hives."),
+    authField("Username", u),
+    authField("Password", p),
+    errLine,
+    el("div", { class: "form-actions" }, btn));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    btn.disabled = true; errLine.textContent = "";
+    try {
+      const r = await auth.login(u.value, p.value);
+      state.authUser = r.user;
+      await startApp();
+    } catch (err) {
+      errLine.textContent = err.message || "Sign in failed";
+      btn.disabled = false;
+    }
+  });
+  showAuthScreen(form);
+  u.focus();
+}
+
+function renderSetup() {
+  const u = el("input", { type: "text", autocomplete: "username", required: true });
+  const p = el("input", { type: "password", autocomplete: "new-password", required: true });
+  const p2 = el("input", { type: "password", autocomplete: "new-password", required: true });
+  const btn = el("button", { class: "btn", type: "submit" }, "Create admin account");
+  const errLine = el("p", { class: "auth-error" });
+  const form = el("form", { class: "auth-card" },
+    el("h1", {}, "Welcome to HiveHub"),
+    el("p", { class: "auth-sub" },
+      "Create the first administrator account to secure this dashboard. You can add more accounts later."),
+    authField("Username", u),
+    authField("Password (min 8 characters)", p),
+    authField("Confirm password", p2),
+    errLine,
+    el("div", { class: "form-actions" }, btn));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (p.value.length < 8) { errLine.textContent = "Password must be at least 8 characters."; return; }
+    if (p.value !== p2.value) { errLine.textContent = "Passwords do not match."; return; }
+    btn.disabled = true; errLine.textContent = "";
+    try {
+      const r = await auth.setup(u.value, p.value);
+      state.authUser = r.user;
+      await startApp();
+    } catch (err) {
+      errLine.textContent = err.message || "Setup failed";
+      btn.disabled = false;
+    }
+  });
+  showAuthScreen(form);
+  u.focus();
+}
+
+// ── app start (post-login) ────────────────────────────────────────────────────
+async function startApp() {
+  if (ui.topbarControls) ui.topbarControls.hidden = false;
+  renderUserArea();
   try {
     state.devices = await api.listDevices();
   } catch (err) {
+    if (err.status === 401) {
+      state.authUser = null;
+      renderLogin({ message: "Your session has expired. Please sign in again." });
+      return;
+    }
     ui.content.replaceChildren(el("div", { class: "empty-state" },
-      err.status === 404
-        ? "Local dashboard is disabled. Set ENABLE_LOCAL_DASHBOARD=true on the server."
-        : "Could not reach the HiveHub API: " + err.message));
+      "Could not reach the HiveHub API: " + err.message));
     return;
   }
   populateDevices();
   renderSidebar();
   if (state.deviceId) await loadData();
   else render();
+}
+
+async function init() {
+  wireEvents();
+  let status;
+  try {
+    status = await auth.status();
+  } catch (err) {
+    if (ui.topbarControls) ui.topbarControls.hidden = true;
+    ui.content.replaceChildren(el("div", { class: "empty-state" },
+      err.status === 404
+        ? "Local dashboard is disabled. Set ENABLE_LOCAL_DASHBOARD=true on the server."
+        : "Could not reach the HiveHub API: " + err.message));
+    return;
+  }
+  if (status.setup_required) { renderSetup(); return; }
+  if (!status.authenticated) { renderLogin(); return; }
+  state.authUser = status.user;
+  await startApp();
 }
 
 init();

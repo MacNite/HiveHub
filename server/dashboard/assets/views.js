@@ -49,19 +49,57 @@ function viewHead(title, desc) {
   return el("div", { class: "view-head" }, el("h1", {}, title), desc ? el("p", {}, desc) : null);
 }
 
-function hiveLabel(state, n) {
-  // Prefer the live channels endpoint (kept fresh after edits), then the name
-  // embedded in the device list, then a generic fallback.
-  const c = state.channels || {};
-  const fromChannels = n === 1 ? c.scale_1_display_name : c.scale_2_display_name;
-  const dev = state.device?.channels || {};
-  const fromDevice = n === 1 ? dev.scale_1 : dev.scale_2;
-  return fromChannels || fromDevice || `Hive ${n}`;
+// Cycle the (6-colour) palette so up to MAX_HIVES (18) series stay distinct.
+function paletteColor(i) {
+  return PALETTE[((i % PALETTE.length) + PALETTE.length) % PALETTE.length];
 }
 
-// hives shown given the top-bar hive selector ("all" | "1" | "2")
+// Hive indices a device exposes. A single ESP32 now carries up to 18 hives, so
+// the set is derived live from the latest reading's hives[] array, any custom
+// channel names, and the legacy flat scale_N keys. Falls back to the classic
+// two-hive shape only when nothing else is known.
+export function availableHives(state) {
+  const set = new Set();
+  for (const h of state.latest?.hives || []) {
+    if (h && h.index != null) set.add(Number(h.index));
+  }
+  const names = state.channels?.names || state.device?.channels?.names || {};
+  for (const k of Object.keys(names)) { const n = Number(k); if (n) set.add(n); }
+  if (state.latest) {
+    for (const key of Object.keys(state.latest)) {
+      const mm = /^scale_(\d+)_weight_kg(?:_compensated)?$/.exec(key);
+      if (mm && state.latest[key] != null) set.add(Number(mm[1]));
+    }
+  }
+  if (!set.size) { set.add(1); set.add(2); }
+  return [...set].filter((n) => n >= 1).sort((a, b) => a - b);
+}
+
+// Best display name for hive n: a custom channel name first, then the firmware-
+// reported name from the hives[] array, then the legacy single-channel fields,
+// then a generic "Hive n".
+export function hiveLabel(state, n) {
+  const names = state.channels?.names || {};
+  if (names[n] != null && names[n] !== "") return names[n];
+  const hv = (state.latest?.hives || []).find((h) => Number(h?.index) === Number(n));
+  if (hv && hv.name) return hv.name;
+  const c = state.channels || {};
+  const legacy = n === 1 ? c.scale_1_display_name : n === 2 ? c.scale_2_display_name : null;
+  const dev = state.device?.channels || {};
+  const fromDevice = (dev.names && dev.names[n]) || (n === 1 ? dev.scale_1 : n === 2 ? dev.scale_2 : null);
+  return legacy || fromDevice || `Hive ${n}`;
+}
+
+// Weight key for hive n: the temperature-compensated column when present (hives
+// 1–2), otherwise the raw per-hive weight synthesized for hives 3–18.
+function weightKey(m, n) {
+  const comp = `scale_${n}_weight_kg_compensated`;
+  return m && m[comp] != null ? comp : `scale_${n}_weight_kg`;
+}
+
+// hives shown given the top-bar hive selector ("all" | a specific index)
 function selectedHives(state) {
-  return state.hive === "all" ? [1, 2] : [Number(state.hive)];
+  return state.hive === "all" ? availableHives(state) : [Number(state.hive)];
 }
 
 // latest non-null among a list of candidate keys (first match wins)
@@ -102,10 +140,13 @@ function signed(v, digits, unit) {
 // ── OVERVIEW ─────────────────────────────────────────────────────────────────
 function renderOverview(root, state) {
   const m = state.latest || {};
-  const W = "scale_1_weight_kg_compensated", W2 = "scale_2_weight_kg_compensated";
-  const totalWeight = (isNum(m[W]) ? m[W] : 0) + (isNum(m[W2]) ? m[W2] : 0);
-  const anyWeight = isNum(m[W]) || isNum(m[W2]);
-  const w24 = changeOver(state.measurements, W, 24);
+  const hives = availableHives(state);
+  let totalWeight = 0, anyWeight = false;
+  for (const n of hives) {
+    const v = m[weightKey(m, n)];
+    if (isNum(v)) { totalWeight += v; anyWeight = true; }
+  }
+  const w24 = changeOver(state.measurements, weightKey(m, hives[0]), 24);
 
   const ins = state.insights;
   const sev = ins?.highest_severity;
@@ -145,8 +186,9 @@ function renderOverview(root, state) {
       statusCard,
       highestAlertCard(ins),
       chartCard("Weight trend", "Compensated mass over the selected range",
-        [seriesFrom(state.measurements, W, hiveLabel(state, 1), PALETTE[0]),
-         seriesFrom(state.measurements, W2, hiveLabel(state, 2), PALETTE[1])], { unit: "kg", yDigits: 1 })));
+        hives.map((n, i) =>
+          seriesFrom(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i))),
+        { unit: "kg", yDigits: 1 })));
 }
 
 function highestAlertCard(ins) {
@@ -181,8 +223,8 @@ function renderTemperature(root, state) {
   cards.push(metricCard("Ambient", fmt(m.ambient_temp_c, 1), "°C", "Outside the hive"));
 
   const series = hives.map((n, i) =>
-    seriesFrom(state.measurements, `hive_${n}_temp_c`, `${hiveLabel(state, n)}`, PALETTE[i]));
-  series.push(seriesFrom(state.measurements, "ambient_temp_c", "Ambient", PALETTE[2]));
+    seriesFrom(state.measurements, `hive_${n}_temp_c`, `${hiveLabel(state, n)}`, paletteColor(i)));
+  series.push(seriesFrom(state.measurements, "ambient_temp_c", "Ambient", paletteColor(hives.length)));
 
   root.append(tsView("Temperature", "Inside and ambient temperature", state,
     { cards, charts: [chartCard("Temperature", null, series, { unit: "°C", yDigits: 1 })] }));
@@ -192,13 +234,13 @@ function renderWeight(root, state) {
   const m = state.latest || {};
   const hives = selectedHives(state);
   const cards = hives.map((n) => {
-    const key = `scale_${n}_weight_kg_compensated`;
+    const key = weightKey(m, n);
     const c24 = changeOver(state.measurements, key, 24);
     return metricCard(`${hiveLabel(state, n)} weight`, fmt(m[key], 2), "kg",
       c24 != null ? `24h ${signed(c24, 2, "kg")}` : "Compensated");
   });
   const series = hives.map((n, i) =>
-    seriesFrom(state.measurements, `scale_${n}_weight_kg_compensated`, hiveLabel(state, n), PALETTE[i]));
+    seriesFrom(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i)));
 
   root.append(tsView("Weight", "Mass changes and harvest trend", state,
     { cards, charts: [chartCard("Weight", null, series, { unit: "kg", yDigits: 1 })] }));
@@ -206,17 +248,19 @@ function renderWeight(root, state) {
 
 function renderEnvironment(root, state) {
   const m = state.latest || {};
+  const hives = selectedHives(state);
   const pressureKeys = ["ble_1_pressure_hpa", "ble_2_pressure_hpa", "hivescale_1_pressure_hpa", "hivescale_2_pressure_hpa"];
+  const inHiveHumidity = latestCoalesce([m], hives.map((n) => `hive_${n}_humidity_percent`));
   const cards = [
     metricCard("Ambient humidity", fmt(m.ambient_humidity_percent, 1), "%", "Outside the hive"),
-    metricCard("In-hive humidity", fmt(m.hive_1_humidity_percent ?? m.hive_2_humidity_percent, 1), "%", "Brood area"),
+    metricCard("In-hive humidity", fmt(inHiveHumidity, 1), "%", "Brood area"),
     metricCard("Pressure", fmt(latestCoalesce([m], pressureKeys), 0), "hPa", "Barometric"),
   ];
   const charts = [
     chartCard("Humidity", "Ambient and in-hive relative humidity",
-      [seriesFrom(state.measurements, "ambient_humidity_percent", "Ambient", PALETTE[2]),
-       seriesFrom(state.measurements, "hive_1_humidity_percent", hiveLabel(state, 1), PALETTE[0]),
-       seriesFrom(state.measurements, "hive_2_humidity_percent", hiveLabel(state, 2), PALETTE[1])],
+      [seriesFrom(state.measurements, "ambient_humidity_percent", "Ambient", paletteColor(hives.length)),
+       ...hives.map((n, i) =>
+         seriesFrom(state.measurements, `hive_${n}_humidity_percent`, hiveLabel(state, n), paletteColor(i)))],
       { unit: "%", yDigits: 0 }),
     chartCard("Pressure", "Barometric pressure around the hive",
       [seriesCoalesce(state.measurements, pressureKeys, "Pressure", PALETTE[3])], { unit: "hPa", yDigits: 0 }),
@@ -421,24 +465,37 @@ function renderDevice(root, state) {
   });
   const configCard = el("div", { class: "card" }, el("h2", {}, "Configuration"), cfgForm);
 
-  // Hive (scale-channel) names
+  // Hive (scale-channel) names — one input per hive the device reports (up to 18).
   const chData = state.channels || {};
-  const ch1 = el("input", { type: "text", value: chData.scale_1_display_name ?? "", placeholder: "Hive 1" });
-  const ch2 = el("input", { type: "text", value: chData.scale_2_display_name ?? "", placeholder: "Hive 2" });
+  const chNames = chData.names || {};
+  const curName = (n) =>
+    chNames[n] ??
+    (n === 1 ? chData.scale_1_display_name : n === 2 ? chData.scale_2_display_name : null) ??
+    "";
+  const chInputs = availableHives(state).map((n) => {
+    const fw = (state.latest?.hives || []).find((h) => Number(h?.index) === n);
+    const initial = curName(n);
+    return {
+      n,
+      initial,
+      input: el("input", { type: "text", value: initial, placeholder: (fw && fw.name) || `Hive ${n}` }),
+    };
+  });
   const chBtn = el("button", { class: "btn", type: "submit" }, "Save names");
   const chForm = el("form", {},
-    el("div", { class: "form-row" }, el("label", {}, "Hive 1 name"), ch1),
-    el("div", { class: "form-row" }, el("label", {}, "Hive 2 name"), ch2),
+    ...chInputs.map(({ n, input }) =>
+      el("div", { class: "form-row" }, el("label", {}, `Hive ${n} name`), input)),
     el("p", { class: "note" }, "Shown as the hive labels across every chart and card."),
     el("div", { class: "form-actions" }, chBtn));
   chForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const payload = {};
-    if (ch1.value !== (chData.scale_1_display_name ?? "")) payload.scale_1_display_name = ch1.value;
-    if (ch2.value !== (chData.scale_2_display_name ?? "")) payload.scale_2_display_name = ch2.value;
-    if (!Object.keys(payload).length) { state.toast("No changes to save"); return; }
+    const names = {};
+    for (const { n, input, initial } of chInputs) {
+      if (input.value !== initial) names[String(n)] = input.value;
+    }
+    if (!Object.keys(names).length) { state.toast("No changes to save"); return; }
     chBtn.disabled = true;
-    try { await state.actions.updateChannels(payload); state.toast("Hive names saved", "success"); state.reload(); }
+    try { await state.actions.updateChannels({ names }); state.toast("Hive names saved", "success"); state.reload(); }
     catch (err) { state.toast(err.message, "error"); chBtn.disabled = false; }
   });
   const channelsCard = el("div", { class: "card" }, el("h2", {}, "Hive names"), chForm);
@@ -479,7 +536,7 @@ function renderDevice(root, state) {
     el("div", { class: "form-row" }, el("label", {}, "Version"), versionInput),
     el("div", { class: "form-row" }, el("label", {}, "Target"), targetSelect),
     el("div", { class: "form-row" }, el("label", {}, "Board"), boardInput),
-    el("p", { class: "note" }, "Uploads register a global release. Approve it above to flash the device."),
+    el("p", { class: "note" }, "Uploading registers a new firmware release for this target. To install it, approve the update in the Firmware panel above — the device flashes on its next check-in."),
     el("div", { class: "form-actions" }, uploadBtn));
   uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -546,11 +603,107 @@ function renderDevice(root, state) {
   const fitCard = el("div", { class: "card" }, el("h2", {}, "Temperature compensation"),
     el("p", { class: "note" }, "Regress raw weight against temperature to derive a load-cell coefficient."), fitForm);
 
+  // Dashboard account cards: change-your-password for everyone, plus user
+  // management for admins.
+  const accountCards = [accountCard(state)];
+  if (state.authUser?.role === "admin") accountCards.push(usersCard(state));
+
   node.append(
     el("div", { class: "grid wide" }, configCard, channelsCard),
     el("div", { class: "grid wide", style: "margin-top:1rem" }, fwPanel, uploadCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard));
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard),
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, ...accountCards));
   root.append(node);
+}
+
+// ── dashboard account cards ──────────────────────────────────────────────────
+// "Your account": let the logged-in user change their own password.
+function accountCard(state) {
+  const u = state.authUser || {};
+  const curPw = el("input", { type: "password", autocomplete: "current-password" });
+  const newPw = el("input", { type: "password", autocomplete: "new-password" });
+  const newPw2 = el("input", { type: "password", autocomplete: "new-password" });
+  const btn = el("button", { class: "btn", type: "submit" }, "Change password");
+  const form = el("form", {},
+    el("div", { class: "rows" },
+      el("div", { class: "row" }, el("span", { class: "k" }, "Signed in as"), el("span", { class: "v" }, u.username || DASH)),
+      el("div", { class: "row" }, el("span", { class: "k" }, "Role"), el("span", { class: "v" }, u.role || DASH))),
+    el("div", { class: "form-row" }, el("label", {}, "Current password"), curPw),
+    el("div", { class: "form-row" }, el("label", {}, "New password"), newPw),
+    el("div", { class: "form-row" }, el("label", {}, "Confirm new password"), newPw2),
+    el("div", { class: "form-actions" }, btn));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (newPw.value.length < 8) { state.toast("New password must be at least 8 characters", "error"); return; }
+    if (newPw.value !== newPw2.value) { state.toast("New passwords do not match", "error"); return; }
+    btn.disabled = true;
+    try {
+      await state.actions.changePassword(curPw.value, newPw.value);
+      state.toast("Password changed", "success");
+      curPw.value = newPw.value = newPw2.value = "";
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { btn.disabled = false; }
+  });
+  return el("div", { class: "card" }, el("h2", {}, "Your account"), form);
+}
+
+// "Dashboard users" (admin only): list / add / remove accounts. The list is
+// fetched lazily because views render synchronously.
+function usersCard(state) {
+  const listEl = el("div", { class: "rows" }, el("p", { class: "muted-text" }, "Loading users…"));
+
+  const refresh = async () => {
+    try {
+      const users = await state.actions.listUsers();
+      listEl.replaceChildren(...users.map((usr) => {
+        const del = el("button", { class: "btn small ghost", type: "button" }, "Remove");
+        del.addEventListener("click", async () => {
+          if (usr.username === state.authUser?.username) { state.toast("You cannot remove your own account", "error"); return; }
+          del.disabled = true;
+          try { await state.actions.deleteUser(usr.id); state.toast("User removed", "success"); refresh(); }
+          catch (err) { state.toast(err.message, "error"); del.disabled = false; }
+        });
+        return el("div", { class: "row" },
+          el("span", { class: "k" }, `${usr.username} · ${usr.role}`),
+          el("span", { class: "v" }, del));
+      }));
+      if (!users.length) listEl.replaceChildren(el("p", { class: "muted-text" }, "No users yet."));
+    } catch (err) {
+      listEl.replaceChildren(el("p", { class: "auth-error" }, err.message || "Failed to load users"));
+    }
+  };
+
+  const nu = el("input", { type: "text", autocomplete: "off", placeholder: "username" });
+  const np = el("input", { type: "password", autocomplete: "new-password", placeholder: "password (min 8)" });
+  const nr = el("select", { class: "full" },
+    el("option", { value: "viewer" }, "Viewer (read-only)"),
+    el("option", { value: "admin" }, "Admin (full control)"));
+  const addBtn = el("button", { class: "btn", type: "submit" }, "Add user");
+  const addForm = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Username"), nu),
+    el("div", { class: "form-row" }, el("label", {}, "Password"), np),
+    el("div", { class: "form-row" }, el("label", {}, "Role"), nr),
+    el("div", { class: "form-actions" }, addBtn));
+  addForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (np.value.length < 8) { state.toast("Password must be at least 8 characters", "error"); return; }
+    if (nu.value.trim().length < 3) { state.toast("Username must be at least 3 characters", "error"); return; }
+    addBtn.disabled = true;
+    try {
+      await state.actions.createUser(nu.value.trim(), np.value, nr.value);
+      state.toast("User created", "success");
+      nu.value = np.value = "";
+      refresh();
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { addBtn.disabled = false; }
+  });
+
+  refresh();
+  return el("div", { class: "card" }, el("h2", {}, "Dashboard users"),
+    el("p", { class: "note" }, "Viewers can see all data; admins can also change configuration, calibration, firmware and users."),
+    listEl,
+    el("h3", { style: "margin:.8rem 0 .2rem" }, "Add a user"),
+    addForm);
 }
 
 // ── registry ─────────────────────────────────────────────────────────────────

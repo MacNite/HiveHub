@@ -479,7 +479,7 @@ function renderDevice(root, state) {
     el("div", { class: "form-row" }, el("label", {}, "Version"), versionInput),
     el("div", { class: "form-row" }, el("label", {}, "Target"), targetSelect),
     el("div", { class: "form-row" }, el("label", {}, "Board"), boardInput),
-    el("p", { class: "note" }, "Uploads register a global release. Approve it above to flash the device."),
+    el("p", { class: "note" }, "Uploading registers a new firmware release for this target. To install it, approve the update in the Firmware panel above — the device flashes on its next check-in."),
     el("div", { class: "form-actions" }, uploadBtn));
   uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
