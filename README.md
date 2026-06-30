@@ -3,11 +3,13 @@
 > **Project renamed: HiveScale → HiveHub.** The project outgrew its original
 > "dual scale" scope and now acts as a **data collector / hub for many different
 > types of beehive sensors and scales** (up to 18 hives per ESP32), so the name
-> was changed to match. Some internal identifiers — database columns, firmware
-> build flags, the Docker image name (`…/hivescale-api`) and MQTT topics — still
-> use the old `hivescale` name for backward compatibility and are renamed
-> separately. The third-party **beehivemonitoring.com "HiveScale"** wireless
-> weight scale is an unrelated product and keeps its own name.
+> was changed to match. A few internal identifiers — the database measurement
+> columns, the OTA `target` value, the Docker image name (`…/hivescale-api`), the
+> device's stored-config (NVS) namespace and MQTT topics — still use the old
+> `hivescale` name on purpose: changing them would need data/firmware migrations
+> and could strand existing measurements or deployed-device config. The
+> third-party **beehivemonitoring.com "HiveScale"** wireless weight scale is an
+> unrelated product and keeps its own name.
 
 **This is very much a WIP — please do not order the PCBs as published now; they are not fully tested and are for development only.**
 
@@ -41,7 +43,7 @@ HiveHeart / HiveScale devices) — see [Features](#features) below.
 > config (sensors, BLE/GATT options, power modules) without hand-editing macros.
 > It deploys to GitHub Pages via `.github/workflows/pages.yml`
 > (enable **Settings → Pages → Source: GitHub Actions**), e.g.
-> `https://macnite.github.io/HiveScale/`.
+> `https://macnite.github.io/HiveHub/`.
 
 ---
 

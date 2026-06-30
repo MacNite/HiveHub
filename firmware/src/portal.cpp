@@ -941,7 +941,7 @@ void startProvisioningPortal() {
 
   // Common captive-portal probe URLs used by Android, iOS/macOS, Windows, and Firefox.
   // Redirecting these makes most phones/laptops show the setup page automatically
-  // after they connect to the HiveScale AP. Devices that suppress captive portals
+  // after they connect to the HiveHub AP. Devices that suppress captive portals
   // can still open http://192.168.4.1/ manually.
   setupServer.on("/generate_204", HTTP_GET, handleCaptivePortalProbe);
   setupServer.on("/gen_204", HTTP_GET, handleCaptivePortalProbe);

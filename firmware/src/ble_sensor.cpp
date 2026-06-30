@@ -449,12 +449,12 @@ static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
     }
     // Write wake-sync hint: how many seconds HiveInside should sleep before the
     // next connection. Subtracting HIVEINSIDE_SYNC_LEAD_S gives HiveInside time
-    // to wake and be connectable before HiveScale's scan arrives; RC-oscillator
+    // to wake and be connectable before HiveHub's scan arrives; RC-oscillator
     // drift (±5–10%) is then absorbed by HiveInside's SYNC_LISTEN_MS window.
     // Non-fatal if the characteristic is absent (HiveInside firmware too old).
     NimBLERemoteCharacteristic* chrSync = svc->getCharacteristic(HIVEINSIDE_GATT_SYNC);
     if (chrSync && chrSync->canWrite()) {
-      // Lead is HIVEINSIDE_SYNC_LEAD_S (config.h). HiveScale now holds a fixed
+      // Lead is HIVEINSIDE_SYNC_LEAD_S (config.h). HiveHub now holds a fixed
       // boot-to-boot cadence (enterDeepSleepUntilNextCycle), so this lead only has
       // to cover the in-cycle offset between this write and the next boot's scan,
       // plus one interval of RC-oscillator drift; HiveInside's SYNC_LISTEN_MS
@@ -689,7 +689,7 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
   doc[bp + "rssi_dbm"] = snap.rssi_dbm;
   // HiveInside reports its running firmware version over GATT ("fw"); surface it
   // as ble_{slot}_firmware_version so the backend and HivePal can display it
-  // next to the HiveScale node's own firmware. HolyIot/Ruuvi leave this empty.
+  // next to the HiveHub node's own firmware. HolyIot/Ruuvi leave this empty.
   if (snap.fw_version.length()) doc[bp + "firmware_version"] = snap.fw_version;
 
   // ── reused accel_{slot}_* fields (per-cycle AC magnitude + FFT bands) ───────
@@ -769,7 +769,7 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
 // ===========================================================================
 // HiveInside firmware-over-BLE relay (GATT client → HiveInside OTA service)
 // ===========================================================================
-// HiveScale streams a firmware image straight from the HTTPS download into the
+// HiveHub streams a firmware image straight from the HTTPS download into the
 // HiveInside OTA characteristics, chunk by chunk, so a >1 MB image never has to
 // fit in the WROOM's RAM. The HiveInside device buffers nothing either: it
 // writes each chunk to its inactive OTA slot, tracks a running CRC-32 and only

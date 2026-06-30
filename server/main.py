@@ -2940,7 +2940,7 @@ _SAFE_FIRMWARE_FILENAME = re.compile(r"^[A-Za-z0-9._-]+$")
 def crc32_of_file(path: Path) -> int:
     """Compute CRC-32 (IEEE 802.3) of a file as an unsigned 32-bit value.
 
-    The HiveScale uses this to verify a firmware download before flashing it or
+    The HiveHub uses this to verify a firmware download before flashing it or
     relaying it to a BeeCounter over I2C. Stored in a BIGINT to stay positive.
     """
     crc = 0
@@ -3031,17 +3031,17 @@ def queue_command(device_id: str, payload: DeviceCommandIn):
 
 def queue_relay_firmware_update(device_id: str, target: str,
                                 command_type: str, slot: int) -> dict:
-    """Queue a command telling the HiveScale to relay the active firmware for
+    """Queue a command telling the HiveHub to relay the active firmware for
     ``target`` to the sub-device in the given slot.
 
     The image URL and its CRC-32 are looked up server-side (the latest active
-    release for the target) and embedded in the command payload so the HiveScale
+    release for the target) and embedded in the command payload so the HiveHub
     can verify the download before relaying it. The CRC-32 is checked end-to-end
     on the receiving device before it swaps slots, so a corrupted relay never
     bricks it. Shared by the device-authenticated and HivePal-authenticated
     command endpoints.
 
-    The release is resolved owner-first (the relaying HiveScale's owner), falling
+    The release is resolved owner-first (the relaying HiveHub's owner), falling
     back to a global release, so a sub-device only ever receives an image its
     owner published or an official build.
     """
@@ -3070,7 +3070,7 @@ def queue_beecounter_update(device_id: str, slot: int = Query(1)):
 def queue_hiveinside_update(device_id: str, slot: int = Query(1)):
     """Queue a relay of the active HiveInside firmware to the HiveInside sensor
     paired in the given slot (1 -> bleSensorMac0, 2 -> bleSensorMac1) over BLE
-    GATT. The HiveScale resolves the BLE MAC locally, so only slot + image URL +
+    GATT. The HiveHub resolves the BLE MAC locally, so only slot + image URL +
     CRC-32 are sent."""
     return queue_relay_firmware_update(device_id, "hiveinside", "update_hiveinside", slot)
 
@@ -3765,7 +3765,7 @@ def queue_hiveinside_update_from_app(
 
     Uploading a HiveInside binary (POST .../firmware) only *registers* the
     release; it does not start the relay. HivePal calls this endpoint to actually
-    queue the ``update_hiveinside`` command for the HiveScale to pick up. The
+    queue the ``update_hiveinside`` command for the HiveHub to pick up. The
     caller must be owner or admin on the device.
     """
     if slot not in (1, 2):

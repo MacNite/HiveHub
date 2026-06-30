@@ -1,5 +1,5 @@
 // network.cpp — WiFi, HTTP, upload, OTA and command-queue implementation.
-#include "hivescale_network.h"
+#include "hivehub_network.h"
 #include "globals.h"
 #include "config.h"
 #include "device_prefs.h"
@@ -485,7 +485,7 @@ bool performFirmwareUpdate(const String& firmwareUrl) {
   uint16_t expectedChip = expectedImageChipId();
   if (expectedChip != ESP_CHIP_ID_INVALID && imgHeader.chip_id != expectedChip) {
     Serial.printf("[OTA] Wrong chip: image chip_id=0x%04X, this device=0x%04X (%s) — refusing to flash\n",
-                  (unsigned)imgHeader.chip_id, (unsigned)expectedChip, HIVESCALE_BOARD_LABEL);
+                  (unsigned)imgHeader.chip_id, (unsigned)expectedChip, HIVEHUB_BOARD_LABEL);
     http.end();
     return false;
   }
@@ -738,11 +738,11 @@ void checkForOtaUpdate() {
 
   JsonDocument doc;
   // Report the board/architecture so the backend only offers an image built for
-  // this SoC (see HIVESCALE_BOARD_LABEL in config.h). Without it the server cannot
+  // this SoC (see HIVEHUB_BOARD_LABEL in config.h). Without it the server cannot
   // tell a 30-pin ESP32 from an ESP32-C6 and could hand over a non-bootable image.
   String url = apiUrl(String("/api/v1/devices/") + deviceId +
                       "/firmware?version=" + FIRMWARE_VERSION +
-                      "&board=" + HIVESCALE_BOARD_LABEL);
+                      "&board=" + HIVEHUB_BOARD_LABEL);
 
   Serial.println("[OTA] Checking for update");
   if (!httpGetJson(url, doc)) {
