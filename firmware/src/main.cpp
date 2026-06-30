@@ -7,7 +7,7 @@
 #include "globals.h"
 #include "device_prefs.h"
 #include "storage_power.h"
-#include "hivescale_network.h"
+#include "hivehub_network.h"
 #include "sensors.h"
 #include "portal.h"
 #include "bee_counter_client.h"

@@ -3,10 +3,12 @@
 > **Project renamed: HiveScale → HiveHub.** What began as a dual beehive scale
 > has grown into a general **data collector / hub for many types of beehive
 > sensors and scales** (up to 18 hives per ESP32), so the project was renamed.
-> Some internal identifiers (database columns, firmware build flags, the Docker
-> image name, MQTT topics) still use the old `hivescale` name for backward
-> compatibility, and the third-party **beehivemonitoring.com "HiveScale"**
-> wireless weight scale is an unrelated product that keeps its own name.
+> A few internal identifiers (the database measurement columns, the OTA `target`
+> value, the Docker image name, the device's stored-config namespace, MQTT
+> topics) still use the old `hivescale` name on purpose — changing them would
+> need data/firmware migrations — and the third-party **beehivemonitoring.com
+> "HiveScale"** wireless weight scale is an unrelated product that keeps its own
+> name.
 
 Reference docs for **HiveHub**, an ESP32-based data collector for beehive
 sensors and scales. HiveHub reads a range of sensors natively on the device —

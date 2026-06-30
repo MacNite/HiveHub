@@ -38,7 +38,7 @@ Enable it once:
 
 After that, every push to `main` that touches `website/` republishes the site at
 `https://<owner>.github.io/<repo>/` (for this repo:
-`https://macnite.github.io/HiveScale/`).
+`https://macnite.github.io/HiveHub/`).
 
 > Prefer the "Deploy from a branch" option instead of Actions? Point Pages at
 > the `/website` folder isn't supported directly (only `/` or `/docs`), so the

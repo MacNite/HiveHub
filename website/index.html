@@ -19,7 +19,7 @@
       <a href="#setup">Setup</a>
       <a href="insights.html">Insights</a>
       <a href="configurator.html">Config tool</a>
-      <a href="https://github.com/MacNite/HiveScale">GitHub</a>
+      <a href="https://github.com/MacNite/HiveHub">GitHub</a>
     </nav>
   </div>
 </header>
@@ -37,7 +37,7 @@
     <div class="cta">
       <a class="btn" href="#setup">🚀 Get started</a>
       <a class="btn ghost" href="configurator.html">⚙️ Config tool</a>
-      <a class="btn ghost" href="https://github.com/MacNite/HiveScale">★ Star on GitHub</a>
+      <a class="btn ghost" href="https://github.com/MacNite/HiveHub">★ Star on GitHub</a>
     </div>
   </div>
 </section>
@@ -76,8 +76,8 @@
     </div>
     <p style="margin-top:1.5rem">
       Full pin mapping, wiring diagrams and the BOM live in the
-      <a href="https://github.com/MacNite/HiveScale#hardware">repository README</a> and
-      <a href="https://github.com/MacNite/HiveScale/blob/main/docs/wiring.md">docs/wiring.md</a>.
+      <a href="https://github.com/MacNite/HiveHub#hardware">repository README</a> and
+      <a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md</a>.
     </p>
   </div>
 </section>
@@ -92,8 +92,8 @@
       <div class="step"><div class="n">1</div><div>
         <h3>Get the code</h3>
         <p>Clone the repository and open the firmware project in PlatformIO (VS Code extension or CLI).</p>
-        <pre>git clone https://github.com/MacNite/HiveScale.git
-cd HiveScale</pre>
+        <pre>git clone https://github.com/MacNite/HiveHub.git
+cd HiveHub</pre>
       </div></div>
 
       <div class="step"><div class="n">2</div><div>
@@ -103,7 +103,7 @@ cd HiveScale</pre>
 cp .env.example .env
 # edit API_KEY, HIVEPAL_SERVICE_API_KEY, DB password, volumes
 docker compose up -d</pre>
-        <p class="muted">See <a href="https://github.com/MacNite/HiveScale/blob/main/docs/docker-install.md">docker-install.md</a> or <a href="https://github.com/MacNite/HiveScale/blob/main/docs/truenas-install.md">truenas-install.md</a> for hosting details.</p>
+        <p class="muted">See <a href="https://github.com/MacNite/HiveHub/blob/main/docs/docker-install.md">docker-install.md</a> or <a href="https://github.com/MacNite/HiveHub/blob/main/docs/truenas-install.md">truenas-install.md</a> for hosting details.</p>
       </div></div>
 
       <div class="step"><div class="n">3</div><div>
@@ -144,12 +144,12 @@ pio device monitor   # 115200 baud</pre>
   <div class="wrap">
     <h2>Dig deeper</h2>
     <div class="grid">
-      <div class="card"><h3>📘 API reference</h3><p>Device &amp; HivePal endpoints, schemas and the measurement payload.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/api.md">docs/api.md →</a></p></div>
-      <div class="card"><h3>🔌 Wiring</h3><p>Full pin map, pull-ups and the load-cell wiring reference.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/wiring.md">docs/wiring.md →</a></p></div>
-      <div class="card"><h3>📳 Accelerometer</h3><p>Per-hive vibration monitoring and the ~20 Hz swarm signal.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
-      <div class="card"><h3>📶 BLE sensor</h3><p>Pairing the HolyIot 25015 in-hive beacon.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/holyiot-ble-sensor.md">docs/holyiot-ble-sensor.md →</a></p></div>
+      <div class="card"><h3>📘 API reference</h3><p>Device &amp; HivePal endpoints, schemas and the measurement payload.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/api.md">docs/api.md →</a></p></div>
+      <div class="card"><h3>🔌 Wiring</h3><p>Full pin map, pull-ups and the load-cell wiring reference.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md →</a></p></div>
+      <div class="card"><h3>📳 Accelerometer</h3><p>Per-hive vibration monitoring and the ~20 Hz swarm signal.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
+      <div class="card"><h3>📶 BLE sensor</h3><p>Pairing the HolyIot 25015 in-hive beacon.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/holyiot-ble-sensor.md">docs/holyiot-ble-sensor.md →</a></p></div>
       <div class="card"><h3>🧠 Insights</h3><p>The rule-based colony detector catalogue and its sources.</p><p><a href="insights.html">How insights work →</a></p></div>
-      <div class="card"><h3>🛰️ Off-grid notes</h3><p>Solar (INA219) and LiPo (MAX17048) power-telemetry behaviour.</p><p><a href="https://github.com/MacNite/HiveScale/blob/main/docs/offgrid-firmware-notes.md">docs/offgrid-firmware-notes.md →</a></p></div>
+      <div class="card"><h3>🛰️ Off-grid notes</h3><p>Solar (INA219) and LiPo (MAX17048) power-telemetry behaviour.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/offgrid-firmware-notes.md">docs/offgrid-firmware-notes.md →</a></p></div>
     </div>
   </div>
 </section>
@@ -157,7 +157,7 @@ pio device monitor   # 115200 baud</pre>
 <footer>
   <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
     <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
-    <span><a href="https://github.com/MacNite/HiveScale">GitHub</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
+    <span><a href="https://github.com/MacNite/HiveHub">GitHub</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
   </div>
 </footer>
 
