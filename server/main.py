@@ -590,11 +590,39 @@ class DeviceConfigUpdate(BaseModel):
     scale2_tempco_kg_per_c: Optional[float] = None
 
 
+# The project was renamed HiveScale -> HiveHub, but the canonical OTA target
+# stored in firmware_releases (and queried by every already-deployed device as
+# ?target=hivescale) stays "hivescale" for backward compatibility. Accept
+# "hivehub" as a user-facing alias on every firmware input boundary and fold it
+# onto the canonical value, so new users can upload "HiveHub" firmware without
+# any database migration or breaking existing devices.
+FIRMWARE_TARGET_ALIASES = {"hivehub": "hivescale"}
+
+
+def normalize_firmware_target(target: str) -> str:
+    """Map a user-supplied OTA target onto its canonical stored value.
+
+    Folds the "hivehub" alias onto "hivescale" (and lower-cases / trims). Unknown
+    values pass through unchanged so the usual target validation still rejects them.
+    """
+    t = (target or "").strip().lower()
+    return FIRMWARE_TARGET_ALIASES.get(t, t)
+
+
 class FirmwareReleaseIn(BaseModel):
     version: str
     filename: str
     active: bool = True
     target: Literal["hivescale", "beecounter", "hiveinside"] = "hivescale"
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _alias_target(cls, v):
+        # Accept "hivehub" (any case/whitespace) for the canonical "hivescale"
+        # target before the Literal check runs, so a HiveHub firmware upload is
+        # transparently stored as a hivescale release.
+        return normalize_firmware_target(v) if isinstance(v, str) else v
+
     # Board/architecture this image was built for ("esp32" / "esp32-c6"). Required
     # in effect for the "hivescale" target so OTA never serves a 30-pin ESP32
     # (Xtensa) image to an ESP32-C6 (RISC-V) or vice versa; left None for the
@@ -1158,9 +1186,11 @@ def init_db():
                     ADD COLUMN IF NOT EXISTS board TEXT;
 
                 -- Backfill existing hivescale releases from their board-stamped
-                -- filename (rename_firmware.py: hivescale_esp32_<v> /
-                -- hivescale_esp32-c6_<v>). 'esp32-c6' contains 'esp32', so tag C6
-                -- first, then plain esp32 excluding the C6 names.
+                -- filename (rename_firmware.py: hivehub_esp32_<v> /
+                -- hivehub_esp32-c6_<v>; legacy builds used the hivescale_ prefix).
+                -- Detection is token-based, so either prefix works. 'esp32-c6'
+                -- contains 'esp32', so tag C6 first, then plain esp32 excluding
+                -- the C6 names.
                 UPDATE firmware_releases SET board = 'esp32-c6'
                     WHERE board IS NULL AND target = 'hivescale'
                       AND (filename ILIKE '%esp32-c6%' OR filename ILIKE '%esp32c6%'
@@ -2818,6 +2848,9 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
                    target: str = Query("hivescale"),
                    board: str = Query("")):
     ensure_device_config(device_id)
+    # Deployed devices query ?target=hivescale; accept the "hivehub" alias too so
+    # newer tooling can use either name. Canonical value is "hivescale".
+    target = normalize_firmware_target(target)
     no_update = {"update": False, "update_available": False}
     # Per-board OTA gating for the dual-board hivescale target: the device must
     # report which architecture it is so we never serve a cross-arch (non-bootable)
@@ -2880,10 +2913,11 @@ FIRMWARE_BOARDS = ("esp32", "esp32-c6")
 def board_from_filename(filename: str) -> Optional[str]:
     """Infer the board/architecture from a board-stamped firmware filename.
 
-    rename_firmware.py names hivescale artifacts ``hivescale_esp32_<v>.bin`` and
-    ``hivescale_esp32-c6_<v>.bin``. 'esp32-c6' contains the substring 'esp32', so
-    the C6 variants are matched first. Returns None when the name carries no
-    recognizable board token.
+    rename_firmware.py names artifacts ``hivehub_esp32_<v>.bin`` and
+    ``hivehub_esp32-c6_<v>.bin`` (legacy builds used the ``hivescale_`` prefix);
+    detection keys off the board token, so either prefix works. 'esp32-c6'
+    contains the substring 'esp32', so the C6 variants are matched first. Returns
+    None when the name carries no recognizable board token.
     """
     n = (filename or "").lower()
     if "esp32-c6" in n or "esp32c6" in n or "xiao" in n:
@@ -2925,8 +2959,8 @@ def resolve_hivescale_board(target: str, declared_board: Optional[str],
         raise HTTPException(
             status_code=400,
             detail=("cannot determine board for a hivescale release: pass board= "
-                    "or name the file like hivescale_esp32_<v>.bin / "
-                    "hivescale_esp32-c6_<v>.bin"),
+                    "or name the file like hivehub_esp32_<v>.bin / "
+                    "hivehub_esp32-c6_<v>.bin"),
         )
     return board
 
@@ -3534,10 +3568,15 @@ async def upload_firmware_from_app(
     if not normalized_version:
         raise HTTPException(status_code=400, detail="version must not be empty")
 
+    # Accept the "hivehub" alias for the canonical "hivescale" target, then
+    # validate. Normalising here (before the filename fallback below) means a
+    # HiveHub upload is stored as a hivescale release with no DB migration.
+    target = normalize_firmware_target(target)
     if target not in FIRMWARE_TARGETS:
         raise HTTPException(
             status_code=400,
-            detail=f"target must be one of {', '.join(FIRMWARE_TARGETS)}",
+            detail=(f"target must be one of {', '.join(FIRMWARE_TARGETS)} "
+                    f"('hivehub' is accepted as an alias for 'hivescale')"),
         )
 
     # Derive a safe basename. We prefer the uploaded filename but fall back to a
