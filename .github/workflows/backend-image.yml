@@ -13,7 +13,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/macnite/hivescale-api
+  IMAGE_NAME: ghcr.io/macnite/hivehub
 
 jobs:
   build:
