@@ -26,6 +26,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -49,6 +50,16 @@ API_KEY = os.environ["API_KEY"]
 HIVEPAL_SERVICE_API_KEY = os.environ.get("HIVEPAL_SERVICE_API_KEY", "")
 HIVEPAL_JWT_SECRET = os.environ.get("HIVEPAL_JWT_SECRET", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+# Opt-in, auth-free local dashboard (single-owner self-host). When enabled it
+# exposes read-only data plus firmware/calibration controls for ALL devices under
+# /api/v1/local/* and serves the static dashboard at /dashboard. Keep OFF on any
+# multi-tenant / internet-facing deployment; gate behind a reverse proxy / LAN.
+ENABLE_LOCAL_DASHBOARD = os.environ.get("ENABLE_LOCAL_DASHBOARD", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 FIRMWARE_DIR = Path(os.environ.get("FIRMWARE_DIR", "/app/firmware"))
 DB_POOL_MIN_SIZE = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
 DB_POOL_MAX_SIZE = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))
@@ -714,6 +725,16 @@ def require_hivepal_service_key(x_hivepal_service_key: str = Header(default=""))
         raise HTTPException(status_code=500, detail="HIVEPAL_SERVICE_API_KEY is not configured")
     if x_hivepal_service_key != HIVEPAL_SERVICE_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid HivePal service key")
+
+
+def require_local_dashboard():
+    """Gate the auth-free local dashboard API behind ENABLE_LOCAL_DASHBOARD.
+
+    Returns 404 (not 403) when disabled so the endpoints are indistinguishable
+    from non-existent routes on a default / multi-tenant deployment.
+    """
+    if not ENABLE_LOCAL_DASHBOARD:
+        raise HTTPException(status_code=404, detail="Not Found")
 
 
 def require_user_id(authorization: str = Header(default="")) -> str:
@@ -3475,7 +3496,16 @@ def fit_temp_compensation_from_app(
     """
     role = ["owner", "admin"] if body.apply else ["owner", "admin", "viewer"]
     require_device_role(user_id, device_id, role)
+    return run_temp_compensation_fit(device_id, body)
 
+
+def run_temp_compensation_fit(device_id: str, body: "TempCoefficientFitIn") -> dict:
+    """Fit (and optionally apply) a load-cell temperature coefficient.
+
+    Shared by the HivePal app endpoint and the local dashboard endpoint; callers
+    are responsible for any authorization. See the app endpoint docstring above
+    for the regression details.
+    """
     cfg = fetch_device_config(device_id)
     source = body.temp_source or cfg.tempco_source
     temp_field = TEMP_SOURCE_FIELD[source]
@@ -3531,39 +3561,22 @@ def fit_temp_compensation_from_app(
     return fit
 
 
-@app.post(
-    "/api/v1/app/devices/{device_id}/firmware",
-    dependencies=[Depends(require_hivepal_service_key)],
-)
-async def upload_firmware_from_app(
+async def store_firmware_upload(
     device_id: str,
-    file: UploadFile = File(...),
-    version: str = Form(...),
-    target: str = Form("hivescale"),
-    active: bool = Form(True),
-    board: str = Form(""),
-    user_id: str = Depends(require_user_id),
-):
-    """Upload a firmware binary from HivePal and register it as a release.
+    file: UploadFile,
+    version: str,
+    target: str,
+    active: bool,
+    board: str,
+    owner_user_id: Optional[str],
+) -> dict:
+    """Validate, stream-to-disk and register an uploaded firmware binary.
 
-    Unlike POST /api/v1/firmware/releases (which only registers a file that is
-    already present in FIRMWARE_DIR and is authenticated with the device
-    X-API-Key), this endpoint accepts the binary itself as multipart/form-data,
-    writes it into FIRMWARE_DIR, computes its CRC-32 and upserts the
-    firmware_releases row.
-
-    Authorization is per-device: the caller must be owner or admin on the given
-    device. The release is scoped to that device's OWNER (owner_user_id), so it is
-    only offered to scales owned by the same user — not the whole fleet. Pushing a
-    global / official build is still possible via the master-key
-    POST /api/v1/firmware/releases (which leaves owner_user_id NULL).
+    Shared by the HivePal app endpoint (owner-scoped release) and the local
+    dashboard endpoint (global release, owner_user_id=None). Writes the image
+    into FIRMWARE_DIR in bounded chunks, enforces the size cap, computes its
+    CRC-32 and upserts the firmware_releases row.
     """
-    require_device_role(user_id, device_id, ["owner", "admin"])
-    # Scope the release to the device's owner so only that owner's scales can pick
-    # it up. Fall back to the uploader (an admin acting on an owner-less device)
-    # so a release always has an owner and never silently becomes global.
-    owner_user_id = get_device_owner_id(device_id) or user_id
-
     normalized_version = version.strip()
     if not normalized_version:
         raise HTTPException(status_code=400, detail="version must not be empty")
@@ -3656,6 +3669,43 @@ async def upload_firmware_from_app(
         "size_bytes": bytes_written,
         "crc32": crc,
     }
+
+
+@app.post(
+    "/api/v1/app/devices/{device_id}/firmware",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+async def upload_firmware_from_app(
+    device_id: str,
+    file: UploadFile = File(...),
+    version: str = Form(...),
+    target: str = Form("hivescale"),
+    active: bool = Form(True),
+    board: str = Form(""),
+    user_id: str = Depends(require_user_id),
+):
+    """Upload a firmware binary from HivePal and register it as a release.
+
+    Unlike POST /api/v1/firmware/releases (which only registers a file that is
+    already present in FIRMWARE_DIR and is authenticated with the device
+    X-API-Key), this endpoint accepts the binary itself as multipart/form-data,
+    writes it into FIRMWARE_DIR, computes its CRC-32 and upserts the
+    firmware_releases row.
+
+    Authorization is per-device: the caller must be owner or admin on the given
+    device. The release is scoped to that device's OWNER (owner_user_id), so it is
+    only offered to scales owned by the same user — not the whole fleet. Pushing a
+    global / official build is still possible via the master-key
+    POST /api/v1/firmware/releases (which leaves owner_user_id NULL).
+    """
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    # Scope the release to the device's owner so only that owner's scales can pick
+    # it up. Fall back to the uploader (an admin acting on an owner-less device)
+    # so a release always has an owner and never silently becomes global.
+    owner_user_id = get_device_owner_id(device_id) or user_id
+    return await store_firmware_upload(
+        device_id, file, version, target, active, board, owner_user_id
+    )
 
 
 @app.get(
@@ -4245,3 +4295,286 @@ def get_server_time():
         "unix": int(now.timestamp()),
         "timezone": "UTC",
     }
+
+
+# ---------------------------------------------------------------------------
+# Local dashboard API (auth-free, single-owner self-host)
+# ---------------------------------------------------------------------------
+# Everything below is gated by require_local_dashboard (404 when
+# ENABLE_LOCAL_DASHBOARD is off). It mirrors the read paths of the /api/v1/app/*
+# endpoints but drops the per-user JWT + device-membership checks, so the built-in
+# HiveHub dashboard at /dashboard can talk to it directly with no login. It
+# therefore serves EVERY device on this server — only enable it on a trusted LAN
+# or behind a reverse proxy. Handlers reuse the same helpers as the app API so the
+# data shapes never drift.
+
+LOCAL_DASHBOARD_DEP = [Depends(require_local_dashboard)]
+
+
+@app.get("/api/v1/local/devices", dependencies=LOCAL_DASHBOARD_DEP)
+def local_list_devices():
+    """List every device on this server with its scale-channel display names."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT device_id, display_name, claimed_at, last_seen_at,
+                       last_firmware_version
+                FROM devices
+                ORDER BY last_seen_at DESC NULLS LAST;
+                """
+            )
+            rows = cur.fetchall()
+            device_ids = [r[0] for r in rows]
+            channels: dict[str, dict] = {}
+            if device_ids:
+                cur.execute(
+                    "SELECT device_id, channel_number, name FROM device_channels "
+                    "WHERE device_id = ANY(%s);",
+                    (device_ids,),
+                )
+                for ch in cur.fetchall():
+                    channels.setdefault(ch[0], {})[ch[1]] = ch[2]
+    return [
+        {
+            "device_id": r[0],
+            "display_name": r[1],
+            "claimed_at": r[2],
+            "last_seen_at": r[3],
+            "last_firmware_version": r[4],
+            "channels": {
+                "scale_1": channels.get(r[0], {}).get(1),
+                "scale_2": channels.get(r[0], {}).get(2),
+            },
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/v1/local/devices/{device_id}/measurements", dependencies=LOCAL_DASHBOARD_DEP)
+def local_list_measurements(
+    device_id: str,
+    limit: int = 2000,
+    start_at: Optional[datetime] = None,
+    end_at: Optional[datetime] = None,
+):
+    """Time-series measurements for one device (newest first), for the charts."""
+    limit = min(max(limit, 1), 20000)
+    where_parts = ["device_id = %s"]
+    params: list[Any] = [device_id]
+    if start_at is not None:
+        where_parts.append("measured_at >= %s")
+        params.append(start_at)
+    if end_at is not None:
+        where_parts.append("measured_at <= %s")
+        params.append(end_at)
+    params.append(limit)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {MEASUREMENT_SELECT_COLUMNS}
+                FROM measurements
+                WHERE {' AND '.join(where_parts)}
+                ORDER BY measured_at DESC
+                LIMIT %s;
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+    return serialize_measurements(rows)
+
+
+@app.get("/api/v1/local/devices/{device_id}/measurements/latest", dependencies=LOCAL_DASHBOARD_DEP)
+def local_latest_measurements(device_id: str, limit: int = 1):
+    """Most recent measurement row(s) for the overview cards."""
+    limit = min(max(limit, 1), 500)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {MEASUREMENT_SELECT_COLUMNS}
+                FROM measurements
+                WHERE device_id = %s
+                ORDER BY measured_at DESC
+                LIMIT %s;
+                """,
+                (device_id, limit),
+            )
+            rows = cur.fetchall()
+    return serialize_measurements(rows)
+
+
+@app.get("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_DEP)
+def local_get_config(device_id: str):
+    """Read the device's send-interval / calibration / temp-compensation config."""
+    return fetch_device_config(device_id)
+
+
+@app.get("/api/v1/local/devices/{device_id}/insights/summary", dependencies=LOCAL_DASHBOARD_DEP)
+def local_insights_summary(device_id: str):
+    """Highest-severity insight summary (14-day lookback) for the overview."""
+    end_at = datetime.now(timezone.utc)
+    start_at = end_at - timedelta(days=14)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {MEASUREMENT_SELECT_COLUMNS}
+                FROM measurements
+                WHERE device_id = %s AND measured_at >= %s
+                ORDER BY measured_at ASC;
+                """,
+                (device_id, start_at),
+            )
+            rows = cur.fetchall()
+    measurements = measurements_for_insights(rows)
+    alerts = compute_insights(measurements, now=end_at)
+    try:
+        persist_insights(device_id, alerts, end_at)
+    except Exception:
+        logger.exception("opportunistic insight persist failed for %s", device_id)
+    summary = summarize(device_id, alerts, end_at)
+    return {
+        "device_id": summary.device_id,
+        "computed_at": summary.computed_at.isoformat(),
+        "alert_count": summary.alert_count,
+        "highest_severity": summary.highest_severity,
+        "highest_alert": (
+            summary.highest_alert.model_dump() if summary.highest_alert else None
+        ),
+        "categories": summary.categories,
+    }
+
+
+@app.get("/api/v1/local/devices/{device_id}/firmware/status", dependencies=LOCAL_DASHBOARD_DEP)
+def local_firmware_status(device_id: str):
+    """Current vs latest firmware and whether an approved update is pending."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT last_firmware_version FROM devices WHERE device_id = %s;",
+                (device_id,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    current_version = row[0]
+    owner_id = get_device_owner_id(device_id)
+    release = latest_release_for_owner("hivescale", owner_id, get_device_board(device_id))
+    latest_version = release[0] if release else None
+    latest_is_official = bool(release) and release[3] is None
+    approved_version = get_approved_firmware_version(device_id)
+    update_available = bool(
+        latest_version is not None
+        and current_version is not None
+        and parse_version(latest_version) > parse_version(current_version)
+    )
+    return {
+        "device_id": device_id,
+        "target": "hivescale",
+        "current_version": current_version,
+        "latest_version": latest_version,
+        "latest_is_official": latest_is_official,
+        "approved_version": approved_version,
+        "update_available": update_available,
+        "pending_approval": update_available and approved_version != latest_version,
+    }
+
+
+@app.post("/api/v1/local/devices/{device_id}/firmware", dependencies=LOCAL_DASHBOARD_DEP)
+async def local_upload_firmware(
+    device_id: str,
+    file: UploadFile = File(...),
+    version: str = Form(...),
+    target: str = Form("hivescale"),
+    active: bool = Form(True),
+    board: str = Form(""),
+):
+    """Upload a firmware binary and register it as a GLOBAL release.
+
+    In single-owner local mode there is no per-user scoping, so the release is
+    left owner-less (owner_user_id=None) and every device on this server can pick
+    it up after it is approved.
+    """
+    return await store_firmware_upload(
+        device_id, file, version, target, active, board, owner_user_id=None
+    )
+
+
+@app.post("/api/v1/local/devices/{device_id}/firmware/approve", dependencies=LOCAL_DASHBOARD_DEP)
+def local_approve_firmware(device_id: str):
+    """Approve the latest available firmware and nudge the device to update now."""
+    owner_id = get_device_owner_id(device_id)
+    release = latest_release_for_owner("hivescale", owner_id, get_device_board(device_id))
+    if not release:
+        raise HTTPException(
+            status_code=404, detail="No firmware release available for this device"
+        )
+    latest_version = release[0]
+    set_approved_firmware_version(device_id, latest_version)
+    command = create_command(
+        device_id, DeviceCommandIn(command_type="ota_update", payload={})
+    )
+    return {
+        "status": "approved",
+        "device_id": device_id,
+        "version": latest_version,
+        "command_id": command["id"],
+    }
+
+
+@app.post("/api/v1/local/devices/{device_id}/calibration/start", dependencies=LOCAL_DASHBOARD_DEP)
+def local_start_calibration(
+    device_id: str,
+    payload: Optional[AppCalibrationModeStartIn] = None,
+):
+    """Queue a start-calibration-mode command (denser sampling) for the device."""
+    payload = payload or AppCalibrationModeStartIn()
+    command_payload = {
+        "interval_seconds": payload.interval_seconds,
+        "timeout_seconds": payload.timeout_seconds,
+    }
+    result = create_command(
+        device_id,
+        DeviceCommandIn(command_type="start_calibration_mode", payload=command_payload),
+    )
+    return {
+        "status": result["status"],
+        "id": result["id"],
+        "command_type": "start_calibration_mode",
+        "payload": command_payload,
+    }
+
+
+@app.post("/api/v1/local/devices/{device_id}/calibration/stop", dependencies=LOCAL_DASHBOARD_DEP)
+def local_stop_calibration(device_id: str):
+    """Queue a stop-calibration-mode command for the device."""
+    result = create_command(
+        device_id,
+        DeviceCommandIn(command_type="stop_calibration_mode", payload={}),
+    )
+    return {
+        "status": result["status"],
+        "id": result["id"],
+        "command_type": "stop_calibration_mode",
+        "payload": {},
+    }
+
+
+@app.post("/api/v1/local/devices/{device_id}/temp-compensation/fit", dependencies=LOCAL_DASHBOARD_DEP)
+def local_temp_compensation_fit(device_id: str, body: TempCoefficientFitIn):
+    """Fit (and optionally apply) a load-cell temperature coefficient."""
+    return run_temp_compensation_fit(device_id, body)
+
+
+# Serve the static dashboard at /dashboard only when local mode is enabled. The
+# files live in server/dashboard/ and ship in the Docker image (Dockerfile does
+# `COPY . .`). html=True makes /dashboard resolve to index.html.
+DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
+if ENABLE_LOCAL_DASHBOARD and DASHBOARD_DIR.is_dir():
+    app.mount(
+        "/dashboard",
+        StaticFiles(directory=str(DASHBOARD_DIR), html=True),
+        name="dashboard",
+    )
