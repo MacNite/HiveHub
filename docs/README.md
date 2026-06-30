@@ -1,6 +1,19 @@
-# HiveScale documentation
+# HiveHub documentation
 
-Reference docs for the HiveScale dual beehive scale. For the project overview,
+> **Project renamed: HiveScale → HiveHub.** What began as a dual beehive scale
+> has grown into a general **data collector / hub for many types of beehive
+> sensors and scales** (up to 18 hives per ESP32), so the project was renamed.
+> Some internal identifiers (database columns, firmware build flags, the Docker
+> image name, MQTT topics) still use the old `hivescale` name for backward
+> compatibility, and the third-party **beehivemonitoring.com "HiveScale"**
+> wireless weight scale is an unrelated product that keeps its own name.
+
+Reference docs for **HiveHub**, an ESP32-based data collector for beehive
+sensors and scales. HiveHub reads a range of sensors natively on the device —
+**SHT4x/SHT40** (ambient temperature & humidity), **DS18B20** (in-hive
+temperature), **INMP441** (in-hive sound), **INA219** (solar/load power),
+**MAX17048** (LiPo battery), and **wired load cells via HX711 or NAU7802** — and
+bridges wireless BLE/GATT sensors and scales on top. For the project overview,
 hardware list, firmware/server setup, and API summary, start with the
 [main README](../README.md). The pages below go deeper on individual topics.
 

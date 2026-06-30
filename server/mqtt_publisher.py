@@ -364,7 +364,7 @@ class MqttPublisher:
         return {
             "identifiers": [f"hivescale_{device_id}"],
             "name": display_name or device_id,
-            "manufacturer": "HiveScale",
+            "manufacturer": "HiveHub",
             "model": "ESP32 Dual Beehive Scale",
         }
 

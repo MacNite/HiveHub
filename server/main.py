@@ -190,7 +190,7 @@ limiter = Limiter(
 )
 
 app = FastAPI(
-    title="HiveScale API",
+    title="HiveHub API",
     description="HTTP endpoint for ESP32-based dual hive scales.",
     version="0.3.2",
 )

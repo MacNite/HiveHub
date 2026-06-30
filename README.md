@@ -1,8 +1,39 @@
-# HiveScale
+# HiveHub
+
+> **Project renamed: HiveScale → HiveHub.** The project outgrew its original
+> "dual scale" scope and now acts as a **data collector / hub for many different
+> types of beehive sensors and scales** (up to 18 hives per ESP32), so the name
+> was changed to match. Some internal identifiers — database columns, firmware
+> build flags, the Docker image name (`…/hivescale-api`) and MQTT topics — still
+> use the old `hivescale` name for backward compatibility and are renamed
+> separately. The third-party **beehivemonitoring.com "HiveScale"** wireless
+> weight scale is an unrelated product and keeps its own name.
 
 **This is very much a WIP — please do not order the PCBs as published now; they are not fully tested and are for development only.**
 
-**ESP32-based dual beehive scale system** for monitoring the weight, temperature, humidity, sound, vibration, power state, and network state of two beehives. Measurements are sent to a self-hosted FastAPI backend backed by PostgreSQL and can be displayed in [HivePal](https://github.com/martinhrvn/hive-pal).
+**HiveHub is an ESP32-based data collector for beehive sensors and scales.** It
+gathers weight, temperature, humidity, sound, vibration, power state, and network
+state from one or more hives (up to 18 per ESP32) and sends the readings to a
+self-hosted FastAPI backend backed by PostgreSQL, where they can be displayed in
+[HivePal](https://github.com/martinhrvn/hive-pal).
+
+### Natively supported sensors
+
+Every sensor is optional and compiled in per device — HiveHub reads the
+following directly on the ESP32:
+
+- **SHT4x / SHT40** — ambient temperature and humidity (I2C).
+- **DS18B20** — per-hive in-hive temperature probes (1-Wire).
+- **INMP441** — in-hive sound via I2S MEMS microphones with per-band FFT.
+- **INA219** — solar / load voltage, current, and power telemetry (I2C).
+- **MAX17048** — LiPo battery voltage, state-of-charge, and low-battery alerts (I2C).
+- **Wired load cells via HX711 or NAU7802** — the hive scales themselves; NAU7802
+  over I2C (optionally behind a TCA9548A mux) scales to many channels for
+  multi-hive setups.
+
+On top of these wired sensors, HiveHub also bridges a range of wireless BLE/GATT
+sensors and scales (HolyIot, RuuviTag, HiveInside, and beehivemonitoring.com
+HiveHeart / HiveScale devices) — see [Features](#features) below.
 
 > 🌐 **Website & setup guide:** a small static site lives in [`website/`](website/) — a
 > feature overview, a step-by-step setup guide, and an in-browser
@@ -45,7 +76,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 ## Repository structure
 
 ```text
-HiveScale/
+HiveHub/
 ├── firmware/                   # ESP32 PlatformIO project (src/, include/)
 ├── server/                     # Python FastAPI backend, insights, migrations
 ├── docker/                     # Docker Compose deployment
@@ -207,7 +238,7 @@ Press the setup button on GPIO27 to manage field configuration without reflashin
 
 | Action | Result |
 |---|---|
-| Short press | Starts `HiveScale-Setup-XXXX` AP; open `http://192.168.4.1` |
+| Short press | Starts `HiveHub-Setup-XXXX` AP; open `http://192.168.4.1` |
 | Long press, 10 seconds | Clears stored Preferences and reboots |
 
 The portal edits Wi-Fi networks, backend URL, device ID, claim code, API settings, and the **Wireless sensors** list — add up to six BLE sensors (at most two in-hive, two scales, two bee counters), choosing each one's type and MAC, or scan for nearby devices. It also offers an **SD-card download** (TAR) of the on-device backup. It closes automatically after 10 minutes. See [docs/ap-mode-sd-download.md](docs/ap-mode-sd-download.md).
@@ -273,7 +304,7 @@ The backend auto-creates tables and runs idempotent `ALTER TABLE` statements on 
 ## MQTT / Home Assistant integration
 
 The backend can **optionally** mirror every measurement to an MQTT broker in
-addition to storing it in PostgreSQL — so HiveScale data flows into
+addition to storing it in PostgreSQL — so HiveHub data flows into
 [Home Assistant](https://www.home-assistant.io/), Node-RED, openHAB or any MQTT
 consumer. It is **off by default** and purely additive: the bridge runs in a
 background thread and is fail-soft, so a broker outage never affects ingestion

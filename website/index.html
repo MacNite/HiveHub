@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>HiveScale — ESP32 dual beehive scale</title>
-<meta name="description" content="HiveScale is an open-source ESP32 dual beehive scale: weight, temperature, sound, vibration and power monitoring with a self-hosted FastAPI backend." />
+<title>HiveHub — ESP32 dual beehive scale</title>
+<meta name="description" content="HiveHub is an open-source ESP32 dual beehive scale: weight, temperature, sound, vibration and power monitoring with a self-hosted FastAPI backend." />
 <link rel="stylesheet" href="assets/style.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%9D%3C/text%3E%3C/svg%3E" />
 </head>
@@ -12,7 +12,7 @@
 
 <header class="site-nav">
   <div class="wrap">
-    <a class="brand" href="#top"><span class="logo">🐝</span> HiveScale</a>
+    <a class="brand" href="#top"><span class="logo">🐝</span> HiveHub</a>
     <nav>
       <a href="#features">Features</a>
       <a href="#hardware">Hardware</a>
@@ -30,7 +30,7 @@
     <span class="badge">⚠ Work in progress — PCBs are not yet field-tested</span>
     <h1>Weigh two beehives.<br>Self-hosted. Open source.</h1>
     <p class="lead">
-      HiveScale is an ESP32-based dual beehive scale system. It tracks weight,
+      HiveHub is an ESP32-based dual beehive scale system. It tracks weight,
       temperature, humidity, in-hive sound and vibration, and power state for two
       hives, and sends everything to your own FastAPI + PostgreSQL backend.
     </p>
@@ -84,7 +84,7 @@
 
 <section id="setup">
   <div class="wrap">
-    <h2>Set up your own HiveScale</h2>
+    <h2>Set up your own HiveHub</h2>
     <p class="sub">Five steps from clone to live data. The firmware is a PlatformIO project;
        the backend is a Docker Compose stack.</p>
     <div class="steps">
@@ -110,7 +110,7 @@ docker compose up -d</pre>
         <h3>Configure the device</h3>
         <p><strong>Recommended:</strong> configure the device from its on-device
            <strong>provisioning portal</strong>. After flashing, hold the setup button to start the
-           HiveScale Wi-Fi access point, connect to it, and set Wi-Fi, backend, hives and sensors right
+           HiveHub Wi-Fi access point, connect to it, and set Wi-Fi, backend, hives and sensors right
            on the device. Those settings live in the device's storage and <strong>survive OTA updates</strong>.</p>
         <p>Optionally pre-seed a brand-new device before first boot with the in-browser
            <strong>config tool</strong> (it generates an optional <code>secrets.h</code>) — or skip it and
@@ -133,7 +133,7 @@ pio device monitor   # 115200 baud</pre>
            <a href="https://github.com/martinhrvn/hive-pal">HivePal</a> with
            <code>POST /api/v1/app/devices/claim</code>, then explore live charts and rule-based insights.</p>
         <p class="muted">Field configuration without reflashing: press the setup button (GPIO27) to open the
-           <code>HiveScale-Setup-XXXX</code> Wi-Fi provisioning portal at <code>http://192.168.4.1</code>.</p>
+           <code>HiveHub-Setup-XXXX</code> Wi-Fi provisioning portal at <code>http://192.168.4.1</code>.</p>
       </div></div>
 
     </div>
@@ -156,7 +156,7 @@ pio device monitor   # 115200 baud</pre>
 
 <footer>
   <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
-    <span>🐝 HiveScale — MIT © 2026 Maximilian Nitschke</span>
+    <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
     <span><a href="https://github.com/MacNite/HiveScale">GitHub</a> · <a href="insights.html">Insights</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/martinhrvn/hive-pal">HivePal</a></span>
   </div>
 </footer>

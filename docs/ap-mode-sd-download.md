@@ -1,6 +1,6 @@
-# HiveScale AP Mode, Button Handling, and SD Card Download
+# HiveHub AP Mode, Button Handling, and SD Card Download
 
-This document describes how to enter HiveScale AP/setup mode, how the setup button behaves during normal operation and deep sleep, how to perform a factory reset, and how to use the AP-mode web interface to download all SD card data.
+This document describes how to enter HiveHub AP/setup mode, how the setup button behaves during normal operation and deep sleep, how to perform a factory reset, and how to use the AP-mode web interface to download all SD card data.
 
 ## Firmware behavior overview
 
@@ -37,7 +37,7 @@ Expected result:
 3. The device creates a WiFi network named similar to:
 
 ```text
-HiveScale-Setup-ABCD
+HiveHub-Setup-ABCD
 ```
 
 4. Connect to that WiFi network.
@@ -68,7 +68,7 @@ Recommended method:
 3. Plug power back in while still holding the button.
 4. Keep holding the button for about 1-2 seconds.
 5. Release the button.
-6. Connect to the `HiveScale-Setup-XXXX` WiFi network.
+6. Connect to the `HiveHub-Setup-XXXX` WiFi network.
 7. Open:
 
 ```text
@@ -158,7 +158,7 @@ Modern Windows includes `tar` by default. If that is not available, 7-Zip can al
 Downloading the SD data is only half of the round-trip. The archive exists so a
 beekeeper can recover the measurements that were buffered on the card — for
 example readings taken while the device was offline, off-grid, or unable to
-reach the backend — and load them into the HiveScale database without losing
+reach the backend — and load them into the HiveHub database without losing
 the historical record.
 
 The card holds two append-only NDJSON files (one JSON object per line):
@@ -168,13 +168,13 @@ The card holds two append-only NDJSON files (one JSON object per line):
 | `measurements.ndjson` | Every reading the device has taken, written at each wake-up. This is the permanent backup. |
 | `cache.ndjson` | The retry queue of readings that have not yet been confirmed as uploaded. |
 
-To get those readings into HiveScale, upload the file through HivePal:
+To get those readings into HiveHub, upload the file through HivePal:
 
 1. Download `hivescale-sd-data.tar` from the device in AP mode (above).
-2. Open **HiveScale** in HivePal and select the claimed device.
+2. Open **HiveHub** in HivePal and select the claimed device.
 3. Use the **Import SD card data** card to upload either the whole
    `hivescale-sd-data.tar` or an extracted `measurements.ndjson`.
-4. HivePal parses the file and forwards the readings to the HiveScale backend's
+4. HivePal parses the file and forwards the readings to the HiveHub backend's
    bulk-import endpoint.
 
 The import goes to:
@@ -225,7 +225,7 @@ To enter setup mode reliably:
 2. Hold the setup button.
 3. Plug the device back in.
 4. Release the button after 1-2 seconds.
-5. Connect to the `HiveScale-Setup-XXXX` WiFi network.
+5. Connect to the `HiveHub-Setup-XXXX` WiFi network.
 6. Open `http://192.168.4.1`.
 
 To factory reset:

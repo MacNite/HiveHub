@@ -136,7 +136,7 @@ void sendNoCacheHeaders() {
 void sendPortalRedirect() {
   sendNoCacheHeaders();
   setupServer.sendHeader("Location", provisioningPortalUrl(), true);
-  setupServer.send(302, "text/plain", "Redirecting to HiveScale setup portal");
+  setupServer.send(302, "text/plain", "Redirecting to HiveHub setup portal");
 }
 
 void handleCaptivePortalProbe() {
@@ -639,7 +639,7 @@ void handleSetupRoot() {
 
   String html;
   html += "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
-  html += "<title>HiveScale Setup</title>";
+  html += "<title>HiveHub Setup</title>";
   // Self-contained inline theme (no external fonts/CSS/JS so it works on the
   // offline captive portal). Brand accent matches Hive Pal (amber #f59e0b).
   // This is just a longer style string in flash; it adds no SD/SPIFFS assets.
@@ -669,7 +669,7 @@ void handleSetupRoot() {
           ".meta{color:var(--muted);font-size:.86em}p{margin:8px 0}"
           "@media(prefers-color-scheme:dark){:root{--bg:#161618;--card:#1f1f23;--fg:#ececf1;--muted:#9aa0aa;--border:#33343a;--link:#f5b54a}input{background:#26262b}select{background:#26262b}button,a.button{background:#26262b}button.danger{background:#2a1d1d;border-color:#5a2d2a;color:#f7a59c}}"
           "</style>";
-  html += "</head><body><div class='wrap'><h1>HiveScale Setup</h1>";
+  html += "</head><body><div class='wrap'><h1>HiveHub Setup</h1>";
   html += "<p class='sub'>Firmware: " + String(FIRMWARE_VERSION) + "</p>";
   html += "<p class='sub'>Setup portal: <a href='" + provisioningPortalUrl() + "'>" + provisioningPortalUrl() + "</a></p>";
   appendLastSensorPanel(html);
@@ -919,7 +919,7 @@ void startProvisioningPortal() {
 
   String suffix = String((uint32_t)ESP.getEfuseMac(), HEX);
   suffix.toUpperCase();
-  String apName = "HiveScale-Setup-" + suffix.substring(suffix.length() - 4);
+  String apName = "HiveHub-Setup-" + suffix.substring(suffix.length() - 4);
 
   bool ok = WiFi.softAP(apName.c_str());
   if (!ok) {

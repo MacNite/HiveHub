@@ -1,4 +1,4 @@
-# HiveScale Calibration Mode — Backend & Firmware
+# HiveHub Calibration Mode — Backend & Firmware
 
 ## Overview
 
