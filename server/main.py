@@ -3314,9 +3314,8 @@ def remove_device_membership(device_id: str, user_id: str = Depends(require_user
     return {"status": "removed", "device_id": device_id}
 
 
-@app.get("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])
-def get_device_channels(device_id: str, user_id: str = Depends(require_user_id)):
-    require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
+def fetch_device_channels(device_id: str) -> dict:
+    """Return the two scale channels' display names for a device."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -3328,9 +3327,8 @@ def get_device_channels(device_id: str, user_id: str = Depends(require_user_id))
     return {"scale_1_display_name": ch.get(1), "scale_2_display_name": ch.get(2)}
 
 
-@app.patch("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])
-def update_device_channels(device_id: str, payload: DeviceChannelsUpdateIn, user_id: str = Depends(require_user_id)):
-    require_device_role(user_id, device_id, ["owner", "admin"])
+def apply_device_channels(device_id: str, payload: DeviceChannelsUpdateIn) -> dict:
+    """Upsert the provided scale-channel display names and return all of them."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             for ch_num, ch_name in [
@@ -3347,7 +3345,19 @@ def update_device_channels(device_id: str, payload: DeviceChannelsUpdateIn, user
                         (device_id, ch_num, ch_name),
                     )
             conn.commit()
-    return get_device_channels(device_id, user_id)
+    return fetch_device_channels(device_id)
+
+
+@app.get("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])
+def get_device_channels(device_id: str, user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
+    return fetch_device_channels(device_id)
+
+
+@app.patch("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])
+def update_device_channels(device_id: str, payload: DeviceChannelsUpdateIn, user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    return apply_device_channels(device_id, payload)
 
 
 @app.get("/api/v1/app/devices/{device_id}/members", dependencies=[Depends(require_hivepal_service_key)])
@@ -4409,6 +4419,28 @@ def local_latest_measurements(device_id: str, limit: int = 1):
 def local_get_config(device_id: str):
     """Read the device's send-interval / calibration / temp-compensation config."""
     return fetch_device_config(device_id)
+
+
+@app.patch("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_DEP)
+def local_update_config(device_id: str, patch: DeviceConfigUpdate):
+    """Update device config (send interval, scale offsets/factors, temp comp).
+
+    Only the provided fields change; the write bumps config_version so the device
+    picks it up on its next check-in (same path as the HivePal config edit).
+    """
+    return update_device_config(device_id, patch)
+
+
+@app.get("/api/v1/local/devices/{device_id}/channels", dependencies=LOCAL_DASHBOARD_DEP)
+def local_get_channels(device_id: str):
+    """Read the scale-channel (hive) display names."""
+    return fetch_device_channels(device_id)
+
+
+@app.patch("/api/v1/local/devices/{device_id}/channels", dependencies=LOCAL_DASHBOARD_DEP)
+def local_update_channels(device_id: str, payload: DeviceChannelsUpdateIn):
+    """Rename the scale channels (the hive labels shown across the dashboard)."""
+    return apply_device_channels(device_id, payload)
 
 
 @app.get("/api/v1/local/devices/{device_id}/insights/summary", dependencies=LOCAL_DASHBOARD_DEP)

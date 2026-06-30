@@ -50,8 +50,13 @@ function viewHead(title, desc) {
 }
 
 function hiveLabel(state, n) {
-  const ch = state.device?.channels || {};
-  return (n === 1 ? ch.scale_1 : ch.scale_2) || `Hive ${n}`;
+  // Prefer the live channels endpoint (kept fresh after edits), then the name
+  // embedded in the device list, then a generic fallback.
+  const c = state.channels || {};
+  const fromChannels = n === 1 ? c.scale_1_display_name : c.scale_2_display_name;
+  const dev = state.device?.channels || {};
+  const fromDevice = n === 1 ? dev.scale_1 : dev.scale_2;
+  return fromChannels || fromDevice || `Hive ${n}`;
 }
 
 // hives shown given the top-bar hive selector ("all" | "1" | "2")
@@ -354,16 +359,80 @@ function renderDevice(root, state) {
   const node = el("div", {});
   node.append(viewHead("Device & admin", "Configuration, firmware and calibration"));
 
-  // Config (read-only)
-  const cfgRows = [
-    ["Device ID", state.device?.device_id || DASH],
-    ["Send interval", isNum(cfg.send_interval_seconds) ? `${cfg.send_interval_seconds} s` : DASH],
-    ["Config version", cfg.config_version ?? DASH],
-    ["Scale 1 offset / factor", `${cfg.scale1_offset ?? DASH} / ${cfg.scale1_factor ?? DASH}`],
-    ["Scale 2 offset / factor", `${cfg.scale2_offset ?? DASH} / ${cfg.scale2_factor ?? DASH}`],
-    ["Temp compensation", cfg.tempco_enabled ? "Enabled" : "Disabled"],
-    ["Tempco source / ref", `${cfg.tempco_source ?? DASH} / ${isNum(cfg.tempco_ref_temp_c) ? cfg.tempco_ref_temp_c + " °C" : DASH}`],
-  ];
+  // Editable configuration form
+  const cfgInputs = {};
+  const numRow = (label, key, isInt) => {
+    const input = el("input", {
+      type: "number", step: isInt ? "1" : "any",
+      value: cfg[key] != null ? String(cfg[key]) : "",
+    });
+    cfgInputs[key] = { input, int: !!isInt };
+    return el("div", { class: "form-row" }, el("label", {}, label), input);
+  };
+  const tcEnabled = el("input", { type: "checkbox" });
+  tcEnabled.checked = !!cfg.tempco_enabled;
+  const tcSource = el("select", { class: "full" },
+    ...["ambient", "hive_1", "hive_2"].map((v) =>
+      el("option", { value: v, selected: cfg.tempco_source === v ? true : null }, v)));
+  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
+
+  const cfgForm = el("form", {},
+    el("div", { class: "rows" },
+      el("div", { class: "row" }, el("span", { class: "k" }, "Device ID"), el("span", { class: "v" }, state.device?.device_id || DASH)),
+      el("div", { class: "row" }, el("span", { class: "k" }, "Config version"), el("span", { class: "v" }, cfg.config_version ?? DASH))),
+    numRow("Send interval (s)", "send_interval_seconds", true),
+    numRow("Scale 1 offset", "scale1_offset", true),
+    numRow("Scale 1 factor", "scale1_factor"),
+    numRow("Scale 2 offset", "scale2_offset", true),
+    numRow("Scale 2 factor", "scale2_factor"),
+    el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
+    el("div", { class: "form-row" }, el("label", {}, "Tempco source"), tcSource),
+    numRow("Tempco ref temp (°C)", "tempco_ref_temp_c"),
+    numRow("Scale 1 tempco (kg/°C)", "scale1_tempco_kg_per_c"),
+    numRow("Scale 2 tempco (kg/°C)", "scale2_tempco_kg_per_c"),
+    el("p", { class: "note" }, "Saving bumps the config version; the device applies it on its next check-in."),
+    el("div", { class: "form-actions" }, cfgSaveBtn));
+
+  cfgForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const patch = {};
+    for (const [key, { input, int }] of Object.entries(cfgInputs)) {
+      const raw = input.value.trim();
+      if (raw === "") continue;
+      const v = int ? parseInt(raw, 10) : parseFloat(raw);
+      if (!Number.isFinite(v) || v === cfg[key]) continue;
+      patch[key] = v;
+    }
+    if (tcEnabled.checked !== !!cfg.tempco_enabled) patch.tempco_enabled = tcEnabled.checked;
+    if (tcSource.value !== cfg.tempco_source) patch.tempco_source = tcSource.value;
+    if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
+    cfgSaveBtn.disabled = true;
+    try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload(); }
+    catch (err) { state.toast(err.message, "error"); cfgSaveBtn.disabled = false; }
+  });
+  const configCard = el("div", { class: "card" }, el("h2", {}, "Configuration"), cfgForm);
+
+  // Hive (scale-channel) names
+  const chData = state.channels || {};
+  const ch1 = el("input", { type: "text", value: chData.scale_1_display_name ?? "", placeholder: "Hive 1" });
+  const ch2 = el("input", { type: "text", value: chData.scale_2_display_name ?? "", placeholder: "Hive 2" });
+  const chBtn = el("button", { class: "btn", type: "submit" }, "Save names");
+  const chForm = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Hive 1 name"), ch1),
+    el("div", { class: "form-row" }, el("label", {}, "Hive 2 name"), ch2),
+    el("p", { class: "note" }, "Shown as the hive labels across every chart and card."),
+    el("div", { class: "form-actions" }, chBtn));
+  chForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {};
+    if (ch1.value !== (chData.scale_1_display_name ?? "")) payload.scale_1_display_name = ch1.value;
+    if (ch2.value !== (chData.scale_2_display_name ?? "")) payload.scale_2_display_name = ch2.value;
+    if (!Object.keys(payload).length) { state.toast("No changes to save"); return; }
+    chBtn.disabled = true;
+    try { await state.actions.updateChannels(payload); state.toast("Hive names saved", "success"); state.reload(); }
+    catch (err) { state.toast(err.message, "error"); chBtn.disabled = false; }
+  });
+  const channelsCard = el("div", { class: "card" }, el("h2", {}, "Hive names"), chForm);
 
   // Firmware panel
   const fwBadgeCls = fw.update_available ? (fw.pending_approval ? "warn" : "info") : "good";
@@ -469,8 +538,9 @@ function renderDevice(root, state) {
     el("p", { class: "note" }, "Regress raw weight against temperature to derive a load-cell coefficient."), fitForm);
 
   node.append(
-    el("div", { class: "grid wide" }, rowsCard("Configuration", cfgRows), fwPanel),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, uploadCard, calCard, fitCard));
+    el("div", { class: "grid wide" }, configCard, channelsCard),
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, fwPanel, uploadCard),
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard));
   root.append(node);
 }
 

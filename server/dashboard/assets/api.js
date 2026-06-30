@@ -38,6 +38,22 @@ export const api = {
 
   config: (deviceId) => req(`/devices/${encodeURIComponent(deviceId)}/config`),
 
+  updateConfig: (deviceId, patch) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/config`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch || {}),
+    }),
+
+  channels: (deviceId) => req(`/devices/${encodeURIComponent(deviceId)}/channels`),
+
+  updateChannels: (deviceId, payload) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/channels`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    }),
+
   insightsSummary: (deviceId) =>
     req(`/devices/${encodeURIComponent(deviceId)}/insights/summary`),
 

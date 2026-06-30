@@ -10,7 +10,8 @@ change the time range without installing the server.
   link back to the marketing site.
 - `assets/api.js` — **the only file that differs from the real dashboard.** It
   generates representative sample measurements in-browser and disables the
-  firmware/calibration write actions (they show a "read-only demo" notice).
+  write actions — firmware, calibration and config/hive-name edits all show a
+  "read-only demo" notice.
 - `assets/{style.css,charts.js,format.js,views.js,app.js}` — **verbatim copies**
   of `server/dashboard/assets/*`.
 
