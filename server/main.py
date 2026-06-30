@@ -25,6 +25,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, field_validator
@@ -217,6 +218,15 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(MaxBodySizeMiddleware, max_body_bytes=MAX_BODY_BYTES)
 if RATE_LIMIT_ENABLED:
     app.add_middleware(SlowAPIMiddleware)
+
+# Compress responses (added last → outermost, so it wraps every handler). The
+# measurement JSON is large and highly repetitive — the same ~30–140 keys per
+# row — so gzip typically shrinks it ~8–10×, which is the single biggest win for
+# dashboard/app load time over the wire. minimum_size avoids compressing tiny
+# bodies where the CPU/header overhead would not pay off. Applies to every JSON
+# response, so the HivePal app API (/api/v1/app/*) benefits too, not just the
+# local dashboard.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 # Maximum hives a single device reports (mirrors MAX_HIVES in the firmware's
@@ -2111,6 +2121,39 @@ MEASUREMENT_SELECT_COLUMNS = """
 """
 
 
+# Slim column set for the dashboard's time-series (chart) endpoint.
+#
+# The dashboard charts read only the ~30 fields below from the measurements
+# series (the metric cards read the separate `latest` row, which keeps the full
+# column set). Every column here is a real, typed table column — crucially, none
+# fall back to `raw_json`. The full MEASUREMENT_SELECT_COLUMNS wraps almost every
+# field in COALESCE(col, raw_json->>'…'), which forces Postgres to read and
+# de-TOAST the large raw_json blob for every row even though the typed columns
+# are populated for current firmware. Selecting only typed columns here avoids
+# that de-TOAST entirely, which is the dominant per-row cost on the chart query.
+#
+# Trade-off: rows from older deployments that stored a charted field *only* in
+# raw_json (and never in its typed column) will read NULL for that field on the
+# charts. Weight/temperature/humidity/battery/RSSI are first-class ingest columns
+# so this affects only edge-case legacy rows; the `latest`/app paths still carry
+# the raw_json fallbacks.
+CHART_MEASUREMENT_COLUMNS = """
+    id, device_id, measured_at,
+    scale_1_weight_kg, scale_2_weight_kg,
+    hive_1_temp_c, hive_2_temp_c, ambient_temp_c,
+    ambient_humidity_percent, hive_1_humidity_percent, hive_2_humidity_percent,
+    ble_1_pressure_hpa, ble_2_pressure_hpa,
+    hivescale_1_pressure_hpa, hivescale_2_pressure_hpa,
+    mic_left_rms_dbfs, mic_right_rms_dbfs, mic_left_peak_dbfs, mic_right_peak_dbfs,
+    battery_soc_percent, battery_voltage, solar_power_mw, solar_current_ma,
+    rssi_dbm,
+    bee_counter_1_ok, bee_counter_1_total_in, bee_counter_1_total_out,
+    bee_counter_1_interval_in, bee_counter_1_interval_out,
+    bee_counter_2_ok, bee_counter_2_total_in, bee_counter_2_total_out,
+    bee_counter_2_interval_in, bee_counter_2_interval_out
+"""
+
+
 def measurement_row_to_dict(r):
     return {
         "id": r[0],
@@ -2661,6 +2704,78 @@ def serialize_measurements(rows) -> list[dict]:
     )
     measurements = difference_bee_counter_intervals(measurements)
     return attach_hive_readings(measurements)
+
+
+def serialize_chart_measurements(cur) -> list[dict]:
+    """Map the slim CHART_MEASUREMENT_COLUMNS result set to API dicts.
+
+    Builds dicts by column name (rather than the positional mapping used for the
+    full row), seeds the compensated-weight defaults that measurement_row_to_dict
+    would normally set, then runs the same compensation / bee-counter / per-hive
+    transforms so the chart payload stays consistent with the full read APIs.
+    """
+    cols = [c.name for c in cur.description]
+    measurements: list[dict] = []
+    for r in cur.fetchall():
+        m = dict(zip(cols, r))
+        # Mirror measurement_row_to_dict: default compensated weights to the raw
+        # weight so the keys always exist; attach_temperature_compensation()
+        # overrides them when a coefficient is configured.
+        m["scale_1_weight_kg_compensated"] = m.get("scale_1_weight_kg")
+        m["scale_2_weight_kg_compensated"] = m.get("scale_2_weight_kg")
+        m["tempco_applied"] = False
+        measurements.append(m)
+    measurements = attach_temperature_compensation(measurements)
+    measurements = difference_bee_counter_intervals(measurements)
+    return attach_hive_readings(measurements)
+
+
+def execute_measurement_query(cur, columns, where_parts, params, limit, max_points):
+    """Run a measurements query (newest first), optionally time-decimated.
+
+    When ``max_points`` is set and the matched row count exceeds it, the rows are
+    thinned to ~max_points evenly-spaced samples using a stride computed in SQL.
+    The stride is derived from a cheap, index-only window pass over (id,
+    measured_at); the heavy column list is then materialised only for the rows
+    that survive the stride, so a wide range no longer de-TOASTs raw_json (or
+    ships JSON) for thousands of rows just to draw a few hundred chart pixels.
+    The newest row (rn = 1) is always kept. ``limit`` still applies as a hard cap.
+    """
+    where_sql = " AND ".join(where_parts)
+    if max_points and max_points > 0:
+        cur.execute(
+            f"""
+            WITH filtered AS (
+                SELECT id,
+                       row_number() OVER (ORDER BY measured_at DESC) AS rn,
+                       count(*) OVER () AS total
+                FROM measurements
+                WHERE {where_sql}
+            ),
+            picked AS (
+                SELECT id AS pid FROM filtered
+                WHERE (rn - 1) % GREATEST(1, (total + %s - 1) / %s) = 0
+                ORDER BY rn
+                LIMIT %s
+            )
+            SELECT {columns}
+            FROM measurements m
+            JOIN picked p ON p.pid = m.id
+            ORDER BY m.measured_at DESC;
+            """,
+            [*params, max_points, max_points, limit],
+        )
+    else:
+        cur.execute(
+            f"""
+            SELECT {columns}
+            FROM measurements
+            WHERE {where_sql}
+            ORDER BY measured_at DESC
+            LIMIT %s;
+            """,
+            [*params, limit],
+        )
 
 
 def measurements_for_insights(rows) -> list[dict]:
@@ -3424,10 +3539,16 @@ def list_device_measurements(
     limit: int = 200,
     start_at: Optional[datetime] = None,
     end_at: Optional[datetime] = None,
+    max_points: Optional[int] = None,
     user_id: str = Depends(require_user_id),
 ):
     require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
     limit = min(max(limit, 1), 10000)
+    # Optional, opt-in down-sampling for chart consumers (e.g. HivePal wide
+    # ranges). Default None keeps the existing full-resolution behaviour, so this
+    # is non-breaking; the full column set is preserved either way.
+    if max_points is not None:
+        max_points = min(max(max_points, 0), 10000)
     where_parts = ["device_id = %s"]
     params: list[Any] = [device_id]
 
@@ -3439,19 +3560,10 @@ def list_device_measurements(
         where_parts.append("measured_at <= %s")
         params.append(end_at)
 
-    params.append(limit)
-
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT {MEASUREMENT_SELECT_COLUMNS}
-                FROM measurements
-                WHERE {' AND '.join(where_parts)}
-                ORDER BY measured_at DESC
-                LIMIT %s;
-                """,
-                params,
+            execute_measurement_query(
+                cur, MEASUREMENT_SELECT_COLUMNS, where_parts, params, limit, max_points
             )
             rows = cur.fetchall()
 
@@ -4367,9 +4479,17 @@ def local_list_measurements(
     limit: int = 2000,
     start_at: Optional[datetime] = None,
     end_at: Optional[datetime] = None,
+    max_points: int = 1500,
 ):
-    """Time-series measurements for one device (newest first), for the charts."""
+    """Time-series measurements for one device (newest first), for the charts.
+
+    Returns the slim chart column set (see CHART_MEASUREMENT_COLUMNS) and, by
+    default, down-samples to at most ~``max_points`` evenly-spaced rows so wide
+    ranges (30d / 1y / 5y) stay fast and small instead of shipping every reading
+    to draw a ~600px chart. Pass ``max_points=0`` to disable down-sampling.
+    """
     limit = min(max(limit, 1), 20000)
+    max_points = min(max(max_points, 0), 20000)
     where_parts = ["device_id = %s"]
     params: list[Any] = [device_id]
     if start_at is not None:
@@ -4378,21 +4498,12 @@ def local_list_measurements(
     if end_at is not None:
         where_parts.append("measured_at <= %s")
         params.append(end_at)
-    params.append(limit)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT {MEASUREMENT_SELECT_COLUMNS}
-                FROM measurements
-                WHERE {' AND '.join(where_parts)}
-                ORDER BY measured_at DESC
-                LIMIT %s;
-                """,
-                params,
+            execute_measurement_query(
+                cur, CHART_MEASUREMENT_COLUMNS, where_parts, params, limit, max_points
             )
-            rows = cur.fetchall()
-    return serialize_measurements(rows)
+            return serialize_chart_measurements(cur)
 
 
 @app.get("/api/v1/local/devices/{device_id}/measurements/latest", dependencies=LOCAL_DASHBOARD_DEP)
