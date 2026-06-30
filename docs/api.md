@@ -391,7 +391,7 @@ commands and are not gated here.
 | Query parameter | Default | Description |
 |---|---|---|
 | `version` | `0.0.0` | Current device firmware version |
-| `target` | `hivescale` | `hivescale` (the ESP32 itself) or `beecounter` |
+| `target` | `hivescale` | `hivescale` (the ESP32 itself) or `beecounter`. The `hivehub` alias is also accepted and treated as `hivescale`. |
 
 No update:
 
@@ -760,7 +760,7 @@ fleet. Pushing a global / official build is still done with the master-key
 |---|---:|---|
 | `file` | Yes | The firmware binary |
 | `version` | Yes | Release version string |
-| `target` | No | `hivescale` (default), `beecounter`, or `hiveinside` |
+| `target` | No | `hivescale` (default), `beecounter`, or `hiveinside`. **`hivehub` is accepted as an alias for `hivescale`** and is stored as `hivescale`, so HiveHub firmware needs no special handling. |
 | `active` | No | Whether the release is active (default `true`) |
 
 ```json
