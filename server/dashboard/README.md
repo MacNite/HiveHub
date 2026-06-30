@@ -4,7 +4,7 @@ A small, dependency-free single-page dashboard that ships **inside** the HiveHub
 server, so a self-hosted install gets a nice web UI without running HivePal.
 
 It mirrors the data groups of beehivemonitoring.com / HivePal — a fixed sidebar
-(Overview, Temperature, Weight, Environment, Audio, Frequency bar, Battery &
+(Overview, Temperature, Weight, Environment, Audio, Frequency bands, Battery &
 power, Connectivity, Counter, Insights, Device & admin) with a device dropdown
 and a hive selector in the top bar — but has **no user accounts and no login**.
 

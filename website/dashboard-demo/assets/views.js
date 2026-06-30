@@ -224,20 +224,28 @@ function renderEnvironment(root, state) {
   root.append(tsView("Environment", "Humidity and air pressure", state, { cards, charts }));
 }
 
+// The stereo microphone's left / right channels map to hive 1 / hive 2, so the
+// audio + frequency views label them with the hive names like every other view.
+function micSide(n) {
+  return n === 1 ? "left" : "right";
+}
+
 function renderAudio(root, state) {
   const m = state.latest || {};
-  const cards = [
-    metricCard("Left RMS", fmt(m.mic_left_rms_dbfs, 1), "dBFS", isNum(m.mic_left_peak_dbfs) ? `Peak ${fmt(m.mic_left_peak_dbfs, 1)}` : "Sound level"),
-    metricCard("Right RMS", fmt(m.mic_right_rms_dbfs, 1), "dBFS", isNum(m.mic_right_peak_dbfs) ? `Peak ${fmt(m.mic_right_peak_dbfs, 1)}` : "Sound level"),
-    metricCard("Sample rate", fmtInt(m.mic_sample_rate_hz), "Hz", isNum(m.mic_sample_frames) ? `${fmtInt(m.mic_sample_frames)} frames` : "Microphone"),
-  ];
+  const hives = selectedHives(state);
+  const cards = hives.map((n) => {
+    const s = micSide(n);
+    return metricCard(`${hiveLabel(state, n)} RMS`, fmt(m[`mic_${s}_rms_dbfs`], 1), "dBFS",
+      isNum(m[`mic_${s}_peak_dbfs`]) ? `Peak ${fmt(m[`mic_${s}_peak_dbfs`], 1)}` : "Sound level");
+  });
+  cards.push(metricCard("Sample rate", fmtInt(m.mic_sample_rate_hz), "Hz",
+    isNum(m.mic_sample_frames) ? `${fmtInt(m.mic_sample_frames)} frames` : "Microphone"));
+
+  const rms = hives.map((n, i) => seriesFrom(state.measurements, `mic_${micSide(n)}_rms_dbfs`, hiveLabel(state, n), PALETTE[i]));
+  const peak = hives.map((n, i) => seriesFrom(state.measurements, `mic_${micSide(n)}_peak_dbfs`, hiveLabel(state, n), PALETTE[i]));
   const charts = [
-    chartCard("Sound level (RMS)", "Per-channel microphone RMS",
-      [seriesFrom(state.measurements, "mic_left_rms_dbfs", "Left", PALETTE[0]),
-       seriesFrom(state.measurements, "mic_right_rms_dbfs", "Right", PALETTE[1])], { unit: "dBFS", yDigits: 0 }),
-    chartCard("Peak level", "Per-channel microphone peak",
-      [seriesFrom(state.measurements, "mic_left_peak_dbfs", "Left", PALETTE[0]),
-       seriesFrom(state.measurements, "mic_right_peak_dbfs", "Right", PALETTE[1])], { unit: "dBFS", yDigits: 0 }),
+    chartCard("Sound level (RMS)", "Per-hive microphone RMS", rms, { unit: "dBFS", yDigits: 0 }),
+    chartCard("Peak level", "Per-hive microphone peak", peak, { unit: "dBFS", yDigits: 0 }),
   ];
   root.append(tsView("Audio", "Hive sound levels", state, { cards, charts }));
 }
@@ -263,17 +271,18 @@ function barChart(title, sub, items) {
 
 function renderFrequency(root, state) {
   const m = state.latest || {};
+  const hives = selectedHives(state);
   const charts = [];
-  for (const side of ["left", "right"]) {
-    const items = BANDS.map(([k, label]) => ({ label, value: m[`mic_${side}_band_${k}_dbfs`] }));
+  for (const n of hives) {
+    const items = BANDS.map(([k, label]) => ({ label, value: m[`mic_${micSide(n)}_band_${k}_dbfs`] }));
     if (items.some((i) => isNum(i.value))) {
-      charts.push(barChart(`Frequency bands — ${side}`, "Latest per-band energy (dBFS)", items));
+      charts.push(barChart(`Frequency bands — ${hiveLabel(state, n)}`, "Latest per-band FFT energy (dBFS)", items));
     }
   }
   if (!charts.length) {
     charts.push(el("div", { class: "card" }, el("p", { class: "muted-text" }, "No frequency-band data reported by this device.")));
   }
-  root.append(tsView("Frequency bar", "FFT energy by acoustic band", state, { charts }));
+  root.append(tsView("Frequency bands", "FFT energy by acoustic band", state, { charts }));
 }
 
 function renderBattery(root, state) {
@@ -553,7 +562,7 @@ export const GROUPS = [
   { id: "weight", label: "Weight", icon: "⚖️", render: renderWeight },
   { id: "environment", label: "Environment", icon: "💧", render: renderEnvironment },
   { id: "audio", label: "Audio", icon: "🔊", render: renderAudio },
-  { id: "frequency", label: "Frequency bar", icon: "📊", render: renderFrequency },
+  { id: "frequency", label: "Frequency bands", icon: "📊", render: renderFrequency },
   { id: "battery", label: "Battery & power", icon: "🔋", render: renderBattery },
   { id: "connectivity", label: "Connectivity", icon: "📶", render: renderConnectivity },
   { id: "counter", label: "Counter", icon: "🐝", render: renderCounter },
