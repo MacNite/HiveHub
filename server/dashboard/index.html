@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HiveHub Dashboard</title>
+  <link rel="stylesheet" href="assets/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🐝</text></svg>" />
+</head>
+<body>
+  <!-- ── Top bar: brand, device dropdown, hive selector, time range, refresh ── -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🐝</span>
+      <span>HiveHub</span>
+      <span class="brand-sub">Dashboard</span>
+    </div>
+
+    <div class="topbar-controls">
+      <label class="field">
+        <span class="field-label">Device</span>
+        <select id="device-select" aria-label="Select device"></select>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Hive</span>
+        <select id="hive-select" aria-label="Select hive">
+          <option value="all">All hives</option>
+          <option value="1">Hive 1</option>
+          <option value="2">Hive 2</option>
+        </select>
+      </label>
+
+      <div class="field" id="range-field">
+        <span class="field-label">Range</span>
+        <div class="range-group" id="range-group" role="group" aria-label="Time range">
+          <button data-range="1d" type="button">Day</button>
+          <button data-range="7d" type="button" class="active">7 days</button>
+          <button data-range="30d" type="button">Month</button>
+          <button data-range="365d" type="button">Year</button>
+          <button data-range="1825d" type="button">5 years</button>
+        </div>
+      </div>
+
+      <button id="refresh-btn" class="btn small" type="button" title="Refresh">
+        ↻ Refresh
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- ── Sidebar: one entry per data group (rigid, beehivemonitoring-style) ── -->
+    <nav class="sidebar" id="sidebar" aria-label="Data groups">
+      <!-- populated by app.js -->
+    </nav>
+
+    <!-- ── Main content: the active group's view renders here ── -->
+    <main class="content" id="content">
+      <div class="empty-state">Loading…</div>
+    </main>
+  </div>
+
+  <div id="device-status" class="device-status" hidden></div>
+
+  <script type="module" src="assets/app.js"></script>
+</body>
+</html>
