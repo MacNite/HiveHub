@@ -44,13 +44,13 @@
 // optional: in-hive temperature can still come from a paired BLE sensor instead.
 //
 // Two guards for the same condition:
-//   HIVESCALE_BOARD_XIAO_C6  — set by [env:xiao_esp32c6] build_flags; available
+//   HIVEHUB_BOARD_XIAO_C6  — set by [env:xiao_esp32c6] build_flags; available
 //                               before any header is included (plain -D flag).
 //   CONFIG_IDF_TARGET_ESP32C6 — from sdkconfig.h via Arduino.h; only valid in
 //                               files that include Arduino.h first.
 // Using both ensures this block fires even though config.h is included before
 // Arduino.h (e.g. as the first thing in globals.h).
-#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#if defined(HIVEHUB_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
 // No HX711 on the C6 — force the driver out regardless of any secrets.h value.
 #undef ENABLE_HX711
 #define ENABLE_HX711 0
@@ -68,10 +68,10 @@
 // never offered an image built for the other architecture. Keep these strings in
 // sync with firmware/rename_firmware.py (BOARD_LABELS) and the server's
 // firmware_releases.board values ("esp32" / "esp32-c6").
-#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
-#define HIVESCALE_BOARD_LABEL "esp32-c6"
+#if defined(HIVEHUB_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#define HIVEHUB_BOARD_LABEL "esp32-c6"
 #else
-#define HIVESCALE_BOARD_LABEL "esp32"
+#define HIVEHUB_BOARD_LABEL "esp32"
 #endif
 
 #ifndef CLAIM_CODE
@@ -115,7 +115,7 @@
 // classic board; default ON for the XIAO C6, whose V0.4 breakout always wires a
 // DS18B20 to D1. Override either way in secrets.h.
 #ifndef ENABLE_DS18B20_HIVE_TEMP
-#  if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#  if defined(HIVEHUB_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
 #    define ENABLE_DS18B20_HIVE_TEMP 1
 #  else
 #    define ENABLE_DS18B20_HIVE_TEMP 0
@@ -125,7 +125,7 @@
 // ==============================
 // MULTI-HIVE CAPACITY (up to 18 hives per ESP32)
 // ==============================
-// HiveScale historically served exactly two hives (two HX711 load cells, two
+// HiveHub historically served exactly two hives (two HX711 load cells, two
 // DS18B20 probes, two BLE slots). v0.20.0 generalises this to a dynamic registry
 // of up to MAX_HIVES hives, each carrying one scale source and at most one
 // non-scale in-hive sensor, configured from the provisioning portal and stored as a per-hive JSON blob in
@@ -331,20 +331,20 @@
 // ==============================
 // HIVEINSIDE GATT CLIENT (optional, requires HiveInside BLE_MODE=BLE_MODE_GATT)
 // ==============================
-// When enabled, HiveScale connects to a paired HiveInside sensor as a GATT
+// When enabled, HiveHub connects to a paired HiveInside sensor as a GATT
 // central *after* the passive scan locates it by MAC address. It reads the full
 // JSON measurement characteristic (every FFT band, RMS, peak, mic bands) and
 // then disconnects. Only devices found by MAC without recognisable advertising
 // data trigger a connection attempt, so HolyIot and advertising-mode HiveInside
 // sensors are unaffected. Set to 0 to use passive advertising scan exclusively.
 //
-// Both HiveScale (this flag) and HiveInside (BLE_MODE_GATT) must be compiled
+// Both HiveHub (this flag) and HiveInside (BLE_MODE_GATT) must be compiled
 // with matching modes; pairing itself (MAC address) is unchanged.
 //
 // Defaults to 1: current HiveInside firmware is GATT-ONLY (its broadcast/beacon
 // advertising mode was removed), so it never emits the manufacturer-data blob
 // parseHiveInside() expects. Without the GATT client a paired HiveInside is
-// found by MAC during the scan but yields no measurement, so HiveScale uploads
+// found by MAC during the scan but yields no measurement, so HiveHub uploads
 // nothing for it. HolyIot beacons are unaffected — they carry advertising data,
 // so the post-scan GATT step is skipped for them.
 #ifndef HIVEINSIDE_USE_GATT
@@ -357,9 +357,9 @@
 #define HIVEINSIDE_GATT_CONNECT_TIMEOUT_S 5
 #endif
 
-// Seconds before HiveScale's next scan that HiveInside should already be awake
+// Seconds before HiveHub's next scan that HiveInside should already be awake
 // and listening. Written to the wake-sync characteristic each cycle as
-// (sendInterval - lead). HiveScale holds a fixed boot-to-boot cadence (see
+// (sendInterval - lead). HiveHub holds a fixed boot-to-boot cadence (see
 // enterDeepSleepUntilNextCycle in storage_power.cpp), so this lead need only
 // cover the small in-cycle scan offset plus one interval of HiveInside RC-timer
 // drift in the "HiveInside wakes late" direction; the "wakes early" direction is
@@ -373,10 +373,10 @@
 // ==============================
 // HIVEINSIDE FIRMWARE-OVER-BLE (OTA relay)
 // ==============================
-// HiveScale (the only WiFi node) relays a HiveInside firmware image to a paired
+// HiveHub (the only WiFi node) relays a HiveInside firmware image to a paired
 // HiveInside ESP32-C6 over GATT, the same way it relays a BeeCounter image over
 // I2C (see updateBeeCounter / bee_counter_client). The backend queues an
-// `update_hiveinside` command with the image URL + CRC-32; HiveScale STREAMS the
+// `update_hiveinside` command with the image URL + CRC-32; HiveHub STREAMS the
 // HTTPS download straight into the HiveInside OTA characteristics (it never
 // buffers the whole >1 MB image — the WROOM has no PSRAM), and the HiveInside
 // device verifies the end-to-end CRC before swapping its OTA slot.
@@ -511,7 +511,7 @@
 // ==============================
 // PIN MAP — 30-pin ESP32 DevKit (original board)
 // ==============================
-#if !defined(HIVESCALE_BOARD_XIAO_C6) && !defined(CONFIG_IDF_TARGET_ESP32C6)
+#if !defined(HIVEHUB_BOARD_XIAO_C6) && !defined(CONFIG_IDF_TARGET_ESP32C6)
 #define HX1_DOUT     16
 #define HX1_SCK      17
 #define HX2_DOUT     32
@@ -528,7 +528,7 @@
 // Long press: reset Preferences and reboot.
 // GPIO27 is RTC-capable so it can wake the ESP32 from deep sleep via EXT0.
 #define SETUP_BUTTON_PIN 27
-#endif // !(HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6)
+#endif // !(HIVEHUB_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6)
 
 // ==============================
 // PIN MAP — XIAO ESP32-C6 (compact RISC-V variant)
@@ -540,7 +540,7 @@
 // acoustics/vibration. Deep-sleep button wake uses
 // esp_deep_sleep_enable_gpio_wakeup() (no RTC GPIO subsystem on C6); see
 // storage_power.cpp for the platform-specific guard.
-#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#if defined(HIVEHUB_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
 #define ONE_WIRE_PIN     1   // D1 — DS18B20 in-hive temperature bus (4.7k pull-up on-board)
 #define I2C_SDA         22   // D4 (XIAO SDA label)
 #define I2C_SCL         23   // D5 (XIAO SCL label)
@@ -550,7 +550,7 @@
 #define SD_MOSI         18   // D10 (XIAO MOSI label)
 // D2 is the setup button; button-to-GND, INPUT_PULLUP.
 #define SETUP_BUTTON_PIN 2   // D2
-#endif // HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
+#endif // HIVEHUB_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
 
 // ==============================
 // XIAO ESP32-C6 ANTENNA SELECTION
@@ -565,7 +565,7 @@
 //                            HIGH → external u.FL antenna
 // To use an external antenna, add to secrets.h:
 //   #define XIAO_C6_USE_EXTERNAL_ANTENNA 1
-#if defined(HIVESCALE_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#if defined(HIVEHUB_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
 #ifndef XIAO_C6_USE_EXTERNAL_ANTENNA
 #define XIAO_C6_USE_EXTERNAL_ANTENNA 0
 #endif
@@ -577,7 +577,7 @@
 #ifndef XIAO_C6_ANTENNA_SELECT_GPIO
 #define XIAO_C6_ANTENNA_SELECT_GPIO 14
 #endif
-#endif // HIVESCALE_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
+#endif // HIVEHUB_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
 
 // External button shared constants (both board variants)
 static const unsigned long BUTTON_DEBOUNCE_MS = 50;

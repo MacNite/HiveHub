@@ -1,8 +1,8 @@
-"""Optional MQTT bridge for HiveScale.
+"""Optional MQTT bridge for HiveHub.
 
 When enabled (``MQTT_ENABLED=true``), every measurement that lands on the
 device-facing ingest endpoint is mirrored to an MQTT broker as a retained JSON
-state message. This lets HiveScale feed Home Assistant, Node-RED, openHAB or any
+state message. This lets HiveHub feed Home Assistant, Node-RED, openHAB or any
 other MQTT consumer **in addition to** its own PostgreSQL store — it is purely
 additive and never blocks or fails ingestion.
 

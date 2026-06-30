@@ -1,8 +1,8 @@
 """
-HiveScale sensor-based insights / alerts.
+HiveHub sensor-based insights / alerts.
 
 This module computes rule-based alerts from the measurement time-series that
-HiveScale already stores (weight, internal hive temperature, ambient
+HiveHub already stores (weight, internal hive temperature, ambient
 temperature/humidity, and — when available — microphone RMS and FFT band
 energy).
 
@@ -13,7 +13,7 @@ objects. No DB access, no FastAPI imports — unit-testable in isolation.
 ------------------------------------------------------------------------------
 Hardware assumptions
 ------------------------------------------------------------------------------
-The current HiveScale ESP32 firmware delivers, per measurement:
+The current HiveHub ESP32 firmware delivers, per measurement:
     * ``scale_1_weight_kg`` / ``scale_2_weight_kg``   (HX711 + load cells)
     * ``hive_1_temp_c``     / ``hive_2_temp_c``       (DS18B20 internal probes)
     * ``ambient_temp_c``    / ``ambient_humidity_percent`` (SHT4x)

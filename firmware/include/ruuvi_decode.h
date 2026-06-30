@@ -3,7 +3,7 @@
 // The RuuviTag (Ruuvi Innovations) is a battery BLE beacon with an on-board
 // temperature / humidity / pressure sensor and a 3-axis accelerometer — the
 // same four-in-one measurement set as the HolyIot 25015, so it folds into the
-// HiveScale passive-scan bridge and the existing ble_{slot}_* / accel_{slot}_*
+// HiveHub passive-scan bridge and the existing ble_{slot}_* / accel_{slot}_*
 // measurement fields with no new server columns.
 //
 // Unlike the HolyIot (which splits its readings across several manufacturer-data
