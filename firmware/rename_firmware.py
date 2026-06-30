@@ -4,8 +4,8 @@ Instead of the default ``firmware.bin`` / ``firmware.elf`` this reads the
 single source of truth for the version — ``FIRMWARE_VERSION`` defined in
 ``src/globals.cpp`` — and combines it with a friendly board label derived from
 the active build environment, renaming the program to
-``hivescale_<board>_<version>`` so each env produces a distinct artifact, e.g.
-``hivescale_esp32_0.9.2.bin`` and ``hivescale_esp32-c6_0.9.2.bin``.
+``hivehub_<board>_<version>`` so each env produces a distinct artifact, e.g.
+``hivehub_esp32_0.9.2.bin`` and ``hivehub_esp32-c6_0.9.2.bin``.
 
 Referenced from platformio.ini via ``extra_scripts = pre:rename_firmware.py``.
 """
@@ -49,7 +49,7 @@ version = read_firmware_version()
 if version:
     # Sanitize so the version can't produce an invalid file name.
     safe_version = re.sub(r"[^0-9A-Za-z._-]", "_", version)
-    progname = "hivescale_%s_%s" % (board_label(), safe_version)
+    progname = "hivehub_%s_%s" % (board_label(), safe_version)
     env.Replace(PROGNAME=progname)  # noqa: F821
     print("[rename_firmware] Build artifacts will be named %s.bin / .elf" % progname)
 else:

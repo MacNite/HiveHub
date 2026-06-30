@@ -1186,9 +1186,11 @@ def init_db():
                     ADD COLUMN IF NOT EXISTS board TEXT;
 
                 -- Backfill existing hivescale releases from their board-stamped
-                -- filename (rename_firmware.py: hivescale_esp32_<v> /
-                -- hivescale_esp32-c6_<v>). 'esp32-c6' contains 'esp32', so tag C6
-                -- first, then plain esp32 excluding the C6 names.
+                -- filename (rename_firmware.py: hivehub_esp32_<v> /
+                -- hivehub_esp32-c6_<v>; legacy builds used the hivescale_ prefix).
+                -- Detection is token-based, so either prefix works. 'esp32-c6'
+                -- contains 'esp32', so tag C6 first, then plain esp32 excluding
+                -- the C6 names.
                 UPDATE firmware_releases SET board = 'esp32-c6'
                     WHERE board IS NULL AND target = 'hivescale'
                       AND (filename ILIKE '%esp32-c6%' OR filename ILIKE '%esp32c6%'
@@ -2911,10 +2913,11 @@ FIRMWARE_BOARDS = ("esp32", "esp32-c6")
 def board_from_filename(filename: str) -> Optional[str]:
     """Infer the board/architecture from a board-stamped firmware filename.
 
-    rename_firmware.py names hivescale artifacts ``hivescale_esp32_<v>.bin`` and
-    ``hivescale_esp32-c6_<v>.bin``. 'esp32-c6' contains the substring 'esp32', so
-    the C6 variants are matched first. Returns None when the name carries no
-    recognizable board token.
+    rename_firmware.py names artifacts ``hivehub_esp32_<v>.bin`` and
+    ``hivehub_esp32-c6_<v>.bin`` (legacy builds used the ``hivescale_`` prefix);
+    detection keys off the board token, so either prefix works. 'esp32-c6'
+    contains the substring 'esp32', so the C6 variants are matched first. Returns
+    None when the name carries no recognizable board token.
     """
     n = (filename or "").lower()
     if "esp32-c6" in n or "esp32c6" in n or "xiao" in n:
@@ -2956,8 +2959,8 @@ def resolve_hivescale_board(target: str, declared_board: Optional[str],
         raise HTTPException(
             status_code=400,
             detail=("cannot determine board for a hivescale release: pass board= "
-                    "or name the file like hivescale_esp32_<v>.bin / "
-                    "hivescale_esp32-c6_<v>.bin"),
+                    "or name the file like hivehub_esp32_<v>.bin / "
+                    "hivehub_esp32-c6_<v>.bin"),
         )
     return board
 
