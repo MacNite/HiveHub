@@ -137,10 +137,12 @@ select {
 /* ── Charts ──────────────────────────────────────────────────── */
 .chart-card { grid-column: 1 / -1; }
 .chart-wrap { position: relative; width: 100%; height: 300px; }
-.chart-wrap canvas { width: 100%; height: 100%; display: block; }
-.chart-legend { display: flex; flex-wrap: wrap; gap: .9rem; margin: .5rem 0 .25rem; font-size: .82rem; }
+.chart-wrap canvas { width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+.chart-legend { display: flex; flex-wrap: wrap; align-items: center; gap: .9rem; margin: .5rem 0 .25rem; font-size: .82rem; }
 .chart-legend .lg { display: inline-flex; align-items: center; gap: .35rem; color: var(--ink-soft); }
+.chart-legend .lg-value { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
 .chart-legend .swatch { width: .8rem; height: .8rem; border-radius: 3px; display: inline-block; }
+.chart-hint { margin-left: auto; font-size: .78rem; color: var(--ink-faint); }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-faint); font-size: .95rem; }
 
 /* ── Bars (frequency) ────────────────────────────────────────── */
@@ -197,3 +199,24 @@ select {
   .topbar { flex-wrap: wrap; height: auto; padding: .6rem 1rem; }
   .topbar-controls { margin-left: 0; width: 100%; }
 }
+
+/* ── Auth (login / first-run setup) ─────────────────────────── */
+.user-area { display: inline-flex; align-items: center; gap: .5rem; }
+.user-chip {
+  font-size: .8rem; color: var(--ink-faint); white-space: nowrap;
+  padding: .3rem .6rem; border: 1px solid var(--line); border-radius: 999px; background: var(--card);
+}
+.auth-wrap { display: grid; place-items: center; min-height: 70vh; padding: 1.5rem; }
+.auth-card {
+  width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 1.6rem 1.5rem; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; gap: .35rem;
+}
+.auth-card h1 { margin: 0 0 .1rem; font-size: 1.3rem; }
+.auth-sub { margin: 0 0 .8rem; color: var(--ink-faint); font-size: .9rem; }
+.auth-field { display: flex; flex-direction: column; gap: .25rem; margin-bottom: .6rem; font-size: .85rem; color: var(--ink-faint); }
+.auth-field input {
+  font: inherit; color: var(--ink); padding: .55rem .65rem;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card); width: 100%;
+}
+.auth-error { color: var(--danger); font-size: .85rem; min-height: 1.1em; margin: .1rem 0 .4rem; }

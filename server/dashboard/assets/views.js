@@ -3,24 +3,83 @@
 // the admin action callbacks (see app.js buildState()).
 
 import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, fmtDateTime, DASH } from "./format.js";
-import { drawLineChart, seriesFrom, PALETTE } from "./charts.js";
+import { drawLineChart, seriesFrom, valueAt, PALETTE } from "./charts.js";
 
 // ── chart manager: views register charts; app.js redraws them after mount ────
 let activeCharts = [];
+
+// Selected/hovered timestamp (epoch millis), shared across every chart on the
+// current view so scrubbing one diagram lines up the readout on all of them.
+// Persists across re-renders (view switches, auto-refresh) until the mouse
+// leaves a chart, so a slid position survives a data reload.
+let cursorT = null;
+
 export function clearCharts() { activeCharts = []; }
 export function drawCharts() {
-  for (const c of activeCharts) drawLineChart(c.canvas, c.series, c.opts);
+  for (const c of activeCharts) {
+    drawLineChart(c.canvas, c.series, { ...c.opts, cursorT });
+    updateReadout(c);
+  }
+}
+
+function updateReadout(c) {
+  for (const { valueEl, series } of c.legendItems) {
+    if (cursorT == null) { valueEl.textContent = ""; continue; }
+    const p = valueAt(series.points, cursorT);
+    valueEl.textContent = p ? `: ${fmt(p.y, c.opts.yDigits ?? 1, c.opts.unit ? " " + c.opts.unit : "")}` : ": " + DASH;
+  }
+  if (c.hint) c.hint.textContent = cursorT == null ? "Drag to inspect" : fmtDateTime(cursorT);
+}
+
+// Turn a pointer event's x position into a timestamp using the chart's last
+// drawn pixel<->time mapping (stashed on the canvas by drawLineChart), then
+// redraw every chart so the whole view's readout stays in sync.
+function setCursorFromEvent(canvas, e) {
+  const scale = canvas._xScale;
+  if (!scale) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const frac = Math.min(1, Math.max(0, (x - scale.padL) / scale.plotW));
+  cursorT = scale.tMin + frac * (scale.tMax - scale.tMin);
+  drawCharts();
+}
+
+// Mouse hover scrubs live and clears on leave; touch drags (pointermove only
+// fires while the finger is down) and the selection stays pinned after lift so
+// the tapped/slid value remains readable.
+function attachChartCursor(canvas) {
+  canvas.addEventListener("pointerdown", (e) => {
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
+    setCursorFromEvent(canvas, e);
+  });
+  canvas.addEventListener("pointermove", (e) => setCursorFromEvent(canvas, e));
+  canvas.addEventListener("pointerup", (e) => {
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
+  });
+  canvas.addEventListener("pointerleave", (e) => {
+    if (e.pointerType !== "mouse") return; // keep the touch-selected point visible
+    cursorT = null;
+    drawCharts();
+  });
 }
 
 function chartCard(title, sub, series, opts = {}) {
   const canvas = el("canvas");
   const wrap = el("div", { class: "chart-wrap" }, canvas);
-  const legend = el("div", { class: "chart-legend" });
-  for (const s of series) {
-    legend.append(el("span", { class: "lg" },
-      el("span", { class: "swatch", style: `background:${s.color}` }), s.label));
-  }
-  activeCharts.push({ canvas, series, opts });
+  const legendItems = series.map((s) => {
+    const valueEl = el("span", { class: "lg-value" });
+    return {
+      series: s,
+      valueEl,
+      item: el("span", { class: "lg" },
+        el("span", { class: "swatch", style: `background:${s.color}` }), s.label, valueEl),
+    };
+  });
+  const hint = el("span", { class: "chart-hint" }, "Drag to inspect");
+  const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item), series.length ? hint : null);
+  const chart = { canvas, series, opts, legendItems, hint };
+  activeCharts.push(chart);
+  if (series.length) attachChartCursor(canvas);
   return el("div", { class: "card chart-card" },
     el("h2", {}, title),
     sub ? el("p", { class: "card-sub" }, sub) : null,

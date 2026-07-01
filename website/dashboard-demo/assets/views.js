@@ -2,25 +2,84 @@
 // { id, label, icon, render(root, state) }. `state` carries the loaded data and
 // the admin action callbacks (see app.js buildState()).
 
-import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, DASH } from "./format.js";
-import { drawLineChart, seriesFrom, PALETTE } from "./charts.js";
+import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, fmtDateTime, DASH } from "./format.js";
+import { drawLineChart, seriesFrom, valueAt, PALETTE } from "./charts.js";
 
 // ── chart manager: views register charts; app.js redraws them after mount ────
 let activeCharts = [];
+
+// Selected/hovered timestamp (epoch millis), shared across every chart on the
+// current view so scrubbing one diagram lines up the readout on all of them.
+// Persists across re-renders (view switches, auto-refresh) until the mouse
+// leaves a chart, so a slid position survives a data reload.
+let cursorT = null;
+
 export function clearCharts() { activeCharts = []; }
 export function drawCharts() {
-  for (const c of activeCharts) drawLineChart(c.canvas, c.series, c.opts);
+  for (const c of activeCharts) {
+    drawLineChart(c.canvas, c.series, { ...c.opts, cursorT });
+    updateReadout(c);
+  }
+}
+
+function updateReadout(c) {
+  for (const { valueEl, series } of c.legendItems) {
+    if (cursorT == null) { valueEl.textContent = ""; continue; }
+    const p = valueAt(series.points, cursorT);
+    valueEl.textContent = p ? `: ${fmt(p.y, c.opts.yDigits ?? 1, c.opts.unit ? " " + c.opts.unit : "")}` : ": " + DASH;
+  }
+  if (c.hint) c.hint.textContent = cursorT == null ? "Drag to inspect" : fmtDateTime(cursorT);
+}
+
+// Turn a pointer event's x position into a timestamp using the chart's last
+// drawn pixel<->time mapping (stashed on the canvas by drawLineChart), then
+// redraw every chart so the whole view's readout stays in sync.
+function setCursorFromEvent(canvas, e) {
+  const scale = canvas._xScale;
+  if (!scale) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const frac = Math.min(1, Math.max(0, (x - scale.padL) / scale.plotW));
+  cursorT = scale.tMin + frac * (scale.tMax - scale.tMin);
+  drawCharts();
+}
+
+// Mouse hover scrubs live and clears on leave; touch drags (pointermove only
+// fires while the finger is down) and the selection stays pinned after lift so
+// the tapped/slid value remains readable.
+function attachChartCursor(canvas) {
+  canvas.addEventListener("pointerdown", (e) => {
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
+    setCursorFromEvent(canvas, e);
+  });
+  canvas.addEventListener("pointermove", (e) => setCursorFromEvent(canvas, e));
+  canvas.addEventListener("pointerup", (e) => {
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
+  });
+  canvas.addEventListener("pointerleave", (e) => {
+    if (e.pointerType !== "mouse") return; // keep the touch-selected point visible
+    cursorT = null;
+    drawCharts();
+  });
 }
 
 function chartCard(title, sub, series, opts = {}) {
   const canvas = el("canvas");
   const wrap = el("div", { class: "chart-wrap" }, canvas);
-  const legend = el("div", { class: "chart-legend" });
-  for (const s of series) {
-    legend.append(el("span", { class: "lg" },
-      el("span", { class: "swatch", style: `background:${s.color}` }), s.label));
-  }
-  activeCharts.push({ canvas, series, opts });
+  const legendItems = series.map((s) => {
+    const valueEl = el("span", { class: "lg-value" });
+    return {
+      series: s,
+      valueEl,
+      item: el("span", { class: "lg" },
+        el("span", { class: "swatch", style: `background:${s.color}` }), s.label, valueEl),
+    };
+  });
+  const hint = el("span", { class: "chart-hint" }, "Drag to inspect");
+  const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item), series.length ? hint : null);
+  const chart = { canvas, series, opts, legendItems, hint };
+  activeCharts.push(chart);
+  if (series.length) attachChartCursor(canvas);
   return el("div", { class: "card chart-card" },
     el("h2", {}, title),
     sub ? el("p", { class: "card-sub" }, sub) : null,
@@ -49,19 +108,57 @@ function viewHead(title, desc) {
   return el("div", { class: "view-head" }, el("h1", {}, title), desc ? el("p", {}, desc) : null);
 }
 
-function hiveLabel(state, n) {
-  // Prefer the live channels endpoint (kept fresh after edits), then the name
-  // embedded in the device list, then a generic fallback.
-  const c = state.channels || {};
-  const fromChannels = n === 1 ? c.scale_1_display_name : c.scale_2_display_name;
-  const dev = state.device?.channels || {};
-  const fromDevice = n === 1 ? dev.scale_1 : dev.scale_2;
-  return fromChannels || fromDevice || `Hive ${n}`;
+// Cycle the (6-colour) palette so up to MAX_HIVES (18) series stay distinct.
+function paletteColor(i) {
+  return PALETTE[((i % PALETTE.length) + PALETTE.length) % PALETTE.length];
 }
 
-// hives shown given the top-bar hive selector ("all" | "1" | "2")
+// Hive indices a device exposes. A single ESP32 now carries up to 18 hives, so
+// the set is derived live from the latest reading's hives[] array, any custom
+// channel names, and the legacy flat scale_N keys. Falls back to the classic
+// two-hive shape only when nothing else is known.
+export function availableHives(state) {
+  const set = new Set();
+  for (const h of state.latest?.hives || []) {
+    if (h && h.index != null) set.add(Number(h.index));
+  }
+  const names = state.channels?.names || state.device?.channels?.names || {};
+  for (const k of Object.keys(names)) { const n = Number(k); if (n) set.add(n); }
+  if (state.latest) {
+    for (const key of Object.keys(state.latest)) {
+      const mm = /^scale_(\d+)_weight_kg(?:_compensated)?$/.exec(key);
+      if (mm && state.latest[key] != null) set.add(Number(mm[1]));
+    }
+  }
+  if (!set.size) { set.add(1); set.add(2); }
+  return [...set].filter((n) => n >= 1).sort((a, b) => a - b);
+}
+
+// Best display name for hive n: a custom channel name first, then the firmware-
+// reported name from the hives[] array, then the legacy single-channel fields,
+// then a generic "Hive n".
+export function hiveLabel(state, n) {
+  const names = state.channels?.names || {};
+  if (names[n] != null && names[n] !== "") return names[n];
+  const hv = (state.latest?.hives || []).find((h) => Number(h?.index) === Number(n));
+  if (hv && hv.name) return hv.name;
+  const c = state.channels || {};
+  const legacy = n === 1 ? c.scale_1_display_name : n === 2 ? c.scale_2_display_name : null;
+  const dev = state.device?.channels || {};
+  const fromDevice = (dev.names && dev.names[n]) || (n === 1 ? dev.scale_1 : n === 2 ? dev.scale_2 : null);
+  return legacy || fromDevice || `Hive ${n}`;
+}
+
+// Weight key for hive n: the temperature-compensated column when present (hives
+// 1–2), otherwise the raw per-hive weight synthesized for hives 3–18.
+function weightKey(m, n) {
+  const comp = `scale_${n}_weight_kg_compensated`;
+  return m && m[comp] != null ? comp : `scale_${n}_weight_kg`;
+}
+
+// hives shown given the top-bar hive selector ("all" | a specific index)
 function selectedHives(state) {
-  return state.hive === "all" ? [1, 2] : [Number(state.hive)];
+  return state.hive === "all" ? availableHives(state) : [Number(state.hive)];
 }
 
 // latest non-null among a list of candidate keys (first match wins)
@@ -102,10 +199,13 @@ function signed(v, digits, unit) {
 // ── OVERVIEW ─────────────────────────────────────────────────────────────────
 function renderOverview(root, state) {
   const m = state.latest || {};
-  const W = "scale_1_weight_kg_compensated", W2 = "scale_2_weight_kg_compensated";
-  const totalWeight = (isNum(m[W]) ? m[W] : 0) + (isNum(m[W2]) ? m[W2] : 0);
-  const anyWeight = isNum(m[W]) || isNum(m[W2]);
-  const w24 = changeOver(state.measurements, W, 24);
+  const hives = availableHives(state);
+  let totalWeight = 0, anyWeight = false;
+  for (const n of hives) {
+    const v = m[weightKey(m, n)];
+    if (isNum(v)) { totalWeight += v; anyWeight = true; }
+  }
+  const w24 = changeOver(state.measurements, weightKey(m, hives[0]), 24);
 
   const ins = state.insights;
   const sev = ins?.highest_severity;
@@ -145,8 +245,9 @@ function renderOverview(root, state) {
       statusCard,
       highestAlertCard(ins),
       chartCard("Weight trend", "Compensated mass over the selected range",
-        [seriesFrom(state.measurements, W, hiveLabel(state, 1), PALETTE[0]),
-         seriesFrom(state.measurements, W2, hiveLabel(state, 2), PALETTE[1])], { unit: "kg", yDigits: 1 })));
+        hives.map((n, i) =>
+          seriesFrom(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i))),
+        { unit: "kg", yDigits: 1 })));
 }
 
 function highestAlertCard(ins) {
@@ -181,8 +282,8 @@ function renderTemperature(root, state) {
   cards.push(metricCard("Ambient", fmt(m.ambient_temp_c, 1), "°C", "Outside the hive"));
 
   const series = hives.map((n, i) =>
-    seriesFrom(state.measurements, `hive_${n}_temp_c`, `${hiveLabel(state, n)}`, PALETTE[i]));
-  series.push(seriesFrom(state.measurements, "ambient_temp_c", "Ambient", PALETTE[2]));
+    seriesFrom(state.measurements, `hive_${n}_temp_c`, `${hiveLabel(state, n)}`, paletteColor(i)));
+  series.push(seriesFrom(state.measurements, "ambient_temp_c", "Ambient", paletteColor(hives.length)));
 
   root.append(tsView("Temperature", "Inside and ambient temperature", state,
     { cards, charts: [chartCard("Temperature", null, series, { unit: "°C", yDigits: 1 })] }));
@@ -192,13 +293,13 @@ function renderWeight(root, state) {
   const m = state.latest || {};
   const hives = selectedHives(state);
   const cards = hives.map((n) => {
-    const key = `scale_${n}_weight_kg_compensated`;
+    const key = weightKey(m, n);
     const c24 = changeOver(state.measurements, key, 24);
     return metricCard(`${hiveLabel(state, n)} weight`, fmt(m[key], 2), "kg",
       c24 != null ? `24h ${signed(c24, 2, "kg")}` : "Compensated");
   });
   const series = hives.map((n, i) =>
-    seriesFrom(state.measurements, `scale_${n}_weight_kg_compensated`, hiveLabel(state, n), PALETTE[i]));
+    seriesFrom(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i)));
 
   root.append(tsView("Weight", "Mass changes and harvest trend", state,
     { cards, charts: [chartCard("Weight", null, series, { unit: "kg", yDigits: 1 })] }));
@@ -206,17 +307,19 @@ function renderWeight(root, state) {
 
 function renderEnvironment(root, state) {
   const m = state.latest || {};
+  const hives = selectedHives(state);
   const pressureKeys = ["ble_1_pressure_hpa", "ble_2_pressure_hpa", "hivescale_1_pressure_hpa", "hivescale_2_pressure_hpa"];
+  const inHiveHumidity = latestCoalesce([m], hives.map((n) => `hive_${n}_humidity_percent`));
   const cards = [
     metricCard("Ambient humidity", fmt(m.ambient_humidity_percent, 1), "%", "Outside the hive"),
-    metricCard("In-hive humidity", fmt(m.hive_1_humidity_percent ?? m.hive_2_humidity_percent, 1), "%", "Brood area"),
+    metricCard("In-hive humidity", fmt(inHiveHumidity, 1), "%", "Brood area"),
     metricCard("Pressure", fmt(latestCoalesce([m], pressureKeys), 0), "hPa", "Barometric"),
   ];
   const charts = [
     chartCard("Humidity", "Ambient and in-hive relative humidity",
-      [seriesFrom(state.measurements, "ambient_humidity_percent", "Ambient", PALETTE[2]),
-       seriesFrom(state.measurements, "hive_1_humidity_percent", hiveLabel(state, 1), PALETTE[0]),
-       seriesFrom(state.measurements, "hive_2_humidity_percent", hiveLabel(state, 2), PALETTE[1])],
+      [seriesFrom(state.measurements, "ambient_humidity_percent", "Ambient", paletteColor(hives.length)),
+       ...hives.map((n, i) =>
+         seriesFrom(state.measurements, `hive_${n}_humidity_percent`, hiveLabel(state, n), paletteColor(i)))],
       { unit: "%", yDigits: 0 }),
     chartCard("Pressure", "Barometric pressure around the hive",
       [seriesCoalesce(state.measurements, pressureKeys, "Pressure", PALETTE[3])], { unit: "hPa", yDigits: 0 }),
@@ -224,25 +327,33 @@ function renderEnvironment(root, state) {
   root.append(tsView("Environment", "Humidity and air pressure", state, { cards, charts }));
 }
 
-// The stereo microphone's left / right channels map to hive 1 / hive 2, so the
-// audio + frequency views label them with the hive names like every other view.
-function micSide(n) {
-  return n === 1 ? "left" : "right";
+// Candidate mic keys for hive n, most-specific first. The multi-hive firmware
+// exposes per-hive aliases (mic_{n}_rms_dbfs, …) for every hive; older stereo
+// rows only carry the legacy left/right channels, where left = hive 1 and
+// right = hive 2. Returning the per-hive key first with the legacy channel as a
+// fallback means hives 3–18 read their own mic instead of aliasing hive 2's
+// right channel, while legacy two-hive rows keep working.
+function micKeys(n, suffix) {
+  const keys = [`mic_${n}_${suffix}`];
+  if (n === 1) keys.push(`mic_left_${suffix}`);
+  else if (n === 2) keys.push(`mic_right_${suffix}`);
+  return keys;
 }
 
 function renderAudio(root, state) {
   const m = state.latest || {};
   const hives = selectedHives(state);
   const cards = hives.map((n) => {
-    const s = micSide(n);
-    return metricCard(`${hiveLabel(state, n)} RMS`, fmt(m[`mic_${s}_rms_dbfs`], 1), "dBFS",
-      isNum(m[`mic_${s}_peak_dbfs`]) ? `Peak ${fmt(m[`mic_${s}_peak_dbfs`], 1)}` : "Sound level");
+    const rms = latestCoalesce([m], micKeys(n, "rms_dbfs"));
+    const peak = latestCoalesce([m], micKeys(n, "peak_dbfs"));
+    return metricCard(`${hiveLabel(state, n)} RMS`, fmt(rms, 1), "dBFS",
+      isNum(peak) ? `Peak ${fmt(peak, 1)}` : "Sound level");
   });
   cards.push(metricCard("Sample rate", fmtInt(m.mic_sample_rate_hz), "Hz",
     isNum(m.mic_sample_frames) ? `${fmtInt(m.mic_sample_frames)} frames` : "Microphone"));
 
-  const rms = hives.map((n, i) => seriesFrom(state.measurements, `mic_${micSide(n)}_rms_dbfs`, hiveLabel(state, n), PALETTE[i]));
-  const peak = hives.map((n, i) => seriesFrom(state.measurements, `mic_${micSide(n)}_peak_dbfs`, hiveLabel(state, n), PALETTE[i]));
+  const rms = hives.map((n, i) => seriesCoalesce(state.measurements, micKeys(n, "rms_dbfs"), hiveLabel(state, n), PALETTE[i]));
+  const peak = hives.map((n, i) => seriesCoalesce(state.measurements, micKeys(n, "peak_dbfs"), hiveLabel(state, n), PALETTE[i]));
   const charts = [
     chartCard("Sound level (RMS)", "Per-hive microphone RMS", rms, { unit: "dBFS", yDigits: 0 }),
     chartCard("Peak level", "Per-hive microphone peak", peak, { unit: "dBFS", yDigits: 0 }),
@@ -274,7 +385,7 @@ function renderFrequency(root, state) {
   const hives = selectedHives(state);
   const charts = [];
   for (const n of hives) {
-    const items = BANDS.map(([k, label]) => ({ label, value: m[`mic_${micSide(n)}_band_${k}_dbfs`] }));
+    const items = BANDS.map(([k, label]) => ({ label, value: latestCoalesce([m], micKeys(n, `band_${k}_dbfs`)) }));
     if (items.some((i) => isNum(i.value))) {
       charts.push(barChart(`Frequency bands — ${hiveLabel(state, n)}`, "Latest per-band FFT energy (dBFS)", items));
     }
@@ -358,7 +469,63 @@ function renderInsights(root, state) {
     [k, typeof v === "object" ? JSON.stringify(v) : String(v)]);
   if (catRows.length) node.append(el("div", { style: "margin-top:1rem" }, rowsCard("Categories", catRows)));
   node.append(el("div", { style: "margin-top:1rem" }, highestAlertCard(ins)));
+  node.append(el("div", { style: "margin-top:1rem" }, insightsHistoryCard(state)));
   root.append(node);
+}
+
+// Persisted alert history (active + resolved). Views render synchronously, so the
+// history is fetched lazily and the list is swapped in once it arrives — the same
+// pattern the admin users card uses.
+function insightsHistoryCard(state) {
+  const listEl = el("div", { class: "rows" }, el("p", { class: "muted-text" }, "Loading history…"));
+  const filter = el("select", { class: "full" },
+    el("option", { value: "all" }, "All"),
+    el("option", { value: "active" }, "Active only"),
+    el("option", { value: "resolved" }, "Resolved only"));
+
+  const historyRow = (a) => {
+    const resolved = a.status === "resolved";
+    const badge = el("span", { class: `badge ${sevClass(a.peak_severity || a.severity)}` },
+      a.peak_severity || a.severity || "");
+    const stateBadge = el("span", { class: `badge ${resolved ? "good" : "warn"}` },
+      resolved ? "Resolved" : "Active");
+    const when = resolved
+      ? `${fmtDateTime(a.first_seen_at)} → resolved ${relAge(a.resolved_at)}`
+      : `Since ${fmtDateTime(a.first_seen_at)} · last seen ${relAge(a.last_seen_at)}`;
+    return el("div", { class: "card", style: "margin:0" },
+      el("div", { class: "spread" },
+        el("h3", { style: "margin:.1rem 0" }, a.title || a.alert_key || "Alert"),
+        el("span", {}, stateBadge, " ", badge)),
+      a.description ? el("p", { class: "muted-text", style: "margin:.2rem 0" }, a.description) : null,
+      el("p", { class: "note", style: "margin:.2rem 0 0" }, when));
+  };
+
+  const refresh = async () => {
+    listEl.replaceChildren(el("p", { class: "muted-text" }, "Loading history…"));
+    try {
+      const res = await state.actions.insightsHistory({ status: filter.value, limit: 100 });
+      const alerts = (res && res.alerts) || [];
+      if (!alerts.length) {
+        listEl.replaceChildren(el("p", { class: "muted-text" },
+          filter.value === "resolved"
+            ? "No resolved insights yet."
+            : "No insight history recorded yet."));
+        return;
+      }
+      listEl.replaceChildren(...alerts.map(historyRow));
+    } catch (err) {
+      listEl.replaceChildren(el("p", { class: "auth-error" }, err.message || "Failed to load history"));
+    }
+  };
+  filter.addEventListener("change", refresh);
+  refresh();
+
+  return el("div", { class: "card" },
+    el("div", { class: "spread" },
+      el("h2", {}, "Insights history"),
+      el("label", { class: "field" }, el("span", { class: "field-label" }, "Show"), filter)),
+    el("p", { class: "note" }, "Lifecycle of past and present alerts, including warnings that have since resolved."),
+    listEl);
 }
 
 // ── DEVICE / ADMIN ───────────────────────────────────────────────────────────
@@ -421,24 +588,37 @@ function renderDevice(root, state) {
   });
   const configCard = el("div", { class: "card" }, el("h2", {}, "Configuration"), cfgForm);
 
-  // Hive (scale-channel) names
+  // Hive (scale-channel) names — one input per hive the device reports (up to 18).
   const chData = state.channels || {};
-  const ch1 = el("input", { type: "text", value: chData.scale_1_display_name ?? "", placeholder: "Hive 1" });
-  const ch2 = el("input", { type: "text", value: chData.scale_2_display_name ?? "", placeholder: "Hive 2" });
+  const chNames = chData.names || {};
+  const curName = (n) =>
+    chNames[n] ??
+    (n === 1 ? chData.scale_1_display_name : n === 2 ? chData.scale_2_display_name : null) ??
+    "";
+  const chInputs = availableHives(state).map((n) => {
+    const fw = (state.latest?.hives || []).find((h) => Number(h?.index) === n);
+    const initial = curName(n);
+    return {
+      n,
+      initial,
+      input: el("input", { type: "text", value: initial, placeholder: (fw && fw.name) || `Hive ${n}` }),
+    };
+  });
   const chBtn = el("button", { class: "btn", type: "submit" }, "Save names");
   const chForm = el("form", {},
-    el("div", { class: "form-row" }, el("label", {}, "Hive 1 name"), ch1),
-    el("div", { class: "form-row" }, el("label", {}, "Hive 2 name"), ch2),
+    ...chInputs.map(({ n, input }) =>
+      el("div", { class: "form-row" }, el("label", {}, `Hive ${n} name`), input)),
     el("p", { class: "note" }, "Shown as the hive labels across every chart and card."),
     el("div", { class: "form-actions" }, chBtn));
   chForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const payload = {};
-    if (ch1.value !== (chData.scale_1_display_name ?? "")) payload.scale_1_display_name = ch1.value;
-    if (ch2.value !== (chData.scale_2_display_name ?? "")) payload.scale_2_display_name = ch2.value;
-    if (!Object.keys(payload).length) { state.toast("No changes to save"); return; }
+    const names = {};
+    for (const { n, input, initial } of chInputs) {
+      if (input.value !== initial) names[String(n)] = input.value;
+    }
+    if (!Object.keys(names).length) { state.toast("No changes to save"); return; }
     chBtn.disabled = true;
-    try { await state.actions.updateChannels(payload); state.toast("Hive names saved", "success"); state.reload(); }
+    try { await state.actions.updateChannels({ names }); state.toast("Hive names saved", "success"); state.reload(); }
     catch (err) { state.toast(err.message, "error"); chBtn.disabled = false; }
   });
   const channelsCard = el("div", { class: "card" }, el("h2", {}, "Hive names"), chForm);
@@ -546,11 +726,135 @@ function renderDevice(root, state) {
   const fitCard = el("div", { class: "card" }, el("h2", {}, "Temperature compensation"),
     el("p", { class: "note" }, "Regress raw weight against temperature to derive a load-cell coefficient."), fitForm);
 
+  // Dashboard account cards: change-your-password for everyone, plus user
+  // management for admins.
+  const accountCards = [accountCard(state)];
+  if (state.authUser?.role === "admin") accountCards.push(usersCard(state));
+
   node.append(
     el("div", { class: "grid wide" }, configCard, channelsCard),
     el("div", { class: "grid wide", style: "margin-top:1rem" }, fwPanel, uploadCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard));
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard),
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, ...accountCards));
   root.append(node);
+}
+
+// ── dashboard account cards ──────────────────────────────────────────────────
+// "Your account": let the logged-in user change their own password.
+function accountCard(state) {
+  const u = state.authUser || {};
+
+  // Contact email — where insights-based alerts will be sent once notifications
+  // are wired up. Optional; can be cleared by saving an empty field.
+  const emailInput = el("input", { type: "email", autocomplete: "email", value: u.email || "", placeholder: "you@example.com" });
+  const emailBtn = el("button", { class: "btn", type: "submit" }, "Save email");
+  const emailForm = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Alert email"), emailInput),
+    el("p", { class: "note" }, "Used to notify you about colony insights (swarm, robbing, winter risk…). Leave blank to receive none."),
+    el("div", { class: "form-actions" }, emailBtn));
+  emailForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    emailBtn.disabled = true;
+    try {
+      const r = await state.actions.updateEmail(emailInput.value.trim());
+      // Reflect the server-normalised value back into the session + field.
+      state.authUser.email = r && "email" in r ? r.email : emailInput.value.trim() || null;
+      emailInput.value = state.authUser.email || "";
+      state.toast("Email saved", "success");
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { emailBtn.disabled = false; }
+  });
+
+  const curPw = el("input", { type: "password", autocomplete: "current-password" });
+  const newPw = el("input", { type: "password", autocomplete: "new-password" });
+  const newPw2 = el("input", { type: "password", autocomplete: "new-password" });
+  const btn = el("button", { class: "btn", type: "submit" }, "Change password");
+  const form = el("form", {},
+    el("div", { class: "rows" },
+      el("div", { class: "row" }, el("span", { class: "k" }, "Signed in as"), el("span", { class: "v" }, u.username || DASH)),
+      el("div", { class: "row" }, el("span", { class: "k" }, "Role"), el("span", { class: "v" }, u.role || DASH))),
+    el("div", { class: "form-row" }, el("label", {}, "Current password"), curPw),
+    el("div", { class: "form-row" }, el("label", {}, "New password"), newPw),
+    el("div", { class: "form-row" }, el("label", {}, "Confirm new password"), newPw2),
+    el("div", { class: "form-actions" }, btn));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (newPw.value.length < 8) { state.toast("New password must be at least 8 characters", "error"); return; }
+    if (newPw.value !== newPw2.value) { state.toast("New passwords do not match", "error"); return; }
+    btn.disabled = true;
+    try {
+      await state.actions.changePassword(curPw.value, newPw.value);
+      state.toast("Password changed", "success");
+      curPw.value = newPw.value = newPw2.value = "";
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { btn.disabled = false; }
+  });
+  return el("div", { class: "card" }, el("h2", {}, "Your account"),
+    emailForm,
+    el("h3", { style: "margin:.8rem 0 .2rem" }, "Change password"),
+    form);
+}
+
+// "Dashboard users" (admin only): list / add / remove accounts. The list is
+// fetched lazily because views render synchronously.
+function usersCard(state) {
+  const listEl = el("div", { class: "rows" }, el("p", { class: "muted-text" }, "Loading users…"));
+
+  const refresh = async () => {
+    try {
+      const users = await state.actions.listUsers();
+      listEl.replaceChildren(...users.map((usr) => {
+        const del = el("button", { class: "btn small ghost", type: "button" }, "Remove");
+        del.addEventListener("click", async () => {
+          if (usr.username === state.authUser?.username) { state.toast("You cannot remove your own account", "error"); return; }
+          del.disabled = true;
+          try { await state.actions.deleteUser(usr.id); state.toast("User removed", "success"); refresh(); }
+          catch (err) { state.toast(err.message, "error"); del.disabled = false; }
+        });
+        const label = usr.email ? `${usr.username} · ${usr.role} · ${usr.email}` : `${usr.username} · ${usr.role}`;
+        return el("div", { class: "row" },
+          el("span", { class: "k" }, label),
+          el("span", { class: "v" }, del));
+      }));
+      if (!users.length) listEl.replaceChildren(el("p", { class: "muted-text" }, "No users yet."));
+    } catch (err) {
+      listEl.replaceChildren(el("p", { class: "auth-error" }, err.message || "Failed to load users"));
+    }
+  };
+
+  const nu = el("input", { type: "text", autocomplete: "off", placeholder: "username" });
+  const ne = el("input", { type: "email", autocomplete: "off", placeholder: "email (optional)" });
+  const np = el("input", { type: "password", autocomplete: "new-password", placeholder: "password (min 8)" });
+  const nr = el("select", { class: "full" },
+    el("option", { value: "viewer" }, "Viewer (read-only)"),
+    el("option", { value: "admin" }, "Admin (full control)"));
+  const addBtn = el("button", { class: "btn", type: "submit" }, "Add user");
+  const addForm = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Username"), nu),
+    el("div", { class: "form-row" }, el("label", {}, "Email"), ne),
+    el("div", { class: "form-row" }, el("label", {}, "Password"), np),
+    el("div", { class: "form-row" }, el("label", {}, "Role"), nr),
+    el("div", { class: "form-actions" }, addBtn));
+  addForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (np.value.length < 8) { state.toast("Password must be at least 8 characters", "error"); return; }
+    if (nu.value.trim().length < 3) { state.toast("Username must be at least 3 characters", "error"); return; }
+    addBtn.disabled = true;
+    try {
+      await state.actions.createUser(nu.value.trim(), np.value, nr.value, ne.value.trim() || null);
+      state.toast("User created", "success");
+      nu.value = np.value = ne.value = "";
+      refresh();
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { addBtn.disabled = false; }
+  });
+
+  refresh();
+  return el("div", { class: "card" }, el("h2", {}, "Dashboard users"),
+    el("p", { class: "note" }, "Viewers can see all data; admins can also change configuration, calibration, firmware and users."),
+    listEl,
+    el("h3", { style: "margin:.8rem 0 .2rem" }, "Add a user"),
+    addForm);
 }
 
 // ── registry ─────────────────────────────────────────────────────────────────
