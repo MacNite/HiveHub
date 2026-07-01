@@ -3,7 +3,7 @@
 
 import { api } from "./api.js";
 import { el } from "./format.js";
-import { GROUPS, clearCharts, drawCharts } from "./views.js";
+import { GROUPS, clearCharts, drawCharts, availableHives, hiveLabel } from "./views.js";
 
 const RANGES = {
   "1d":    { days: 1,    limit: 2000 },
@@ -94,6 +94,8 @@ function buildState() {
     channels: d.channels,
     insights: d.insights,
     firmware: d.firmware,
+    // Static demo session — the real dashboard fills this from the auth API.
+    authUser: { username: "demo", role: "viewer" },
     toast,
     reload: loadData,
     actions: {
@@ -104,6 +106,13 @@ function buildState() {
       fitTempComp: (p) => api.fitTempCompensation(state.deviceId, p),
       updateConfig: (p) => api.updateConfig(state.deviceId, p),
       updateChannels: (p) => api.updateChannels(state.deviceId, p),
+      insightsHistory: (opts) => api.insightsHistory(state.deviceId, opts),
+      // Account management is auth-backed in the real dashboard; disabled here.
+      listUsers: () => api.listUsers(),
+      createUser: (u, p, r, email) => api.createUser(u, p, r, email),
+      deleteUser: (id) => api.deleteUser(id),
+      changePassword: (cur, next) => api.changePassword(cur, next),
+      updateEmail: (email) => api.updateEmail(email),
     },
   };
 }
@@ -118,6 +127,18 @@ function renderSidebar() {
     }));
 }
 
+// Rebuild the hive selector from the hives the current device actually reports
+// (up to 18), labelled with their names. Preserves the current selection, or
+// falls back to "All hives" when that hive is no longer present (device switch).
+function populateHiveSelect(vstate) {
+  const hives = availableHives(vstate);
+  if (state.hive !== "all" && !hives.includes(Number(state.hive))) state.hive = "all";
+  const options = [el("option", { value: "all" }, "All hives")];
+  for (const n of hives) options.push(el("option", { value: String(n) }, hiveLabel(vstate, n)));
+  ui.hiveSelect.replaceChildren(...options);
+  ui.hiveSelect.value = state.hive;
+}
+
 function render() {
   renderSidebar();
   clearCharts();
@@ -128,8 +149,10 @@ function render() {
   } else if (!state.data) {
     container.append(el("div", { class: "empty-state" }, "Loading…"));
   } else {
+    const vstate = buildState();
+    populateHiveSelect(vstate);
     try {
-      group.render(container, buildState());
+      group.render(container, vstate);
     } catch (err) {
       container.append(el("div", { class: "empty-state" }, "Failed to render this view: " + err.message));
       console.error(err);

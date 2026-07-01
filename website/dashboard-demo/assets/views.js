@@ -96,6 +96,28 @@ function metricCard(label, value, unit, sub) {
       sub ? el("span", { class: "sub" }, sub) : null));
 }
 
+// A metric panel that stays readable across one or many hives. With a single
+// hive it renders the classic big-number card (unchanged); with several it
+// stacks a compact, smaller-font row per hive — each tagged with the hive name —
+// so every selected hive is visible instead of just the first. `cellFn(n)`
+// returns the formatted value string for hive n; `footer` is an optional note
+// shown under the list (e.g. the shared ambient reading).
+function perHiveCard(state, label, hives, unit, cellFn, footer) {
+  if (hives.length <= 1) {
+    return metricCard(label, hives.length ? cellFn(hives[0]) : DASH, unit, footer);
+  }
+  const rows = hives.map((n) =>
+    el("div", { class: "hive-row" },
+      el("span", { class: "hive-row-name" }, hiveLabel(state, n)),
+      el("span", { class: "hive-row-val" },
+        cellFn(n), unit ? el("span", { class: "hive-row-unit" }, " " + unit) : null)));
+  return el("div", { class: "card" },
+    el("div", { class: "metric" },
+      el("span", { class: "label" }, label),
+      el("div", { class: "hive-rows" }, ...rows),
+      footer ? el("span", { class: "sub" }, footer) : null));
+}
+
 function rowsCard(title, rows) {
   return el("div", { class: "card" },
     title ? el("h2", {}, title) : null,
@@ -213,12 +235,21 @@ function renderOverview(root, state) {
     el("span", { class: `dot ${sevClass(sev)}` }), sev ? sev : "OK");
 
   const cards = [
-    metricCard("Weight", anyWeight ? fmt(totalWeight, 2) : DASH, "kg",
-      w24 != null ? `24h ${signed(w24, 2, "kg")}` : "Total of active scales"),
-    metricCard("Hive temperature", fmt(m.hive_1_temp_c ?? m.hive_2_temp_c, 1), "°C",
+    hives.length > 1
+      ? perHiveCard(state, "Weight", hives, "kg",
+          (n) => fmt(m[weightKey(m, n)], 2),
+          anyWeight ? `Total ${fmt(totalWeight, 2)} kg` : "Total of active scales")
+      : metricCard("Weight", anyWeight ? fmt(totalWeight, 2) : DASH, "kg",
+          w24 != null ? `24h ${signed(w24, 2, "kg")}` : "Total of active scales"),
+    perHiveCard(state, "Hive temperature", hives, "°C",
+      (n) => fmt(m[`hive_${n}_temp_c`], 1),
       isNum(m.ambient_temp_c) ? `Ambient ${fmt(m.ambient_temp_c, 1)} °C` : "Brood zone"),
-    metricCard("Humidity", fmt(m.ambient_humidity_percent, 1), "%",
-      isNum(m.hive_1_humidity_percent) ? `In-hive ${fmt(m.hive_1_humidity_percent, 0)} %` : "Ambient"),
+    hives.length > 1
+      ? perHiveCard(state, "In-hive humidity", hives, "%",
+          (n) => fmt(m[`hive_${n}_humidity_percent`], 0),
+          isNum(m.ambient_humidity_percent) ? `Ambient ${fmt(m.ambient_humidity_percent, 1)} %` : "Brood area")
+      : metricCard("Humidity", fmt(m.ambient_humidity_percent, 1), "%",
+          isNum(m.hive_1_humidity_percent) ? `In-hive ${fmt(m.hive_1_humidity_percent, 0)} %` : "Ambient"),
     metricCard("Battery", isNum(m.battery_soc_percent) ? fmt(m.battery_soc_percent, 0) : DASH, "%",
       isNum(m.battery_voltage) ? `${fmt(m.battery_voltage, 2)} V` : "State of charge"),
     metricCard("Signal", fmt(m.rssi_dbm, 0), "dBm",
@@ -309,10 +340,10 @@ function renderEnvironment(root, state) {
   const m = state.latest || {};
   const hives = selectedHives(state);
   const pressureKeys = ["ble_1_pressure_hpa", "ble_2_pressure_hpa", "hivescale_1_pressure_hpa", "hivescale_2_pressure_hpa"];
-  const inHiveHumidity = latestCoalesce([m], hives.map((n) => `hive_${n}_humidity_percent`));
   const cards = [
     metricCard("Ambient humidity", fmt(m.ambient_humidity_percent, 1), "%", "Outside the hive"),
-    metricCard("In-hive humidity", fmt(inHiveHumidity, 1), "%", "Brood area"),
+    perHiveCard(state, "In-hive humidity", hives, "%",
+      (n) => fmt(m[`hive_${n}_humidity_percent`], 1), "Brood area"),
     metricCard("Pressure", fmt(latestCoalesce([m], pressureKeys), 0), "hPa", "Barometric"),
   ];
   const charts = [
