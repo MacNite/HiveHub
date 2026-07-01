@@ -4439,6 +4439,15 @@ def queue_beecounter_update_from_app(
 INSIGHT_SEVERITY_RANK = {"info": 1, "watch": 2, "warning": 3, "critical": 4}
 
 
+# Last time each device's insight_alerts were reconciled/persisted (background
+# reconciler or an opportunistic live compute). Lets the dashboard summary
+# endpoint tell "reconciled recently, no active alerts" apart from "never
+# reconciled", so a healthy hive is served cheaply from persisted state instead
+# of paying for a live 14-day recompute on every load. See _summary_from_persisted.
+_insights_reconciled_at: dict[str, datetime] = {}
+_insights_reconciled_lock = threading.Lock()
+
+
 def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> None:
     """
     Reconcile the freshly computed ``alerts`` for ``device_id`` against the
@@ -4534,6 +4543,10 @@ def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> Non
                 },
             )
             conn.commit()
+    # Mark this device's persisted insight state fresh as of ``computed_at`` so
+    # the dashboard summary can be served from insight_alerts without a recompute.
+    with _insights_reconciled_lock:
+        _insights_reconciled_at[device_id] = computed_at
 
 
 def reconcile_device_insights(
@@ -5152,16 +5165,96 @@ def compute_local_insights_summary(device_id: str) -> dict:
     }
 
 
+# Serve the dashboard summary from the reconciler-maintained ``insight_alerts``
+# table when it's fresh enough, instead of re-running the heavy 14-day
+# MEASUREMENT_SELECT_COLUMNS scan + Python detectors on the request path. The
+# background reconciler (INSIGHTS_RECONCILE_INTERVAL_SECONDS, default 900s)
+# refreshes every active device, so this window is generous enough that a healthy
+# hive is always served from persisted state; beyond it we fall back to a live
+# recompute so a disabled/stalled reconciler can't serve indefinitely stale cards.
+_INSIGHTS_PERSISTED_MAX_AGE_SECONDS = max(INSIGHTS_RECONCILE_INTERVAL_SECONDS * 2, 1800)
+_SEVERITY_RANK = {"critical": 4, "warning": 3, "watch": 2, "info": 1}
+
+
+def _summary_from_persisted(device_id: str) -> Optional[dict]:
+    """Build the insights summary from persisted ``insight_alerts`` (active rows).
+
+    Returns None when there is no sufficiently fresh persisted state for the
+    device, signalling the caller to fall back to a live recompute.
+    """
+    with _insights_reconciled_lock:
+        reconciled_at = _insights_reconciled_at.get(device_id)
+    if reconciled_at is None:
+        return None
+    age = (datetime.now(timezone.utc) - reconciled_at).total_seconds()
+    if age > _INSIGHTS_PERSISTED_MAX_AGE_SECONDS:
+        return None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT alert_key, category, channel, severity, title,
+                       description, confidence, evidence, source,
+                       window_start, window_end
+                FROM insight_alerts
+                WHERE device_id = %s AND resolved_at IS NULL;
+                """,
+                (device_id,),
+            )
+            rows = cur.fetchall()
+    computed_at = reconciled_at.isoformat()
+    if not rows:
+        # Reconciled recently with nothing firing — a valid "all clear".
+        return {
+            "device_id": device_id,
+            "computed_at": computed_at,
+            "alert_count": 0,
+            "highest_severity": None,
+            "highest_alert": None,
+            "categories": [],
+        }
+    alerts = [
+        {
+            "id": r[0],
+            "category": r[1],
+            "channel": r[2],
+            "severity": r[3],
+            "title": r[4],
+            "description": r[5],
+            "confidence": r[6],
+            "evidence": r[7] or {},
+            "source": r[8] or "",
+            "window_start": r[9].isoformat() if r[9] else None,
+            "window_end": r[10].isoformat() if r[10] else None,
+        }
+        for r in rows
+    ]
+    highest = max(alerts, key=lambda a: _SEVERITY_RANK.get(a["severity"], 0))
+    return {
+        "device_id": device_id,
+        "computed_at": computed_at,
+        "alert_count": len(alerts),
+        "highest_severity": highest["severity"],
+        "highest_alert": highest,
+        "categories": sorted({a["category"] for a in alerts}),
+    }
+
+
 @app.get("/api/v1/local/devices/{device_id}/insights/summary", dependencies=LOCAL_DASHBOARD_DEP)
 def local_insights_summary(device_id: str, refresh: bool = False):
     """Highest-severity insight summary (14-day lookback) for the overview.
 
-    Served from a short-lived per-device cache so the dashboard's frequent
-    reloads don't re-run the full insight pipeline each time. Pass ``refresh=true``
-    to force a recompute.
+    Normally served from the reconciler-maintained ``insight_alerts`` table (a
+    cheap indexed lookup), falling back to a short-lived in-memory cache and,
+    only when no fresh persisted state exists, a live recompute of the full
+    insight pipeline. Pass ``refresh=true`` to force a live recompute.
     """
     now = time.monotonic()
     if not refresh:
+        # Fast path: persisted state kept fresh by the background reconciler.
+        persisted = _summary_from_persisted(device_id)
+        if persisted is not None:
+            return persisted
         cached = _insights_summary_cache.get(device_id)
         if cached and now - cached[0] < _INSIGHTS_SUMMARY_TTL_SECONDS:
             return cached[1]
