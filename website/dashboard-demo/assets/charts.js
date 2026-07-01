@@ -2,10 +2,15 @@
 //
 // drawLineChart(canvas, series, opts)
 //   series: [{ label, color, points: [{ t: epochMillis, y: number }] }]
-//   opts:   { unit, yDigits }
+//   opts:   { unit, yDigits, cursorT }
 //
 // Handles retina scaling, auto y-range, light gridlines, time x-axis ticks and
 // an empty state. Colours come from the caller (see PALETTE below).
+//
+// When opts.cursorT (epoch millis) is set, draws a vertical guide at that time
+// plus a marker on each series at its nearest point, and stashes the pixel<->
+// time mapping on canvas._xScale so callers can turn a pointer x back into a
+// timestamp (see attachChartCursor in views.js).
 
 export const PALETTE = ["#f2a900", "#2563a8", "#2e7d32", "#b00020", "#7b3fb0", "#0f8a8a"];
 
@@ -70,6 +75,7 @@ export function drawLineChart(canvas, series, opts = {}) {
 
   const xOf = (t) => padL + ((t - tMin) / (tMax - tMin)) * plotW;
   const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
+  canvas._xScale = { padL, plotW, tMin, tMax };
 
   ctx.font = FONT;
   ctx.textBaseline = "middle";
@@ -114,6 +120,44 @@ export function drawLineChart(canvas, series, opts = {}) {
     });
     ctx.stroke();
   }
+
+  // Interactive cursor: dashed vertical guide + a dot on each series at its
+  // nearest sampled point, so scrubbing/hovering reads off the exact values.
+  if (opts.cursorT != null) {
+    const ct = Math.min(tMax, Math.max(tMin, opts.cursorT));
+    const cx = xOf(ct);
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = "rgba(31,36,33,0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, cssH - padB); ctx.stroke();
+    ctx.setLineDash([]);
+    for (const s of series) {
+      const p = valueAt(s.points, ct);
+      if (!p) continue;
+      const py = yOf(p.y);
+      ctx.beginPath();
+      ctx.arc(cx, py, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = s.color;
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#fff";
+      ctx.stroke();
+    }
+  }
+}
+
+// Nearest data point to timestamp `t` (points must be sorted ascending by t).
+export function valueAt(points, t) {
+  if (!points || !points.length) return null;
+  let lo = 0, hi = points.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].t < t) lo = mid + 1; else hi = mid;
+  }
+  if (lo === 0) return points[0];
+  const before = points[lo - 1], after = points[lo];
+  if (!after) return before;
+  return (t - before.t) <= (after.t - t) ? before : after;
 }
 
 // Build a {label,color,points} series from measurements (newest-first) for a key.
@@ -122,8 +166,13 @@ export function seriesFrom(measurements, key, label, color) {
   // iterate oldest→newest so the line draws left-to-right
   for (let i = measurements.length - 1; i >= 0; i--) {
     const m = measurements[i];
-    const y = m[key];
-    if (y == null || !Number.isFinite(y)) continue;
+    if (m == null) continue;
+    // Coerce numeric-looking strings (e.g. Postgres NUMERIC columns serialized as
+    // strings) so the line still plots instead of silently dropping every point.
+    const raw = m[key];
+    if (raw == null || raw === "") continue;
+    const y = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(y)) continue;
     const t = new Date(m.measured_at).getTime();
     if (Number.isNaN(t)) continue;
     points.push({ t, y });
