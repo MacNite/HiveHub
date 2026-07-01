@@ -3140,7 +3140,7 @@ def execute_measurement_query(cur, columns, where_parts, params, limit, max_poin
             ),
             picked AS (
                 SELECT id AS pid FROM filtered
-                WHERE (rn - 1) % GREATEST(1, (total + %s - 1) / %s) = 0
+                WHERE (rn - 1) %% GREATEST(1, (total + %s - 1) / %s) = 0
                 ORDER BY rn
                 LIMIT %s
             )
