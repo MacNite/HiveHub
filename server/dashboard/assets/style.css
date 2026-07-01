@@ -123,6 +123,14 @@ select {
 .metric .unit { font-size: 1rem; font-weight: 600; color: var(--ink-soft); }
 .metric .sub { font-size: .8rem; color: var(--ink-soft); }
 
+/* Per-hive breakdown inside a metric panel: one compact, name-tagged row per
+   hive so several selected hives stay visible (and identifiable) at once. */
+.metric .hive-rows { display: flex; flex-direction: column; gap: .15rem; margin: .1rem 0 .1rem; }
+.metric .hive-row { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; }
+.metric .hive-row-name { font-size: .82rem; font-weight: 600; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metric .hive-row-val { font-size: 1.2rem; font-weight: 800; line-height: 1.25; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.metric .hive-row-unit { font-size: .78rem; font-weight: 600; color: var(--ink-soft); }
+
 /* ── Badges ──────────────────────────────────────────────────── */
 .badge { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 700; }
 .badge.good { background: #e7f3e8; color: var(--good); }
