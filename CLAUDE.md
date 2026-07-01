@@ -1,10 +1,9 @@
 # Project instructions for Claude Code
 
-## Delivery policy — DO NOT PUSH; hand me a downloadable zip instead
+## Delivery policy — ask if data should be pushed to github directly
 
 This repository uses a **"no remote writes"** workflow. When you finish making
-changes, **do not publish them to GitHub** — package them into a zip and give it
-to me to download.
+changes, **do not publish them to GitHub automaticly** — allways ask if it should be pushed and a pr should be created.
 
 **You MUST NOT, under any circumstances unless I explicitly ask in that very message:**
 
@@ -18,30 +17,11 @@ to me to download.
 Working **locally** is fine: edit files, run builds/tests, and commit to the
 local branch if it helps you organize work. Just never send anything to the
 remote.
-
-### What to do instead — at the end of a task
-
-1. Make your changes in the working tree as usual.
-2. Bundle the modified files into a zip.
-
-3. **Surface that zip to me as a downloadable file** so I can grab it. In
-   Claude Code on the web, send the file to me directly so it shows up as a
-   download (do not just print the path). When running locally, the zip is
-   already in `claude-bundles/` for me to open.
-4. In your final message, list what changed and what the zip contains, and
-   confirm that **nothing was pushed**.
-
-### If I explicitly ask you to push
-
-Only then may you push — and confirm the exact branch with me first. The
-default, every other time, is the zip.
-
 ---
 
 ## About this project
 
-HiveScale is an ESP32-based dual beehive scale system with a self-hosted
-FastAPI + PostgreSQL backend.
+HiveHub is an ESP32-based data collector for beehive sensors and scales. It gathers weight, temperature, humidity, sound, vibration, power state, and network state from one or more hives (up to 18 per ESP32) and sends the readings to a self-hosted FastAPI backend backed by PostgreSQL, where they can be displayed in HivePal or the included frontend.
 
 - `firmware/` — ESP32 PlatformIO project (`src/main.cpp` is the main source).
 - `server/` — Python FastAPI backend and insights logic.
