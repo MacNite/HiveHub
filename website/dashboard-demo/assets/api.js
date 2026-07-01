@@ -162,6 +162,28 @@ export const api = {
     categories: { swarming: 0, activity: 1, overwintering: 0 },
   }),
 
+  insightsHistory: (deviceId, { status = "all" } = {}) => {
+    const now = Date.now();
+    const alerts = [
+      {
+        alert_key: "activity.nectar_dearth", status: "active", severity: "warning",
+        peak_severity: "warning", title: "Possible nectar dearth",
+        description: "Weight has been roughly flat for 3 days during the expected flow — consider checking forage.",
+        first_seen_at: new Date(now - 3 * DAY).toISOString(),
+        last_seen_at: new Date(now).toISOString(), resolved_at: null,
+      },
+      {
+        alert_key: "power.battery_low", status: "resolved", severity: "info",
+        peak_severity: "warning", title: "Battery running low",
+        description: "State of charge dipped below 35 % during a cloudy spell.",
+        first_seen_at: new Date(now - 12 * DAY).toISOString(),
+        last_seen_at: new Date(now - 9 * DAY).toISOString(),
+        resolved_at: new Date(now - 9 * DAY).toISOString(),
+      },
+    ].filter((a) => status === "all" || a.status === status);
+    return wrap({ device_id: deviceId, alerts });
+  },
+
   firmwareStatus: (deviceId) => wrap({
     device_id: deviceId, target: "hivescale", current_version: "0.20.1",
     latest_version: "0.21.0", latest_is_official: true,
@@ -176,4 +198,10 @@ export const api = {
   fitTempCompensation: demoErr,
   updateConfig: demoErr,
   updateChannels: demoErr,
+  // account management is auth-backed in the real dashboard; disabled here
+  listUsers: demoErr,
+  createUser: demoErr,
+  deleteUser: demoErr,
+  changePassword: demoErr,
+  updateEmail: demoErr,
 };
