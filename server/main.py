@@ -1,8 +1,10 @@
 import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import threading
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -22,6 +24,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -51,11 +54,28 @@ API_KEY = os.environ["API_KEY"]
 HIVEPAL_SERVICE_API_KEY = os.environ.get("HIVEPAL_SERVICE_API_KEY", "")
 HIVEPAL_JWT_SECRET = os.environ.get("HIVEPAL_JWT_SECRET", "")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
-# Opt-in, auth-free local dashboard (single-owner self-host). When enabled it
-# exposes read-only data plus firmware/calibration controls for ALL devices under
-# /api/v1/local/* and serves the static dashboard at /dashboard. Keep OFF on any
-# multi-tenant / internet-facing deployment; gate behind a reverse proxy / LAN.
+# Opt-in local dashboard (single-owner self-host). When enabled it exposes data
+# plus firmware/calibration controls for ALL devices under /api/v1/local/* and
+# serves the static dashboard at /dashboard. Access is gated by a username +
+# password login (see the dashboard_users table): the first visit runs a setup
+# wizard that creates the initial admin, and every data/control endpoint then
+# requires a valid session. This makes it safe to expose to the internet, though
+# putting it behind TLS / a reverse proxy is still recommended.
 ENABLE_LOCAL_DASHBOARD = os.environ.get("ENABLE_LOCAL_DASHBOARD", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+# Dashboard login session settings. The signing secret defaults to a random value
+# persisted in the dashboard_settings table (so sessions survive restarts with no
+# extra config); set DASHBOARD_SESSION_SECRET to pin it across replicas. Set
+# DASHBOARD_COOKIE_SECURE=true when serving over HTTPS so the cookie is only sent
+# over TLS.
+DASHBOARD_SESSION_COOKIE = "hivehub_dashboard_session"
+DASHBOARD_SESSION_SECRET_ENV = os.environ.get("DASHBOARD_SESSION_SECRET", "").strip()
+DASHBOARD_SESSION_TTL_HOURS = int(os.environ.get("DASHBOARD_SESSION_TTL_HOURS", "168"))
+DASHBOARD_COOKIE_SECURE = os.environ.get("DASHBOARD_COOKIE_SECURE", "false").strip().lower() in (
     "1",
     "true",
     "yes",
@@ -690,8 +710,36 @@ class ShareDeviceIn(BaseModel):
 
 
 class DeviceChannelsUpdateIn(BaseModel):
+    # Legacy two-channel fields, kept so the HivePal app endpoints keep working.
     scale_1_display_name: Optional[str] = None
     scale_2_display_name: Optional[str] = None
+    # Per-hive display names for hives 1..MAX_HIVES, keyed by the hive index as a
+    # string ("1".."18"). Lets the local dashboard rename every hive a device
+    # reports, not just the first two. Ignored entries outside 1..MAX_HIVES are
+    # dropped by apply_device_channels().
+    names: Optional[dict[str, Optional[str]]] = None
+
+
+class DashboardSetupIn(BaseModel):
+    """First-run wizard payload: creates the initial admin account."""
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=8, max_length=256)
+
+
+class DashboardLoginIn(BaseModel):
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class DashboardCreateUserIn(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=8, max_length=256)
+    role: Literal["admin", "viewer"] = "viewer"
+
+
+class DashboardChangePasswordIn(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=256)
+    new_password: str = Field(..., min_length=8, max_length=256)
 
 
 class AppDeviceConfigUpdate(DeviceConfigUpdate):
@@ -738,13 +786,241 @@ def require_hivepal_service_key(x_hivepal_service_key: str = Header(default=""))
 
 
 def require_local_dashboard():
-    """Gate the auth-free local dashboard API behind ENABLE_LOCAL_DASHBOARD.
+    """Gate the local dashboard API behind ENABLE_LOCAL_DASHBOARD.
 
     Returns 404 (not 403) when disabled so the endpoints are indistinguishable
-    from non-existent routes on a default / multi-tenant deployment.
+    from non-existent routes on a default / multi-tenant deployment. Used on the
+    auth endpoints themselves (status / setup / login), which must be reachable
+    before a session exists; the data/control endpoints additionally require a
+    valid login via require_dashboard_session.
     """
     if not ENABLE_LOCAL_DASHBOARD:
         raise HTTPException(status_code=404, detail="Not Found")
+
+
+# ── Dashboard auth (local dashboard login) ───────────────────────────────────
+# The local dashboard is protected by username + password accounts stored in
+# dashboard_users. Sessions are short-lived signed JWTs carried in an HttpOnly
+# cookie. The first visit (no accounts yet) runs a setup wizard that creates the
+# initial admin; thereafter every data/control endpoint requires a session, and
+# write/control actions require the "admin" role.
+
+_dashboard_secret_cache: Optional[str] = None
+
+
+def dashboard_session_secret() -> str:
+    """Return the session signing secret, generating + persisting one on first use.
+
+    Prefers DASHBOARD_SESSION_SECRET when set; otherwise a random secret is stored
+    in dashboard_settings so sessions stay valid across restarts. Cached in-process
+    to avoid a DB hit per request.
+    """
+    global _dashboard_secret_cache
+    if DASHBOARD_SESSION_SECRET_ENV:
+        return DASHBOARD_SESSION_SECRET_ENV
+    if _dashboard_secret_cache:
+        return _dashboard_secret_cache
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM dashboard_settings WHERE key = 'session_secret';")
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    "INSERT INTO dashboard_settings (key, value) VALUES ('session_secret', %s) "
+                    "ON CONFLICT (key) DO NOTHING;",
+                    (secrets.token_urlsafe(48),),
+                )
+                conn.commit()
+                cur.execute("SELECT value FROM dashboard_settings WHERE key = 'session_secret';")
+                row = cur.fetchone()
+    _dashboard_secret_cache = row[0]
+    return _dashboard_secret_cache
+
+
+def hash_password(password: str) -> str:
+    """Salted PBKDF2-HMAC-SHA256 hash, formatted algo$iters$salt$hash."""
+    salt = secrets.token_bytes(16)
+    iterations = 200_000
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return f"pbkdf2_sha256${iterations}${salt.hex()}${dk.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, iters, salt_hex, hash_hex = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(iters)
+        )
+        return hmac.compare_digest(dk.hex(), hash_hex)
+    except (ValueError, TypeError):
+        return False
+
+
+def create_dashboard_session_token(user: dict) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user["id"]),
+        "username": user["username"],
+        "role": user["role"],
+        "scope": "dashboard",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(hours=DASHBOARD_SESSION_TTL_HOURS)).timestamp()),
+    }
+    return jwt.encode(payload, dashboard_session_secret(), algorithm="HS256")
+
+
+def decode_dashboard_session_token(token: str) -> Optional[dict]:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, dashboard_session_secret(), algorithms=["HS256"])
+    except JWTError:
+        return None
+    if payload.get("scope") != "dashboard":
+        return None
+    return payload
+
+
+def set_dashboard_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=DASHBOARD_SESSION_COOKIE,
+        value=token,
+        max_age=DASHBOARD_SESSION_TTL_HOURS * 3600,
+        httponly=True,
+        samesite="lax",
+        secure=DASHBOARD_COOKIE_SECURE,
+        path="/",
+    )
+
+
+def clear_dashboard_session_cookie(response: Response) -> None:
+    response.delete_cookie(DASHBOARD_SESSION_COOKIE, path="/")
+
+
+def _public_dashboard_user(user: dict) -> dict:
+    return {
+        "id": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "created_at": user.get("created_at"),
+        "last_login_at": user.get("last_login_at"),
+    }
+
+
+def dashboard_user_count() -> int:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM dashboard_users;")
+            return int(cur.fetchone()[0])
+
+
+def dashboard_admin_count(exclude_id: Optional[int] = None) -> int:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if exclude_id is None:
+                cur.execute("SELECT COUNT(*) FROM dashboard_users WHERE role = 'admin';")
+            else:
+                cur.execute(
+                    "SELECT COUNT(*) FROM dashboard_users WHERE role = 'admin' AND id <> %s;",
+                    (exclude_id,),
+                )
+            return int(cur.fetchone()[0])
+
+
+def _dashboard_user_row(r) -> dict:
+    return {
+        "id": r[0], "username": r[1], "password_hash": r[2], "role": r[3],
+        "created_at": r[4], "last_login_at": r[5],
+    }
+
+
+def get_dashboard_user_by_username(username: str) -> Optional[dict]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, username, password_hash, role, created_at, last_login_at "
+                "FROM dashboard_users WHERE lower(username) = lower(%s);",
+                (username,),
+            )
+            row = cur.fetchone()
+    return _dashboard_user_row(row) if row else None
+
+
+def list_dashboard_users() -> list[dict]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, username, password_hash, role, created_at, last_login_at "
+                "FROM dashboard_users ORDER BY created_at;"
+            )
+            rows = cur.fetchall()
+    return [_public_dashboard_user(_dashboard_user_row(r)) for r in rows]
+
+
+def create_dashboard_user(username: str, password: str, role: str) -> dict:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO dashboard_users (username, password_hash, role) "
+                "VALUES (%s, %s, %s) "
+                "RETURNING id, username, password_hash, role, created_at, last_login_at;",
+                (username.strip(), hash_password(password), role),
+            )
+            row = cur.fetchone()
+            conn.commit()
+    return _dashboard_user_row(row)
+
+
+def delete_dashboard_user(user_id: int) -> bool:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM dashboard_users WHERE id = %s;", (user_id,))
+            deleted = cur.rowcount
+            conn.commit()
+    return deleted > 0
+
+
+def set_dashboard_user_password(user_id: int, password: str) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dashboard_users SET password_hash = %s WHERE id = %s;",
+                (hash_password(password), user_id),
+            )
+            conn.commit()
+
+
+def touch_dashboard_user_login(user_id: int) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dashboard_users SET last_login_at = now() WHERE id = %s;",
+                (user_id,),
+            )
+            conn.commit()
+
+
+def require_dashboard_session(request: Request) -> dict:
+    """Gate dashboard data/control endpoints behind a valid login session.
+
+    404s when the dashboard is disabled (same masking as require_local_dashboard),
+    otherwise 401s when no valid session cookie is present. Returns the decoded
+    session payload (sub / username / role).
+    """
+    if not ENABLE_LOCAL_DASHBOARD:
+        raise HTTPException(status_code=404, detail="Not Found")
+    payload = decode_dashboard_session_token(request.cookies.get(DASHBOARD_SESSION_COOKIE, ""))
+    if not payload:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return payload
+
+
+def require_dashboard_admin(user: dict = Depends(require_dashboard_session)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return user
 
 
 def require_user_id(authorization: str = Header(default="")) -> str:
@@ -845,11 +1121,21 @@ def init_db():
 
                 CREATE TABLE IF NOT EXISTS device_channels (
                     device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-                    channel_number INTEGER NOT NULL CHECK (channel_number IN (1, 2)),
+                    channel_number INTEGER NOT NULL CHECK (channel_number BETWEEN 1 AND 18),
                     name TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     PRIMARY KEY (device_id, channel_number)
                 );
+
+                -- A device now carries up to 18 hives (firmware v0.20.0), so the
+                -- channel naming map must accept channel numbers 1..18, not just
+                -- the original two. Relax the legacy IN (1, 2) CHECK on databases
+                -- created before multi-hive support.
+                ALTER TABLE device_channels
+                    DROP CONSTRAINT IF EXISTS device_channels_channel_number_check;
+                ALTER TABLE device_channels
+                    ADD CONSTRAINT device_channels_channel_number_check
+                    CHECK (channel_number BETWEEN 1 AND 18);
 
                 CREATE TABLE IF NOT EXISTS measurements (
                     id BIGSERIAL PRIMARY KEY,
@@ -1296,6 +1582,29 @@ def init_db():
 
                 CREATE INDEX IF NOT EXISTS insight_alerts_device_first_seen_idx
                     ON insight_alerts (device_id, first_seen_at DESC);
+
+                -- Local-dashboard login accounts. The dashboard is auth-gated when
+                -- enabled (ENABLE_LOCAL_DASHBOARD): the first visit creates the
+                -- initial admin via the setup wizard, after which every data /
+                -- control endpoint requires a valid session. Passwords are stored
+                -- as salted PBKDF2-HMAC-SHA256 hashes, never in plaintext.
+                CREATE TABLE IF NOT EXISTS dashboard_users (
+                    id BIGSERIAL PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'viewer')),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_login_at TIMESTAMPTZ
+                );
+
+                -- Small key/value store for dashboard-wide settings, currently the
+                -- auto-generated session signing secret (so logins survive restarts
+                -- without requiring DASHBOARD_SESSION_SECRET to be configured).
+                CREATE TABLE IF NOT EXISTS dashboard_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
                 """
             )
             conn.commit()
@@ -3404,6 +3713,13 @@ def list_devices(user_id: str = Depends(require_user_id)):
             "channels": {
                 "scale_1": channels.get(r[0], {}).get(1),
                 "scale_2": channels.get(r[0], {}).get(2),
+                # All custom hive names this device has (index "1".."18" -> name),
+                # so the dashboard can label hives beyond the first two.
+                "names": {
+                    str(num): name
+                    for num, name in channels.get(r[0], {}).items()
+                    if name is not None
+                },
             },
         }
         for r in rows
@@ -3430,7 +3746,12 @@ def remove_device_membership(device_id: str, user_id: str = Depends(require_user
 
 
 def fetch_device_channels(device_id: str) -> dict:
-    """Return the two scale channels' display names for a device."""
+    """Return the per-hive (scale-channel) display names for a device.
+
+    ``names`` maps every stored hive index ("1".."18") to its custom name and is
+    the canonical multi-hive shape the local dashboard consumes. ``scale_1/2_*``
+    are kept for the HivePal app endpoints and older callers.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -3439,26 +3760,42 @@ def fetch_device_channels(device_id: str) -> dict:
             )
             rows = cur.fetchall()
     ch = {r[0]: r[1] for r in rows}
-    return {"scale_1_display_name": ch.get(1), "scale_2_display_name": ch.get(2)}
+    return {
+        "scale_1_display_name": ch.get(1),
+        "scale_2_display_name": ch.get(2),
+        "names": {str(num): name for num, name in ch.items() if name is not None},
+    }
 
 
 def apply_device_channels(device_id: str, payload: DeviceChannelsUpdateIn) -> dict:
-    """Upsert the provided scale-channel display names and return all of them."""
+    """Upsert the provided per-hive display names and return all of them."""
+    # Collapse the legacy scale_1/2 fields and the general names[] map into one
+    # {hive_index: name} set, dropping anything outside 1..MAX_HIVES.
+    updates: dict[int, Optional[str]] = {}
+    if payload.scale_1_display_name is not None:
+        updates[1] = payload.scale_1_display_name
+    if payload.scale_2_display_name is not None:
+        updates[2] = payload.scale_2_display_name
+    if payload.names:
+        for key, name in payload.names.items():
+            try:
+                idx = int(key)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= idx <= MAX_HIVES and name is not None:
+                updates[idx] = name
+
     with get_conn() as conn:
         with conn.cursor() as cur:
-            for ch_num, ch_name in [
-                (1, payload.scale_1_display_name),
-                (2, payload.scale_2_display_name),
-            ]:
-                if ch_name is not None:
-                    cur.execute(
-                        """
-                        INSERT INTO device_channels (device_id, channel_number, name)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (device_id, channel_number) DO UPDATE SET name = EXCLUDED.name;
-                        """,
-                        (device_id, ch_num, ch_name),
-                    )
+            for ch_num, ch_name in updates.items():
+                cur.execute(
+                    """
+                    INSERT INTO device_channels (device_id, channel_number, name)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (device_id, channel_number) DO UPDATE SET name = EXCLUDED.name;
+                    """,
+                    (device_id, ch_num, ch_name),
+                )
             conn.commit()
     return fetch_device_channels(device_id)
 
@@ -4420,17 +4757,109 @@ def get_server_time():
 
 
 # ---------------------------------------------------------------------------
-# Local dashboard API (auth-free, single-owner self-host)
+# Local dashboard API (single-owner self-host, login-protected)
 # ---------------------------------------------------------------------------
-# Everything below is gated by require_local_dashboard (404 when
-# ENABLE_LOCAL_DASHBOARD is off). It mirrors the read paths of the /api/v1/app/*
-# endpoints but drops the per-user JWT + device-membership checks, so the built-in
-# HiveHub dashboard at /dashboard can talk to it directly with no login. It
-# therefore serves EVERY device on this server — only enable it on a trusted LAN
-# or behind a reverse proxy. Handlers reuse the same helpers as the app API so the
-# data shapes never drift.
+# Everything below is gated by ENABLE_LOCAL_DASHBOARD (404 when off). Data and
+# control endpoints additionally require a valid dashboard login session
+# (LOCAL_DASHBOARD_DEP -> require_dashboard_session); write/control actions
+# require the admin role (LOCAL_DASHBOARD_ADMIN_DEP). The auth endpoints below
+# (status / setup / login / logout) use only the 404 gate so they are reachable
+# before a session exists. Handlers reuse the same helpers as the app API so the
+# data shapes never drift. It serves EVERY device on this server, so the login is
+# the access boundary — keep ENABLE_LOCAL_DASHBOARD off on multi-tenant servers.
 
-LOCAL_DASHBOARD_DEP = [Depends(require_local_dashboard)]
+# Reachable pre-login (only ENABLE_LOCAL_DASHBOARD gate): the auth handshake.
+LOCAL_DASHBOARD_AUTH_DEP = [Depends(require_local_dashboard)]
+# Read endpoints: any logged-in user (admin or viewer).
+LOCAL_DASHBOARD_DEP = [Depends(require_dashboard_session)]
+# Write / control endpoints: admins only.
+LOCAL_DASHBOARD_ADMIN_DEP = [Depends(require_dashboard_admin)]
+
+
+@app.get("/api/v1/local/auth/status", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
+def local_auth_status(request: Request):
+    """Tell the dashboard whether to show the setup wizard, login, or the app."""
+    payload = decode_dashboard_session_token(request.cookies.get(DASHBOARD_SESSION_COOKIE, ""))
+    return {
+        "setup_required": dashboard_user_count() == 0,
+        "authenticated": bool(payload),
+        "user": {"username": payload["username"], "role": payload["role"]} if payload else None,
+    }
+
+
+@app.post("/api/v1/local/auth/setup", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
+def local_auth_setup(body: DashboardSetupIn, response: Response):
+    """First-run wizard: create the initial admin. No-op once any account exists."""
+    if dashboard_user_count() > 0:
+        raise HTTPException(status_code=409, detail="Setup has already been completed")
+    user = create_dashboard_user(body.username, body.password, "admin")
+    touch_dashboard_user_login(user["id"])
+    set_dashboard_session_cookie(response, create_dashboard_session_token(user))
+    return {"user": _public_dashboard_user(user)}
+
+
+@app.post("/api/v1/local/auth/login", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
+def local_auth_login(body: DashboardLoginIn, response: Response):
+    user = get_dashboard_user_by_username(body.username)
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    touch_dashboard_user_login(user["id"])
+    set_dashboard_session_cookie(response, create_dashboard_session_token(user))
+    return {"user": _public_dashboard_user(user)}
+
+
+@app.post("/api/v1/local/auth/logout", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
+def local_auth_logout(response: Response):
+    clear_dashboard_session_cookie(response)
+    return {"ok": True}
+
+
+@app.post("/api/v1/local/auth/password")
+def local_auth_change_password(
+    body: DashboardChangePasswordIn, session: dict = Depends(require_dashboard_session)
+):
+    """Change the logged-in user's own password (re-auth with current password)."""
+    user = get_dashboard_user_by_username(session["username"])
+    if not user or not verify_password(body.current_password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    set_dashboard_user_password(user["id"], body.new_password)
+    return {"ok": True}
+
+
+@app.get("/api/v1/local/auth/users", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
+def local_list_dashboard_users():
+    """List all dashboard accounts (admin only)."""
+    return list_dashboard_users()
+
+
+@app.post("/api/v1/local/auth/users", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
+def local_create_dashboard_user(body: DashboardCreateUserIn):
+    """Create a new dashboard account with the admin or viewer role (admin only)."""
+    if get_dashboard_user_by_username(body.username):
+        raise HTTPException(status_code=409, detail="That username is already taken")
+    return _public_dashboard_user(create_dashboard_user(body.username, body.password, body.role))
+
+
+@app.delete("/api/v1/local/auth/users/{user_id}")
+def local_delete_dashboard_user(user_id: int, admin: dict = Depends(require_dashboard_admin)):
+    """Delete a dashboard account (admin only).
+
+    Guards against locking yourself out: you cannot delete your own account, nor
+    the last remaining admin.
+    """
+    if str(admin.get("sub")) == str(user_id):
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    target = None
+    for u in list_dashboard_users():
+        if u["id"] == user_id:
+            target = u
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["role"] == "admin" and dashboard_admin_count(exclude_id=user_id) == 0:
+        raise HTTPException(status_code=400, detail="Cannot delete the last administrator")
+    delete_dashboard_user(user_id)
+    return {"ok": True}
 
 
 @app.get("/api/v1/local/devices", dependencies=LOCAL_DASHBOARD_DEP)
@@ -4467,6 +4896,13 @@ def local_list_devices():
             "channels": {
                 "scale_1": channels.get(r[0], {}).get(1),
                 "scale_2": channels.get(r[0], {}).get(2),
+                # All custom hive names this device has (index "1".."18" -> name),
+                # so the dashboard can label hives beyond the first two.
+                "names": {
+                    str(num): name
+                    for num, name in channels.get(r[0], {}).items()
+                    if name is not None
+                },
             },
         }
         for r in rows
@@ -4532,7 +4968,7 @@ def local_get_config(device_id: str):
     return fetch_device_config(device_id)
 
 
-@app.patch("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_DEP)
+@app.patch("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_update_config(device_id: str, patch: DeviceConfigUpdate):
     """Update device config (send interval, scale offsets/factors, temp comp).
 
@@ -4548,7 +4984,7 @@ def local_get_channels(device_id: str):
     return fetch_device_channels(device_id)
 
 
-@app.patch("/api/v1/local/devices/{device_id}/channels", dependencies=LOCAL_DASHBOARD_DEP)
+@app.patch("/api/v1/local/devices/{device_id}/channels", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_update_channels(device_id: str, payload: DeviceChannelsUpdateIn):
     """Rename the scale channels (the hive labels shown across the dashboard)."""
     return apply_device_channels(device_id, payload)
@@ -4625,7 +5061,7 @@ def local_firmware_status(device_id: str):
     }
 
 
-@app.post("/api/v1/local/devices/{device_id}/firmware", dependencies=LOCAL_DASHBOARD_DEP)
+@app.post("/api/v1/local/devices/{device_id}/firmware", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 async def local_upload_firmware(
     device_id: str,
     file: UploadFile = File(...),
@@ -4645,7 +5081,7 @@ async def local_upload_firmware(
     )
 
 
-@app.post("/api/v1/local/devices/{device_id}/firmware/approve", dependencies=LOCAL_DASHBOARD_DEP)
+@app.post("/api/v1/local/devices/{device_id}/firmware/approve", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_approve_firmware(device_id: str):
     """Approve the latest available firmware and nudge the device to update now."""
     owner_id = get_device_owner_id(device_id)
@@ -4667,7 +5103,7 @@ def local_approve_firmware(device_id: str):
     }
 
 
-@app.post("/api/v1/local/devices/{device_id}/calibration/start", dependencies=LOCAL_DASHBOARD_DEP)
+@app.post("/api/v1/local/devices/{device_id}/calibration/start", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_start_calibration(
     device_id: str,
     payload: Optional[AppCalibrationModeStartIn] = None,
@@ -4690,7 +5126,7 @@ def local_start_calibration(
     }
 
 
-@app.post("/api/v1/local/devices/{device_id}/calibration/stop", dependencies=LOCAL_DASHBOARD_DEP)
+@app.post("/api/v1/local/devices/{device_id}/calibration/stop", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_stop_calibration(device_id: str):
     """Queue a stop-calibration-mode command for the device."""
     result = create_command(
@@ -4705,7 +5141,7 @@ def local_stop_calibration(device_id: str):
     }
 
 
-@app.post("/api/v1/local/devices/{device_id}/temp-compensation/fit", dependencies=LOCAL_DASHBOARD_DEP)
+@app.post("/api/v1/local/devices/{device_id}/temp-compensation/fit", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_temp_compensation_fit(device_id: str, body: TempCoefficientFitIn):
     """Fit (and optionally apply) a load-cell temperature coefficient."""
     return run_temp_compensation_fit(device_id, body)
