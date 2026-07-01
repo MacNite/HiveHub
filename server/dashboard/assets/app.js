@@ -57,29 +57,76 @@ async function loadData() {
   const start = new Date(Date.now() - days * 86400000).toISOString();
   const id = state.deviceId;
 
-  const [measurements, latest, config, channels, insights, firmware] = await Promise.all([
-    api.measurements(id, { start, limit }).catch(() => []),
-    api.latest(id, 1).catch(() => []),
-    api.config(id).catch(() => null),
-    api.channels(id).catch(() => null),
-    api.insightsSummary(id).catch(() => null),
-    api.firmwareStatus(id).catch(() => null),
+  // Use allSettled so one failing call can't blank the whole dashboard, but —
+  // unlike a silent `.catch(() => [])` — we keep the rejection so the chart/data
+  // errors surface in the status line and console instead of masquerading as
+  // "0 points / no data".
+  const [measurements, latest, config, channels, insights, firmware] = await Promise.allSettled([
+    api.measurements(id, { start, limit }),
+    api.latest(id, 1),
+    api.config(id),
+    api.channels(id),
+    api.insightsSummary(id),
+    api.firmwareStatus(id),
   ]);
 
   // ignore the response if the user switched device/range while we were loading
   if (state.deviceId !== id) return;
 
-  state.data = {
-    measurements: measurements || [],
-    latest: (latest && latest[0]) || null,
-    config,
-    channels,
-    insights,
-    firmware,
+  const val = (r, fallback) => (r.status === "fulfilled" ? r.value : fallback);
+  const errOf = (r, label) => {
+    if (r.status !== "rejected") return null;
+    const status = r.reason?.status ? ` (${r.reason.status})` : "";
+    console.error(`HiveHub: ${label} request failed${status}:`, r.reason);
+    return `${label}${status}: ${r.reason?.message || "request failed"}`;
   };
+
+  const chartError = errOf(measurements, "chart data");
+  const errors = [
+    chartError,
+    errOf(latest, "latest reading"),
+    errOf(config, "config"),
+    errOf(channels, "channels"),
+    errOf(insights, "insights"),
+    errOf(firmware, "firmware"),
+  ].filter(Boolean);
+
+  state.data = {
+    measurements: val(measurements, []) || [],
+    latest: (val(latest, null) && val(latest, [])[0]) || null,
+    config: val(config, null),
+    channels: val(channels, null),
+    insights: val(insights, null),
+    firmware: val(firmware, null),
+  };
+  state.dataError = chartError;
   state.loading = false;
-  setStatus(`${state.data.measurements.length} points · updated ${new Date().toLocaleTimeString()}`);
+
+  if (errors.length) {
+    // A failed chart query is the actionable one for empty diagrams; toast it.
+    if (state.dataError) toast(state.dataError, "error");
+    setStatus(`⚠ ${errors.join(" · ")}`);
+  } else {
+    setStatus(chartStatus(state.data));
+  }
   render();
+}
+
+// Human-readable chart status: point count plus, when the charts would be empty
+// only because the latest reading predates the selected range, a hint to widen
+// it (so an out-of-range device reads as "widen the range", not "no data").
+function chartStatus(data) {
+  const n = data.measurements.length;
+  const stamp = `updated ${new Date().toLocaleTimeString()}`;
+  if (n === 0 && data.latest?.measured_at) {
+    const { days } = RANGES[state.range];
+    const cutoff = Date.now() - days * 86400000;
+    const latestMs = new Date(data.latest.measured_at).getTime();
+    if (Number.isFinite(latestMs) && latestMs < cutoff) {
+      return `No readings in the last ${days}d — latest is ${new Date(latestMs).toLocaleString()}. Widen the range. · ${stamp}`;
+    }
+  }
+  return `${n} points · ${stamp}`;
 }
 
 function setStatus(text) {

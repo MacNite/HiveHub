@@ -2491,25 +2491,46 @@ MEASUREMENT_SELECT_COLUMNS = """
 # are populated for current firmware. Selecting only typed columns here avoids
 # that de-TOAST entirely, which is the dominant per-row cost on the chart query.
 #
-# Trade-off: rows from older deployments that stored a charted field *only* in
-# raw_json (and never in its typed column) will read NULL for that field on the
-# charts. Weight/temperature/humidity/battery/RSSI are first-class ingest columns
-# so this affects only edge-case legacy rows; the `latest`/app paths still carry
-# the raw_json fallbacks.
+# Trade-off: the down-sample decimation (see execute_measurement_query) does its
+# window pass over the cheap (id, measured_at) index and only materialises this
+# column list for the ~max_points rows that survive, so the raw_json de-TOAST is
+# bounded to a few hundred rows per chart request rather than the whole range.
+# That makes it affordable to mirror the fallbacks the `latest`/app paths use for
+# the charted fields, so a chart matches its metric card on legacy rows that
+# stored a value only in raw_json (in-hive humidity, pressure, mic level, battery,
+# solar, bee-counter). Weight / hive & ambient temperature / ambient humidity /
+# RSSI have no raw_json fallback in MEASUREMENT_SELECT_COLUMNS either, so they stay
+# bare typed columns here — there is nothing extra to coalesce.
 CHART_MEASUREMENT_COLUMNS = """
     id, device_id, measured_at,
     scale_1_weight_kg, scale_2_weight_kg,
     hive_1_temp_c, hive_2_temp_c, ambient_temp_c,
-    ambient_humidity_percent, hive_1_humidity_percent, hive_2_humidity_percent,
-    ble_1_pressure_hpa, ble_2_pressure_hpa,
-    hivescale_1_pressure_hpa, hivescale_2_pressure_hpa,
-    mic_left_rms_dbfs, mic_right_rms_dbfs, mic_left_peak_dbfs, mic_right_peak_dbfs,
-    battery_soc_percent, battery_voltage, solar_power_mw, solar_current_ma,
+    ambient_humidity_percent,
+    COALESCE(hive_1_humidity_percent, NULLIF(raw_json->>'hive_1_humidity_percent', '')::double precision) AS hive_1_humidity_percent,
+    COALESCE(hive_2_humidity_percent, NULLIF(raw_json->>'hive_2_humidity_percent', '')::double precision) AS hive_2_humidity_percent,
+    COALESCE(ble_1_pressure_hpa, NULLIF(raw_json->>'ble_1_pressure_hpa', '')::double precision) AS ble_1_pressure_hpa,
+    COALESCE(ble_2_pressure_hpa, NULLIF(raw_json->>'ble_2_pressure_hpa', '')::double precision) AS ble_2_pressure_hpa,
+    COALESCE(hivescale_1_pressure_hpa, NULLIF(raw_json->>'hivescale_1_pressure_hpa', '')::double precision) AS hivescale_1_pressure_hpa,
+    COALESCE(hivescale_2_pressure_hpa, NULLIF(raw_json->>'hivescale_2_pressure_hpa', '')::double precision) AS hivescale_2_pressure_hpa,
+    COALESCE(mic_left_rms_dbfs, NULLIF(raw_json->>'mic_left_rms_dbfs', '')::double precision) AS mic_left_rms_dbfs,
+    COALESCE(mic_right_rms_dbfs, NULLIF(raw_json->>'mic_right_rms_dbfs', '')::double precision) AS mic_right_rms_dbfs,
+    COALESCE(mic_left_peak_dbfs, NULLIF(raw_json->>'mic_left_peak_dbfs', '')::double precision) AS mic_left_peak_dbfs,
+    COALESCE(mic_right_peak_dbfs, NULLIF(raw_json->>'mic_right_peak_dbfs', '')::double precision) AS mic_right_peak_dbfs,
+    COALESCE(battery_soc_percent, NULLIF(raw_json->>'battery_soc_percent', '')::double precision) AS battery_soc_percent,
+    COALESCE(battery_voltage, NULLIF(raw_json->>'battery_voltage_v', '')::double precision, NULLIF(raw_json->>'battery_voltage', '')::double precision) AS battery_voltage,
+    COALESCE(solar_power_mw, NULLIF(raw_json->>'solar_power_mw', '')::double precision) AS solar_power_mw,
+    COALESCE(solar_current_ma, NULLIF(raw_json->>'solar_current_ma', '')::double precision) AS solar_current_ma,
     rssi_dbm,
-    bee_counter_1_ok, bee_counter_1_total_in, bee_counter_1_total_out,
-    bee_counter_1_interval_in, bee_counter_1_interval_out,
-    bee_counter_2_ok, bee_counter_2_total_in, bee_counter_2_total_out,
-    bee_counter_2_interval_in, bee_counter_2_interval_out
+    COALESCE(bee_counter_1_ok, NULLIF(raw_json->>'bee_counter_1_ok', '')::boolean) AS bee_counter_1_ok,
+    COALESCE(bee_counter_1_total_in, NULLIF(raw_json->>'bee_counter_1_total_in', '')::bigint) AS bee_counter_1_total_in,
+    COALESCE(bee_counter_1_total_out, NULLIF(raw_json->>'bee_counter_1_total_out', '')::bigint) AS bee_counter_1_total_out,
+    COALESCE(bee_counter_1_interval_in, NULLIF(raw_json->>'bee_counter_1_interval_in', '')::bigint) AS bee_counter_1_interval_in,
+    COALESCE(bee_counter_1_interval_out, NULLIF(raw_json->>'bee_counter_1_interval_out', '')::bigint) AS bee_counter_1_interval_out,
+    COALESCE(bee_counter_2_ok, NULLIF(raw_json->>'bee_counter_2_ok', '')::boolean) AS bee_counter_2_ok,
+    COALESCE(bee_counter_2_total_in, NULLIF(raw_json->>'bee_counter_2_total_in', '')::bigint) AS bee_counter_2_total_in,
+    COALESCE(bee_counter_2_total_out, NULLIF(raw_json->>'bee_counter_2_total_out', '')::bigint) AS bee_counter_2_total_out,
+    COALESCE(bee_counter_2_interval_in, NULLIF(raw_json->>'bee_counter_2_interval_in', '')::bigint) AS bee_counter_2_interval_in,
+    COALESCE(bee_counter_2_interval_out, NULLIF(raw_json->>'bee_counter_2_interval_out', '')::bigint) AS bee_counter_2_interval_out
 """
 
 
@@ -2786,13 +2807,15 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
       as ``total_now`` so the restart from zero is not seen as a huge negative.
 
     The dicts are mutated in place; the caller's ordering is preserved (we sort a
-    shallow copy by ``measured_at`` only to compute the deltas).
+    shallow copy by ``measured_at`` only to compute the deltas). Run this *after*
+    attach_hive_readings so the flat ``bee_counter_{n}_*`` aliases exist for hives
+    3–18 (which have no fixed table columns); otherwise only hives 1–2 are filled.
     """
     ordered = sorted(
         (m for m in measurements if m.get("measured_at") is not None),
         key=lambda m: m["measured_at"],
     )
-    for ch in (1, 2):
+    for ch in range(1, MAX_HIVES + 1):
         ok_key = f"bee_counter_{ch}_ok"
         for direction in ("in", "out"):
             interval_key = f"bee_counter_{ch}_interval_{direction}"
@@ -3061,8 +3084,10 @@ def serialize_measurements(rows) -> list[dict]:
     measurements = attach_temperature_compensation(
         [measurement_row_to_dict(r) for r in rows]
     )
-    measurements = difference_bee_counter_intervals(measurements)
-    return attach_hive_readings(measurements)
+    # Flatten per-hive readings first so hives 3–18 expose bee_counter_{n}_* keys,
+    # then difference so those hives get derived interval counts too.
+    measurements = attach_hive_readings(measurements)
+    return difference_bee_counter_intervals(measurements)
 
 
 def serialize_chart_measurements(cur) -> list[dict]:
@@ -3085,8 +3110,10 @@ def serialize_chart_measurements(cur) -> list[dict]:
         m["tempco_applied"] = False
         measurements.append(m)
     measurements = attach_temperature_compensation(measurements)
-    measurements = difference_bee_counter_intervals(measurements)
-    return attach_hive_readings(measurements)
+    # Flatten per-hive readings first (adds bee_counter_{n}_* for hives 3–18),
+    # then difference so those hives get derived interval counts too.
+    measurements = attach_hive_readings(measurements)
+    return difference_bee_counter_intervals(measurements)
 
 
 def execute_measurement_query(cur, columns, where_parts, params, limit, max_points):
