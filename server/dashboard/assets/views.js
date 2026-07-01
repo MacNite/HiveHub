@@ -235,8 +235,12 @@ function renderOverview(root, state) {
     el("span", { class: `dot ${sevClass(sev)}` }), sev ? sev : "OK");
 
   const cards = [
-    metricCard("Weight", anyWeight ? fmt(totalWeight, 2) : DASH, "kg",
-      w24 != null ? `24h ${signed(w24, 2, "kg")}` : "Total of active scales"),
+    hives.length > 1
+      ? perHiveCard(state, "Weight", hives, "kg",
+          (n) => fmt(m[weightKey(m, n)], 2),
+          anyWeight ? `Total ${fmt(totalWeight, 2)} kg` : "Total of active scales")
+      : metricCard("Weight", anyWeight ? fmt(totalWeight, 2) : DASH, "kg",
+          w24 != null ? `24h ${signed(w24, 2, "kg")}` : "Total of active scales"),
     perHiveCard(state, "Hive temperature", hives, "°C",
       (n) => fmt(m[`hive_${n}_temp_c`], 1),
       isNum(m.ambient_temp_c) ? `Ambient ${fmt(m.ambient_temp_c, 1)} °C` : "Brood zone"),
