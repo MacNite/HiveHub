@@ -23,6 +23,9 @@ it is protected by **username + password login**:
   firmware and manage users; `viewer` is read-only. Admins add/remove accounts
   from **Device & admin → Dashboard users**; anyone can change their own password
   from **Device & admin → Your account**.
+- **Alert email:** each account can store a contact **email** (optional, set from
+  **Device & admin → Your account** or when an admin creates a user). It is the
+  destination for insights-based alerts once alert notifications are enabled.
 
 This makes it safe to expose to the internet, but serving it over **HTTPS** (set
 `DASHBOARD_COOKIE_SECURE=true`) and/or behind a reverse proxy is still
@@ -60,6 +63,9 @@ Related settings (all optional, see `server/.env.example`):
   / year / 5 years) for weight, temperatures, humidity & pressure, audio levels,
   FFT frequency bands, battery & solar, connectivity and bee-counter traffic,
   plus the rule-based insight summary.
+- **Insights history:** the Insights view lists the persisted lifecycle of every
+  alert — active *and* resolved — with an all/active/resolved filter, so you can
+  see warnings that have since cleared, not just the current state.
 - **Configuration:** edit device config (send interval, scale offsets/factors,
   temperature-compensation settings) and rename each hive the device reports (up
   to 18) — the labels used across every chart and card. Saving bumps the config

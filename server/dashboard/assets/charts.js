@@ -122,8 +122,13 @@ export function seriesFrom(measurements, key, label, color) {
   // iterate oldest→newest so the line draws left-to-right
   for (let i = measurements.length - 1; i >= 0; i--) {
     const m = measurements[i];
-    const y = m[key];
-    if (y == null || !Number.isFinite(y)) continue;
+    if (m == null) continue;
+    // Coerce numeric-looking strings (e.g. Postgres NUMERIC columns serialized as
+    // strings) so the line still plots instead of silently dropping every point.
+    const raw = m[key];
+    if (raw == null || raw === "") continue;
+    const y = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(y)) continue;
     const t = new Date(m.measured_at).getTime();
     if (Number.isNaN(t)) continue;
     points.push({ t, y });

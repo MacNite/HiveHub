@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -720,10 +721,30 @@ class DeviceChannelsUpdateIn(BaseModel):
     names: Optional[dict[str, Optional[str]]] = None
 
 
+# Lightweight email check — good enough to catch typos without pulling in the
+# optional email-validator dependency. Blank / whitespace-only normalizes to None
+# so an account can clear its email again.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def normalize_optional_email(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    email = value.strip()
+    if not email:
+        return None
+    if len(email) > 254 or not _EMAIL_RE.match(email):
+        raise ValueError("Enter a valid email address")
+    return email.lower()
+
+
 class DashboardSetupIn(BaseModel):
     """First-run wizard payload: creates the initial admin account."""
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=8, max_length=256)
+    email: Optional[str] = Field(default=None, max_length=254)
+
+    _norm_email = field_validator("email")(lambda cls, v: normalize_optional_email(v))
 
 
 class DashboardLoginIn(BaseModel):
@@ -735,11 +756,21 @@ class DashboardCreateUserIn(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=8, max_length=256)
     role: Literal["admin", "viewer"] = "viewer"
+    email: Optional[str] = Field(default=None, max_length=254)
+
+    _norm_email = field_validator("email")(lambda cls, v: normalize_optional_email(v))
 
 
 class DashboardChangePasswordIn(BaseModel):
     current_password: str = Field(..., min_length=1, max_length=256)
     new_password: str = Field(..., min_length=8, max_length=256)
+
+
+class DashboardUpdateEmailIn(BaseModel):
+    """Set or clear the logged-in user's contact email (alerts destination)."""
+    email: Optional[str] = Field(default=None, max_length=254)
+
+    _norm_email = field_validator("email")(lambda cls, v: normalize_optional_email(v))
 
 
 class AppDeviceConfigUpdate(DeviceConfigUpdate):
@@ -904,6 +935,7 @@ def _public_dashboard_user(user: dict) -> dict:
         "id": user["id"],
         "username": user["username"],
         "role": user["role"],
+        "email": user.get("email"),
         "created_at": user.get("created_at"),
         "last_login_at": user.get("last_login_at"),
     }
@@ -932,7 +964,7 @@ def dashboard_admin_count(exclude_id: Optional[int] = None) -> int:
 def _dashboard_user_row(r) -> dict:
     return {
         "id": r[0], "username": r[1], "password_hash": r[2], "role": r[3],
-        "created_at": r[4], "last_login_at": r[5],
+        "email": r[4], "created_at": r[5], "last_login_at": r[6],
     }
 
 
@@ -940,7 +972,7 @@ def get_dashboard_user_by_username(username: str) -> Optional[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, role, created_at, last_login_at "
+                "SELECT id, username, password_hash, role, email, created_at, last_login_at "
                 "FROM dashboard_users WHERE lower(username) = lower(%s);",
                 (username,),
             )
@@ -952,25 +984,37 @@ def list_dashboard_users() -> list[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, role, created_at, last_login_at "
+                "SELECT id, username, password_hash, role, email, created_at, last_login_at "
                 "FROM dashboard_users ORDER BY created_at;"
             )
             rows = cur.fetchall()
     return [_public_dashboard_user(_dashboard_user_row(r)) for r in rows]
 
 
-def create_dashboard_user(username: str, password: str, role: str) -> dict:
+def create_dashboard_user(
+    username: str, password: str, role: str, email: Optional[str] = None
+) -> dict:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO dashboard_users (username, password_hash, role) "
-                "VALUES (%s, %s, %s) "
-                "RETURNING id, username, password_hash, role, created_at, last_login_at;",
-                (username.strip(), hash_password(password), role),
+                "INSERT INTO dashboard_users (username, password_hash, role, email) "
+                "VALUES (%s, %s, %s, %s) "
+                "RETURNING id, username, password_hash, role, email, created_at, last_login_at;",
+                (username.strip(), hash_password(password), role, email),
             )
             row = cur.fetchone()
             conn.commit()
     return _dashboard_user_row(row)
+
+
+def set_dashboard_user_email(user_id: int, email: Optional[str]) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dashboard_users SET email = %s WHERE id = %s;",
+                (email, user_id),
+            )
+            conn.commit()
 
 
 def delete_dashboard_user(user_id: int) -> bool:
@@ -1593,9 +1637,15 @@ def init_db():
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'viewer')),
+                    email TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     last_login_at TIMESTAMPTZ
                 );
+
+                -- Contact email for insights-based alerts. Added after the table
+                -- shipped, so existing databases need the column back-filled.
+                ALTER TABLE dashboard_users
+                    ADD COLUMN IF NOT EXISTS email TEXT;
 
                 -- Small key/value store for dashboard-wide settings, currently the
                 -- auto-generated session signing secret (so logins survive restarts
@@ -4585,6 +4635,60 @@ def insight_history_row_to_dict(row: tuple) -> dict[str, Any]:
     }
 
 
+def build_insight_history(
+    device_id: str,
+    status: str = "all",
+    category: Optional[str] = None,
+    since: Optional[datetime] = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Query the persisted ``insight_alerts`` lifecycle table for one device.
+
+    Shared by the HivePal app API and the local dashboard so both return an
+    identical history payload (active + resolved alerts, newest first).
+    """
+    conditions = ["device_id = %(device_id)s"]
+    params: dict[str, Any] = {"device_id": device_id, "limit": limit}
+    if status == "active":
+        conditions.append("resolved_at IS NULL")
+    elif status == "resolved":
+        conditions.append("resolved_at IS NOT NULL")
+    if category:
+        conditions.append("category = %(category)s")
+        params["category"] = category
+    if since is not None:
+        conditions.append("last_seen_at >= %(since)s")
+        params["since"] = since
+
+    where_clause = " AND ".join(conditions)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT id, alert_key, category, channel, severity, peak_severity,
+                       title, description, confidence, evidence, source,
+                       window_start, window_end, first_seen_at, last_seen_at,
+                       resolved_at, update_count
+                FROM insight_alerts
+                WHERE {where_clause}
+                ORDER BY first_seen_at DESC, id DESC
+                LIMIT %(limit)s;
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+
+    entries = [insight_history_row_to_dict(r) for r in rows]
+    active_count = sum(1 for e in entries if e["status"] == "active")
+    return {
+        "device_id": device_id,
+        "lookback_days": INSIGHTS_HISTORY_LOOKBACK_DAYS,
+        "count": len(entries),
+        "active_count": active_count,
+        "alerts": entries,
+    }
+
+
 @app.get(
     "/api/v1/app/devices/{device_id}/insights",
     dependencies=[Depends(require_hivepal_service_key)],
@@ -4703,47 +4807,7 @@ def get_device_insights_history(
     first. See ``persist_insights`` and ``server/insights.py``.
     """
     require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
-
-    conditions = ["device_id = %(device_id)s"]
-    params: dict[str, Any] = {"device_id": device_id, "limit": limit}
-    if status == "active":
-        conditions.append("resolved_at IS NULL")
-    elif status == "resolved":
-        conditions.append("resolved_at IS NOT NULL")
-    if category:
-        conditions.append("category = %(category)s")
-        params["category"] = category
-    if since is not None:
-        conditions.append("last_seen_at >= %(since)s")
-        params["since"] = since
-
-    where_clause = " AND ".join(conditions)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT id, alert_key, category, channel, severity, peak_severity,
-                       title, description, confidence, evidence, source,
-                       window_start, window_end, first_seen_at, last_seen_at,
-                       resolved_at, update_count
-                FROM insight_alerts
-                WHERE {where_clause}
-                ORDER BY first_seen_at DESC, id DESC
-                LIMIT %(limit)s;
-                """,
-                params,
-            )
-            rows = cur.fetchall()
-
-    entries = [insight_history_row_to_dict(r) for r in rows]
-    active_count = sum(1 for e in entries if e["status"] == "active")
-    return {
-        "device_id": device_id,
-        "lookback_days": INSIGHTS_HISTORY_LOOKBACK_DAYS,
-        "count": len(entries),
-        "active_count": active_count,
-        "alerts": entries,
-    }
+    return build_insight_history(device_id, status, category, since, limit)
 
 
 @app.get("/api/v1/time", dependencies=[Depends(require_api_key)])
@@ -4780,10 +4844,19 @@ LOCAL_DASHBOARD_ADMIN_DEP = [Depends(require_dashboard_admin)]
 def local_auth_status(request: Request):
     """Tell the dashboard whether to show the setup wizard, login, or the app."""
     payload = decode_dashboard_session_token(request.cookies.get(DASHBOARD_SESSION_COOKIE, ""))
+    user = None
+    if payload:
+        # Read the live row so the email (which can change after login) is fresh.
+        record = get_dashboard_user_by_username(payload["username"])
+        user = (
+            _public_dashboard_user(record)
+            if record
+            else {"username": payload["username"], "role": payload["role"]}
+        )
     return {
         "setup_required": dashboard_user_count() == 0,
         "authenticated": bool(payload),
-        "user": {"username": payload["username"], "role": payload["role"]} if payload else None,
+        "user": user,
     }
 
 
@@ -4792,7 +4865,7 @@ def local_auth_setup(body: DashboardSetupIn, response: Response):
     """First-run wizard: create the initial admin. No-op once any account exists."""
     if dashboard_user_count() > 0:
         raise HTTPException(status_code=409, detail="Setup has already been completed")
-    user = create_dashboard_user(body.username, body.password, "admin")
+    user = create_dashboard_user(body.username, body.password, "admin", body.email)
     touch_dashboard_user_login(user["id"])
     set_dashboard_session_cookie(response, create_dashboard_session_token(user))
     return {"user": _public_dashboard_user(user)}
@@ -4826,6 +4899,22 @@ def local_auth_change_password(
     return {"ok": True}
 
 
+@app.post("/api/v1/local/auth/email")
+def local_auth_update_email(
+    body: DashboardUpdateEmailIn, session: dict = Depends(require_dashboard_session)
+):
+    """Set or clear the logged-in user's contact email.
+
+    This address is where insights-based alerts will be delivered once alert
+    notifications are wired up; storing it now lets beekeepers opt in early.
+    """
+    user = get_dashboard_user_by_username(session["username"])
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found")
+    set_dashboard_user_email(user["id"], body.email)
+    return {"ok": True, "email": body.email}
+
+
 @app.get("/api/v1/local/auth/users", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_list_dashboard_users():
     """List all dashboard accounts (admin only)."""
@@ -4837,7 +4926,9 @@ def local_create_dashboard_user(body: DashboardCreateUserIn):
     """Create a new dashboard account with the admin or viewer role (admin only)."""
     if get_dashboard_user_by_username(body.username):
         raise HTTPException(status_code=409, detail="That username is already taken")
-    return _public_dashboard_user(create_dashboard_user(body.username, body.password, body.role))
+    return _public_dashboard_user(
+        create_dashboard_user(body.username, body.password, body.role, body.email)
+    )
 
 
 @app.delete("/api/v1/local/auth/users/{user_id}")
@@ -4990,9 +5081,17 @@ def local_update_channels(device_id: str, payload: DeviceChannelsUpdateIn):
     return apply_device_channels(device_id, payload)
 
 
-@app.get("/api/v1/local/devices/{device_id}/insights/summary", dependencies=LOCAL_DASHBOARD_DEP)
-def local_insights_summary(device_id: str):
-    """Highest-severity insight summary (14-day lookback) for the overview."""
+# Recomputing the 14-day insight pipeline (a full MEASUREMENT_SELECT_COLUMNS scan
+# that de-TOASTs raw_json for every row, plus the Python detectors) on every
+# dashboard load AND the 60s auto-refresh was the dominant load-time cost. The
+# result barely changes minute-to-minute, so memoize it per device for a short
+# window. The background reconciler still persists history independently.
+_INSIGHTS_SUMMARY_TTL_SECONDS = 90
+_insights_summary_cache: dict[str, tuple[float, dict]] = {}
+_insights_summary_lock = threading.Lock()
+
+
+def compute_local_insights_summary(device_id: str) -> dict:
     end_at = datetime.now(timezone.utc)
     start_at = end_at - timedelta(days=14)
     with get_conn() as conn:
@@ -5024,6 +5123,41 @@ def local_insights_summary(device_id: str):
         ),
         "categories": summary.categories,
     }
+
+
+@app.get("/api/v1/local/devices/{device_id}/insights/summary", dependencies=LOCAL_DASHBOARD_DEP)
+def local_insights_summary(device_id: str, refresh: bool = False):
+    """Highest-severity insight summary (14-day lookback) for the overview.
+
+    Served from a short-lived per-device cache so the dashboard's frequent
+    reloads don't re-run the full insight pipeline each time. Pass ``refresh=true``
+    to force a recompute.
+    """
+    now = time.monotonic()
+    if not refresh:
+        cached = _insights_summary_cache.get(device_id)
+        if cached and now - cached[0] < _INSIGHTS_SUMMARY_TTL_SECONDS:
+            return cached[1]
+    result = compute_local_insights_summary(device_id)
+    with _insights_summary_lock:
+        _insights_summary_cache[device_id] = (time.monotonic(), result)
+    return result
+
+
+@app.get("/api/v1/local/devices/{device_id}/insights/history", dependencies=LOCAL_DASHBOARD_DEP)
+def local_insights_history(
+    device_id: str,
+    status: Literal["all", "active", "resolved"] = Query("all"),
+    category: Optional[str] = Query(None),
+    since: Optional[datetime] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Persisted lifecycle of this device's insight alerts (active + resolved).
+
+    Complements ``/insights/summary`` (the live current state) with the stored
+    history the reconciler builds — including resolved warnings — newest first.
+    """
+    return build_insight_history(device_id, status, category, since, limit)
 
 
 @app.get("/api/v1/local/devices/{device_id}/firmware/status", dependencies=LOCAL_DASHBOARD_DEP)

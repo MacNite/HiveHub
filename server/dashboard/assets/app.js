@@ -111,12 +111,14 @@ function buildState() {
       fitTempComp: (p) => api.fitTempCompensation(state.deviceId, p),
       updateConfig: (p) => api.updateConfig(state.deviceId, p),
       updateChannels: (p) => api.updateChannels(state.deviceId, p),
+      insightsHistory: (opts) => api.insightsHistory(state.deviceId, opts),
       // Dashboard account management (auth API). User-management calls require
       // the admin role server-side.
       listUsers: () => auth.listUsers(),
-      createUser: (u, p, r) => auth.createUser(u, p, r),
+      createUser: (u, p, r, email) => auth.createUser(u, p, r, email),
       deleteUser: (id) => auth.deleteUser(id),
       changePassword: (cur, next) => auth.changePassword(cur, next),
+      updateEmail: (email) => auth.updateEmail(email),
     },
   };
 }
@@ -264,6 +266,7 @@ function renderLogin(opts = {}) {
 
 function renderSetup() {
   const u = el("input", { type: "text", autocomplete: "username", required: true });
+  const em = el("input", { type: "email", autocomplete: "email", placeholder: "you@example.com" });
   const p = el("input", { type: "password", autocomplete: "new-password", required: true });
   const p2 = el("input", { type: "password", autocomplete: "new-password", required: true });
   const btn = el("button", { class: "btn", type: "submit" }, "Create admin account");
@@ -273,6 +276,7 @@ function renderSetup() {
     el("p", { class: "auth-sub" },
       "Create the first administrator account to secure this dashboard. You can add more accounts later."),
     authField("Username", u),
+    authField("Email (optional — for alerts)", em),
     authField("Password (min 8 characters)", p),
     authField("Confirm password", p2),
     errLine,
@@ -283,7 +287,7 @@ function renderSetup() {
     if (p.value !== p2.value) { errLine.textContent = "Passwords do not match."; return; }
     btn.disabled = true; errLine.textContent = "";
     try {
-      const r = await auth.setup(u.value, p.value);
+      const r = await auth.setup(u.value, p.value, em.value);
       state.authUser = r.user;
       await startApp();
     } catch (err) {

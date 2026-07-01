@@ -26,13 +26,14 @@ function jsonBody(payload) {
 
 export const auth = {
   status: () => req("/status"),
-  setup: (username, password) => req("/setup", { method: "POST", ...jsonBody({ username, password }) }),
+  setup: (username, password, email) => req("/setup", { method: "POST", ...jsonBody({ username, password, email }) }),
   login: (username, password) => req("/login", { method: "POST", ...jsonBody({ username, password }) }),
   logout: () => req("/logout", { method: "POST" }),
   changePassword: (current_password, new_password) =>
     req("/password", { method: "POST", ...jsonBody({ current_password, new_password }) }),
+  updateEmail: (email) => req("/email", { method: "POST", ...jsonBody({ email }) }),
   listUsers: () => req("/users"),
-  createUser: (username, password, role) =>
-    req("/users", { method: "POST", ...jsonBody({ username, password, role }) }),
+  createUser: (username, password, role, email) =>
+    req("/users", { method: "POST", ...jsonBody({ username, password, role, email }) }),
   deleteUser: (id) => req(`/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
