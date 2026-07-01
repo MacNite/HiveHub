@@ -61,6 +61,16 @@ export const api = {
   insightsSummary: (deviceId) =>
     req(`/devices/${encodeURIComponent(deviceId)}/insights/summary`),
 
+  insightsHistory: (deviceId, { status, category, since, limit } = {}) => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    if (category) q.set("category", category);
+    if (since) q.set("since", since);
+    if (limit) q.set("limit", String(limit));
+    const qs = q.toString();
+    return req(`/devices/${encodeURIComponent(deviceId)}/insights/history${qs ? "?" + qs : ""}`);
+  },
+
   firmwareStatus: (deviceId) =>
     req(`/devices/${encodeURIComponent(deviceId)}/firmware/status`),
 

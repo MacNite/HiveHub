@@ -2,7 +2,7 @@
 // { id, label, icon, render(root, state) }. `state` carries the loaded data and
 // the admin action callbacks (see app.js buildState()).
 
-import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, DASH } from "./format.js";
+import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, fmtDateTime, DASH } from "./format.js";
 import { drawLineChart, seriesFrom, PALETTE } from "./charts.js";
 
 // ── chart manager: views register charts; app.js redraws them after mount ────
@@ -402,7 +402,63 @@ function renderInsights(root, state) {
     [k, typeof v === "object" ? JSON.stringify(v) : String(v)]);
   if (catRows.length) node.append(el("div", { style: "margin-top:1rem" }, rowsCard("Categories", catRows)));
   node.append(el("div", { style: "margin-top:1rem" }, highestAlertCard(ins)));
+  node.append(el("div", { style: "margin-top:1rem" }, insightsHistoryCard(state)));
   root.append(node);
+}
+
+// Persisted alert history (active + resolved). Views render synchronously, so the
+// history is fetched lazily and the list is swapped in once it arrives — the same
+// pattern the admin users card uses.
+function insightsHistoryCard(state) {
+  const listEl = el("div", { class: "rows" }, el("p", { class: "muted-text" }, "Loading history…"));
+  const filter = el("select", { class: "full" },
+    el("option", { value: "all" }, "All"),
+    el("option", { value: "active" }, "Active only"),
+    el("option", { value: "resolved" }, "Resolved only"));
+
+  const historyRow = (a) => {
+    const resolved = a.status === "resolved";
+    const badge = el("span", { class: `badge ${sevClass(a.peak_severity || a.severity)}` },
+      a.peak_severity || a.severity || "");
+    const stateBadge = el("span", { class: `badge ${resolved ? "good" : "warn"}` },
+      resolved ? "Resolved" : "Active");
+    const when = resolved
+      ? `${fmtDateTime(a.first_seen_at)} → resolved ${relAge(a.resolved_at)}`
+      : `Since ${fmtDateTime(a.first_seen_at)} · last seen ${relAge(a.last_seen_at)}`;
+    return el("div", { class: "card", style: "margin:0" },
+      el("div", { class: "spread" },
+        el("h3", { style: "margin:.1rem 0" }, a.title || a.alert_key || "Alert"),
+        el("span", {}, stateBadge, " ", badge)),
+      a.description ? el("p", { class: "muted-text", style: "margin:.2rem 0" }, a.description) : null,
+      el("p", { class: "note", style: "margin:.2rem 0 0" }, when));
+  };
+
+  const refresh = async () => {
+    listEl.replaceChildren(el("p", { class: "muted-text" }, "Loading history…"));
+    try {
+      const res = await state.actions.insightsHistory({ status: filter.value, limit: 100 });
+      const alerts = (res && res.alerts) || [];
+      if (!alerts.length) {
+        listEl.replaceChildren(el("p", { class: "muted-text" },
+          filter.value === "resolved"
+            ? "No resolved insights yet."
+            : "No insight history recorded yet."));
+        return;
+      }
+      listEl.replaceChildren(...alerts.map(historyRow));
+    } catch (err) {
+      listEl.replaceChildren(el("p", { class: "auth-error" }, err.message || "Failed to load history"));
+    }
+  };
+  filter.addEventListener("change", refresh);
+  refresh();
+
+  return el("div", { class: "card" },
+    el("div", { class: "spread" },
+      el("h2", {}, "Insights history"),
+      el("label", { class: "field" }, el("span", { class: "field-label" }, "Show"), filter)),
+    el("p", { class: "note" }, "Lifecycle of past and present alerts, including warnings that have since resolved."),
+    listEl);
 }
 
 // ── DEVICE / ADMIN ───────────────────────────────────────────────────────────
@@ -620,6 +676,28 @@ function renderDevice(root, state) {
 // "Your account": let the logged-in user change their own password.
 function accountCard(state) {
   const u = state.authUser || {};
+
+  // Contact email — where insights-based alerts will be sent once notifications
+  // are wired up. Optional; can be cleared by saving an empty field.
+  const emailInput = el("input", { type: "email", autocomplete: "email", value: u.email || "", placeholder: "you@example.com" });
+  const emailBtn = el("button", { class: "btn", type: "submit" }, "Save email");
+  const emailForm = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Alert email"), emailInput),
+    el("p", { class: "note" }, "Used to notify you about colony insights (swarm, robbing, winter risk…). Leave blank to receive none."),
+    el("div", { class: "form-actions" }, emailBtn));
+  emailForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    emailBtn.disabled = true;
+    try {
+      const r = await state.actions.updateEmail(emailInput.value.trim());
+      // Reflect the server-normalised value back into the session + field.
+      state.authUser.email = r && "email" in r ? r.email : emailInput.value.trim() || null;
+      emailInput.value = state.authUser.email || "";
+      state.toast("Email saved", "success");
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { emailBtn.disabled = false; }
+  });
+
   const curPw = el("input", { type: "password", autocomplete: "current-password" });
   const newPw = el("input", { type: "password", autocomplete: "new-password" });
   const newPw2 = el("input", { type: "password", autocomplete: "new-password" });
@@ -644,7 +722,10 @@ function accountCard(state) {
     } catch (err) { state.toast(err.message, "error"); }
     finally { btn.disabled = false; }
   });
-  return el("div", { class: "card" }, el("h2", {}, "Your account"), form);
+  return el("div", { class: "card" }, el("h2", {}, "Your account"),
+    emailForm,
+    el("h3", { style: "margin:.8rem 0 .2rem" }, "Change password"),
+    form);
 }
 
 // "Dashboard users" (admin only): list / add / remove accounts. The list is
@@ -663,8 +744,9 @@ function usersCard(state) {
           try { await state.actions.deleteUser(usr.id); state.toast("User removed", "success"); refresh(); }
           catch (err) { state.toast(err.message, "error"); del.disabled = false; }
         });
+        const label = usr.email ? `${usr.username} · ${usr.role} · ${usr.email}` : `${usr.username} · ${usr.role}`;
         return el("div", { class: "row" },
-          el("span", { class: "k" }, `${usr.username} · ${usr.role}`),
+          el("span", { class: "k" }, label),
           el("span", { class: "v" }, del));
       }));
       if (!users.length) listEl.replaceChildren(el("p", { class: "muted-text" }, "No users yet."));
@@ -674,6 +756,7 @@ function usersCard(state) {
   };
 
   const nu = el("input", { type: "text", autocomplete: "off", placeholder: "username" });
+  const ne = el("input", { type: "email", autocomplete: "off", placeholder: "email (optional)" });
   const np = el("input", { type: "password", autocomplete: "new-password", placeholder: "password (min 8)" });
   const nr = el("select", { class: "full" },
     el("option", { value: "viewer" }, "Viewer (read-only)"),
@@ -681,6 +764,7 @@ function usersCard(state) {
   const addBtn = el("button", { class: "btn", type: "submit" }, "Add user");
   const addForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Username"), nu),
+    el("div", { class: "form-row" }, el("label", {}, "Email"), ne),
     el("div", { class: "form-row" }, el("label", {}, "Password"), np),
     el("div", { class: "form-row" }, el("label", {}, "Role"), nr),
     el("div", { class: "form-actions" }, addBtn));
@@ -690,9 +774,9 @@ function usersCard(state) {
     if (nu.value.trim().length < 3) { state.toast("Username must be at least 3 characters", "error"); return; }
     addBtn.disabled = true;
     try {
-      await state.actions.createUser(nu.value.trim(), np.value, nr.value);
+      await state.actions.createUser(nu.value.trim(), np.value, nr.value, ne.value.trim() || null);
       state.toast("User created", "success");
-      nu.value = np.value = "";
+      nu.value = np.value = ne.value = "";
       refresh();
     } catch (err) { state.toast(err.message, "error"); }
     finally { addBtn.disabled = false; }
