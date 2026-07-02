@@ -42,7 +42,8 @@ const state = {
 // ── toast ────────────────────────────────────────────────────────────────────
 let toastTimer = null;
 function toast(msg, kind = "") {
-  const node = el("div", { class: `toast ${kind}` }, msg);
+  // role=alert/status makes screen readers announce the transient message
+  const node = el("div", { class: `toast ${kind}`, role: kind === "error" ? "alert" : "status" }, msg);
   document.body.append(node);
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => node.remove(), 3500);
@@ -173,8 +174,12 @@ function buildState() {
 function renderSidebar() {
   ui.sidebar.replaceChildren(
     ...GROUPS.map((g) => {
-      const btn = el("button", { class: `nav-item ${g.id === state.group ? "active" : ""}`, type: "button" },
-        el("span", { class: "nav-ico" }, g.icon), g.label);
+      const active = g.id === state.group;
+      const btn = el("button", {
+        class: `nav-item ${active ? "active" : ""}`,
+        type: "button",
+        "aria-current": active ? "page" : null,
+      }, el("span", { class: "nav-ico" }, g.icon), g.label);
       btn.addEventListener("click", () => { state.group = g.id; render(); });
       return btn;
     }));
@@ -238,7 +243,10 @@ function wireEvents() {
     const btn = e.target.closest("button[data-range]");
     if (!btn) return;
     state.range = btn.dataset.range;
-    for (const b of ui.rangeGroup.querySelectorAll("button")) b.classList.toggle("active", b === btn);
+    for (const b of ui.rangeGroup.querySelectorAll("button")) {
+      b.classList.toggle("active", b === btn);
+      b.setAttribute("aria-pressed", String(b === btn));
+    }
     loadData();
   });
   ui.refreshBtn.addEventListener("click", loadData);

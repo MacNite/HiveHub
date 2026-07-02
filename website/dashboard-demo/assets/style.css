@@ -130,6 +130,7 @@ select {
 .metric .hive-row-name { font-size: .82rem; font-weight: 600; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .metric .hive-row-val { font-size: 1.2rem; font-weight: 800; line-height: 1.25; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .metric .hive-row-unit { font-size: .78rem; font-weight: 600; color: var(--ink-soft); }
+.metric .hive-row-delta { font-size: .78rem; font-weight: 600; color: var(--ink-faint); margin-left: .35rem; }
 
 /* ── Badges ──────────────────────────────────────────────────── */
 .badge { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 700; }
@@ -183,6 +184,9 @@ select {
 .note.warn { color: var(--warn); }
 
 /* ── Misc ────────────────────────────────────────────────────── */
+/* The hidden attribute must win over author display rules (.form-row,
+   .user-area, … set display and would otherwise keep "hidden" nodes visible). */
+[hidden] { display: none !important; }
 .empty-state { display: grid; place-items: center; min-height: 40vh; color: var(--ink-faint); font-size: 1.05rem; }
 .toast {
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);
@@ -206,6 +210,15 @@ select {
   .layout { flex-direction: column; }
   .topbar { flex-wrap: wrap; height: auto; padding: .6rem 1rem; }
   .topbar-controls { margin-left: 0; width: 100%; }
+  /* .grid.wide's 420px minimum would overflow narrow phones — stack instead */
+  .grid.wide { grid-template-columns: 1fr; }
+}
+
+/* Visible keyboard-focus ring (controls otherwise only signal state on hover) */
+.btn:focus-visible, .nav-item:focus-visible, .range-group button:focus-visible,
+select:focus-visible, input:focus-visible {
+  outline: 2px solid var(--honey-dark, var(--honey));
+  outline-offset: 2px;
 }
 
 /* ── Auth (login / first-run setup) ─────────────────────────── */
