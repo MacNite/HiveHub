@@ -440,11 +440,23 @@ void configureC6Antenna() {
   pinMode(XIAO_C6_ANTENNA_SELECT_GPIO, OUTPUT);
   digitalWrite(XIAO_C6_ANTENNA_SELECT_GPIO,
                XIAO_C6_USE_EXTERNAL_ANTENNA ? HIGH : LOW);
-  Serial.printf("[ANT] XIAO C6: %s antenna (EN GPIO%d=LOW, SEL GPIO%d=%s)\n",
-      XIAO_C6_USE_EXTERNAL_ANTENNA ? "external" : "internal",
+  logC6Antenna();
+#endif
+}
+
+// Small helper: print which antenna the XIAO ESP32-C6 is currently using.
+// Reads the driven level of the RF_ANT_SELECT pin (LOW = built-in ceramic,
+// HIGH = external u.FL) so it reports the real switch state rather than just
+// the compile-time preference. No-op on non-C6 targets. Safe to call any time
+// after configureC6Antenna() (e.g. alongside network-status logging).
+void logC6Antenna() {
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+  bool external = digitalRead(XIAO_C6_ANTENNA_SELECT_GPIO) == HIGH;
+  Serial.printf("[ANT] XIAO C6: %s antenna in use (EN GPIO%d=LOW, SEL GPIO%d=%s)\n",
+      external ? "external u.FL" : "internal ceramic",
       (int)XIAO_C6_RF_SWITCH_EN_GPIO,
       (int)XIAO_C6_ANTENNA_SELECT_GPIO,
-      XIAO_C6_USE_EXTERNAL_ANTENNA ? "HIGH" : "LOW");
+      external ? "HIGH" : "LOW");
 #endif
 }
 

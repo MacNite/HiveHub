@@ -13,6 +13,7 @@
 String wakeReasonName(uint32_t wakeCauses);
 void releaseSleepPinHolds();
 void configureC6Antenna();
+void logC6Antenna();
 uint32_t cyclesForInterval(unsigned long intervalMs);
 bool shouldCheckOtaThisCycle();
 void markOtaChecked();
