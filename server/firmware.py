@@ -60,6 +60,42 @@ def latest_release_for_owner(target: str, owner_user_id: Optional[str],
             return cur.fetchone()
 
 
+def other_board_releases(target: str, owner_user_id: Optional[str],
+                         device_board: Optional[str],
+                         current_version: Optional[str]) -> list:
+    """Releases available for boards OTHER than this device's, newer than what it
+    runs.
+
+    Used to explain why a just-uploaded image is not offered here: an ESP32
+    device is never shown an ESP32-C6 build as "latest" (and vice versa), so
+    without this hint an upload for the wrong board appears to silently vanish
+    from the panel. Returns ``[{"board": ..., "version": ...}]`` with the newest
+    version per non-matching board, and an empty list when nothing newer exists
+    elsewhere. ``device_board=None`` (device has not reported its board yet)
+    lists every board's newer release.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT board, version FROM firmware_releases "
+                "WHERE active = true AND target = %s "
+                "  AND (owner_user_id = %s OR owner_user_id IS NULL) "
+                "  AND board IS NOT NULL "
+                "  AND board IS DISTINCT FROM %s;",
+                (target, owner_user_id, device_board),
+            )
+            rows = cur.fetchall()
+    # Keep the newest version per board, dropping anything not actually newer than
+    # what the device runs (version comparison is done here, not in SQL).
+    best: dict = {}
+    for board, version in rows:
+        if current_version and parse_version(version) <= parse_version(current_version):
+            continue
+        if board not in best or parse_version(version) > parse_version(best[board]):
+            best[board] = version
+    return [{"board": b, "version": v} for b, v in sorted(best.items())]
+
+
 def record_device_board(device_id: str, board: str) -> None:
     """Persist the board/architecture a device reported on its OTA check.
 

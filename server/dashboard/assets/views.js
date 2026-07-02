@@ -687,7 +687,19 @@ function renderDevice(root, state) {
     el("div", { class: "rows" },
       el("div", { class: "row" }, el("span", { class: "k" }, "Current"), el("span", { class: "v" }, fw.current_version || DASH)),
       el("div", { class: "row" }, el("span", { class: "k" }, "Latest"), el("span", { class: "v" }, fw.latest_version || DASH)),
-      el("div", { class: "row" }, el("span", { class: "k" }, "Approved"), el("span", { class: "v" }, fw.approved_version || DASH))));
+      el("div", { class: "row" }, el("span", { class: "k" }, "Approved"), el("span", { class: "v" }, fw.approved_version || DASH)),
+      el("div", { class: "row" }, el("span", { class: "k" }, "Board"), el("span", { class: "v" }, fw.device_board || DASH))));
+
+  // Explain a wrong-board upload: releases exist for a board other than the one
+  // this device reports, so they are (correctly) not offered here. Without this
+  // note such an upload looks like it silently vanished.
+  if (Array.isArray(fw.other_board_releases) && fw.other_board_releases.length) {
+    const others = fw.other_board_releases.map((r) => `${r.board} ${r.version}`).join(", ");
+    const forBoard = fw.device_board ? ` this ${fw.device_board} device` : " this device";
+    fwPanel.append(el("p", { class: "note warn" },
+      `Also uploaded for another board (not applied to${forBoard}): ${others}. ` +
+      "A build only reaches a device whose board matches — check the Board field when uploading."));
+  }
 
   if (fw.update_available && fw.pending_approval) {
     const approveBtn = el("button", { class: "btn", type: "button" }, "Approve & flash latest");
@@ -747,7 +759,15 @@ function renderDevice(root, state) {
     fd.append("target", targetSelect.value);
     if (targetSelect.value === "hivescale" && boardSelect.value) fd.append("board", boardSelect.value);
     uploadBtn.disabled = true;
-    try { await state.actions.uploadFirmware(fd); state.toast("Firmware uploaded", "success"); state.reload(); }
+    try {
+      const res = await state.actions.uploadFirmware(fd);
+      // Surface the board the release actually registered under, so a
+      // filename auto-detect that picked the wrong architecture is visible
+      // immediately rather than after the release fails to appear as "latest".
+      const parts = [res?.version, res?.target, res?.board].filter(Boolean).join(" / ");
+      state.toast(parts ? `Firmware uploaded: ${parts}` : "Firmware uploaded", "success");
+      state.reload();
+    }
     catch (err) { state.toast(err.message, "error"); }
     finally { uploadBtn.disabled = false; }
   });

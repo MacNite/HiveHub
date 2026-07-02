@@ -49,6 +49,7 @@ from firmware import (
     get_approved_firmware_version,
     get_device_board,
     latest_release_for_owner,
+    other_board_releases,
     parse_version,
     set_approved_firmware_version,
     store_firmware_upload,
@@ -399,7 +400,8 @@ def local_firmware_status(device_id: str):
         raise HTTPException(status_code=404, detail="Device not found")
     current_version = row[0]
     owner_id = get_device_owner_id(device_id)
-    release = latest_release_for_owner("hivescale", owner_id, get_device_board(device_id))
+    device_board = get_device_board(device_id)
+    release = latest_release_for_owner("hivescale", owner_id, device_board)
     latest_version = release[0] if release else None
     latest_is_official = bool(release) and release[3] is None
     approved_version = get_approved_firmware_version(device_id)
@@ -417,6 +419,13 @@ def local_firmware_status(device_id: str):
         "approved_version": approved_version,
         "update_available": update_available,
         "pending_approval": update_available and approved_version != latest_version,
+        # The board this device reports, plus any newer releases uploaded for a
+        # DIFFERENT board — so a wrong-board upload is explained rather than
+        # silently filtered out of "latest".
+        "device_board": device_board,
+        "other_board_releases": other_board_releases(
+            "hivescale", owner_id, device_board, current_version
+        ),
     }
 
 
