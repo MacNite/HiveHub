@@ -55,7 +55,7 @@ This differencing happens in two places, with identical semantics:
 
 * The insight engine (`server/insights.py::_extract_counter_series`), which
   feeds the swarm/foraging detectors and the insight cards.
-* The measurement read APIs (`server/main.py::difference_bee_counter_intervals`,
+* The measurement read APIs (`server/measurements.py::difference_bee_counter_intervals`,
   applied by `serialize_measurements`), which backfill the `NULL`
   `interval_in`/`interval_out` columns from the totals before returning rows.
   Without this, display clients that chart the interval fields directly (HivePal's

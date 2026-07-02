@@ -9,7 +9,7 @@ running PostgreSQL or any hardware**.
 
 * Single container, no database. Just FastAPI + in-memory data.
 * Mirrors the exact request/response shapes of the real backend
-  (`server/main.py`) and reuses the real `insights.py` **verbatim**, so insights
+  (`server/`) and reuses the real `insights.py` **verbatim**, so insights
   responses are identical to production.
 * Interactive API explorer (Swagger UI) at **`/docs`**.
 
