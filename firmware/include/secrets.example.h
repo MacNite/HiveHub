@@ -167,6 +167,14 @@
 //#define WBEECNT_2_MAC                "AA:BB:CC:DD:EE:00"   // HiveTraffic counter 2
 
 // ==============================
+// Use external Antenna on XIOA ESP32 C6
+// ==============================
+// 0: internal Antenna
+// 1: external Antenna
+
+#define XIAO_C6_USE_EXTERNAL_ANTENNA 0
+
+// ==============================
 // OPTIONAL FLAGS
 // ==============================
 
