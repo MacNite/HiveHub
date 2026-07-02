@@ -31,12 +31,20 @@ def parse_version(v: str) -> tuple:
 
 def latest_release_for_owner(target: str, owner_user_id: Optional[str],
                              board: Optional[str] = None):
-    """Most recent active release for a target, owner-first with global fallback.
+    """Highest-version active release for a target, owner-preferred with global fallback.
 
-    Returns the owner's own release when one exists, otherwise the newest global
-    (owner_user_id IS NULL) "official" release. ``ORDER BY (owner_user_id IS NULL)``
-    sorts owner-specific rows (false) ahead of global rows (true). Returns a
-    (version, filename, crc32, owner_user_id) tuple, or None when nothing matches.
+    Returns the release with the greatest version number available to this owner,
+    preferring the owner's own build over a global ("official") build only as a
+    tie-break at the same version. Returns a (version, filename, crc32,
+    owner_user_id) tuple, or None when nothing matches.
+
+    Version wins over recency on purpose: "latest" must mean the highest version,
+    not the most recently inserted row. Ordering by ``created_at``/``id`` (as this
+    did previously) let a lower version shadow a higher one — e.g. an owner-scoped
+    0.22.7 outranking a newer global 0.22.8, or a re-uploaded older build jumping
+    ahead — so the panel showed a stale "latest". Versions are compared with
+    ``parse_version`` here rather than in SQL because the column is free-form text
+    and lexical ordering mis-sorts (e.g. "0.22.10" < "0.22.9").
 
     When ``board`` is given (the dual-board ``hivescale`` target), only releases
     built for that exact board match — a 30-pin ESP32 (Xtensa) is never offered an
@@ -44,7 +52,7 @@ def latest_release_for_owner(target: str, owner_user_id: Optional[str],
     sub-device targets) applies no board filter.
     """
     sql = (
-        "SELECT version, filename, crc32, owner_user_id "
+        "SELECT version, filename, crc32, owner_user_id, id "
         "FROM firmware_releases "
         "WHERE active = true AND target = %s "
         "  AND (owner_user_id = %s OR owner_user_id IS NULL) "
@@ -53,11 +61,18 @@ def latest_release_for_owner(target: str, owner_user_id: Optional[str],
     if board is not None:
         sql += "  AND board = %s "
         params.append(board)
-    sql += "ORDER BY (owner_user_id IS NULL), created_at DESC, id DESC LIMIT 1;"
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, tuple(params))
-            return cur.fetchone()
+            rows = cur.fetchall()
+    if not rows:
+        return None
+    # Highest version wins; at an equal version prefer the owner's own release
+    # over the global one, with id as a final deterministic tiebreak. The unique
+    # index on (owner, target, board, version) means genuine ties only span the
+    # owner/global pair (or, when board is None, the two boards of one version).
+    best = max(rows, key=lambda r: (parse_version(r[0]), r[3] is not None, r[4]))
+    return best[:4]
 
 
 def other_board_releases(target: str, owner_user_id: Optional[str],
