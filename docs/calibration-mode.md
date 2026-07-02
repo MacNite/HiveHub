@@ -120,7 +120,7 @@ If the stop command never arrives, `calibrationModeExpired()` returns `true` in 
 
 ---
 
-## Backend API (`main.py`)
+## Backend API (`server/`)
 
 ### Data model
 
