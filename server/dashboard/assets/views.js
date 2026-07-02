@@ -747,7 +747,7 @@ function renderDevice(root, state) {
     el("div", { class: "form-row" }, el("label", {}, "Target"), targetSelect),
     boardRow,
     boardNote,
-    el("p", { class: "note" }, "Uploading registers a new firmware release for this target. To install it, approve the update in the Firmware panel above — the device flashes on its next check-in."),
+    el("p", { class: "note" }, "Uploading registers a new firmware release for this target. To install it, use the “Approve & flash” button in the Firmware panel — it appears there once the upload is a newer version than the device currently runs, and the device flashes on its next check-in."),
     el("div", { class: "form-actions" }, uploadBtn));
   syncBoardRow();
   uploadForm.addEventListener("submit", async (e) => {
