@@ -33,7 +33,10 @@ function updateReadout(c) {
 
 // Turn a pointer event's x position into a timestamp using the chart's last
 // drawn pixel<->time mapping (stashed on the canvas by drawLineChart), then
-// redraw every chart so the whole view's readout stays in sync.
+// redraw every chart so the whole view's readout stays in sync. Redraws are
+// coalesced to one per animation frame — pointermove can fire far faster than
+// the display refreshes, and each redraw repaints every chart on the view.
+let cursorRaf = 0;
 function setCursorFromEvent(canvas, e) {
   const scale = canvas._xScale;
   if (!scale) return;
@@ -41,7 +44,9 @@ function setCursorFromEvent(canvas, e) {
   const x = e.clientX - rect.left;
   const frac = Math.min(1, Math.max(0, (x - scale.padL) / scale.plotW));
   cursorT = scale.tMin + frac * (scale.tMax - scale.tMin);
-  drawCharts();
+  if (!cursorRaf) {
+    cursorRaf = requestAnimationFrame(() => { cursorRaf = 0; drawCharts(); });
+  }
 }
 
 // Mouse hover scrubs live and clears on leave; touch drags (pointermove only
@@ -101,16 +106,21 @@ function metricCard(label, value, unit, sub) {
 // stacks a compact, smaller-font row per hive — each tagged with the hive name —
 // so every selected hive is visible instead of just the first. `cellFn(n)`
 // returns the formatted value string for hive n; `footer` is an optional note
-// shown under the list (e.g. the shared ambient reading).
-function perHiveCard(state, label, hives, unit, cellFn, footer) {
+// shown under the list (e.g. the shared ambient reading); `subFn(n)`, when
+// given, returns a small per-row annotation (e.g. the hive's 24h delta) or
+// null to omit it for that row.
+function perHiveCard(state, label, hives, unit, cellFn, footer, subFn) {
   if (hives.length <= 1) {
     return metricCard(label, hives.length ? cellFn(hives[0]) : DASH, unit, footer);
   }
-  const rows = hives.map((n) =>
-    el("div", { class: "hive-row" },
+  const rows = hives.map((n) => {
+    const sub = subFn ? subFn(n) : null;
+    return el("div", { class: "hive-row" },
       el("span", { class: "hive-row-name" }, hiveLabel(state, n)),
       el("span", { class: "hive-row-val" },
-        cellFn(n), unit ? el("span", { class: "hive-row-unit" }, " " + unit) : null)));
+        cellFn(n), unit ? el("span", { class: "hive-row-unit" }, " " + unit) : null,
+        sub ? el("span", { class: "hive-row-delta" }, sub) : null));
+  });
   return el("div", { class: "card" },
     el("div", { class: "metric" },
       el("span", { class: "label" }, label),
@@ -137,8 +147,9 @@ function paletteColor(i) {
 
 // Hive indices a device exposes. A single ESP32 now carries up to 18 hives, so
 // the set is derived live from the latest reading's hives[] array, any custom
-// channel names, and the legacy flat scale_N keys. Falls back to the classic
-// two-hive shape only when nothing else is known.
+// channel names, and the legacy flat scale_N keys. Returns [] for a device that
+// has never reported a hive (new/silent device) so views can say "no hives
+// reported yet" instead of showing phantom default hives.
 export function availableHives(state) {
   const set = new Set();
   for (const h of state.latest?.hives || []) {
@@ -152,7 +163,6 @@ export function availableHives(state) {
       if (mm && state.latest[key] != null) set.add(Number(mm[1]));
     }
   }
-  if (!set.size) { set.add(1); set.add(2); }
   return [...set].filter((n) => n >= 1).sort((a, b) => a - b);
 }
 
@@ -227,7 +237,13 @@ function renderOverview(root, state) {
     const v = m[weightKey(m, n)];
     if (isNum(v)) { totalWeight += v; anyWeight = true; }
   }
-  const w24 = changeOver(state.measurements, weightKey(m, hives[0]), 24);
+  const w24 = hives.length ? changeOver(state.measurements, weightKey(m, hives[0]), 24) : null;
+  // per-hive 24h weight deltas; total delta only when every hive has one, so a
+  // hive with a data gap can't silently skew the apiary-wide number
+  const deltas = new Map(hives.map((n) => [n, changeOver(state.measurements, weightKey(m, n), 24)]));
+  const total24 = hives.length && hives.every((n) => deltas.get(n) != null)
+    ? hives.reduce((sum, n) => sum + deltas.get(n), 0)
+    : null;
 
   const ins = state.insights;
   const sev = ins?.highest_severity;
@@ -238,9 +254,14 @@ function renderOverview(root, state) {
     hives.length > 1
       ? perHiveCard(state, "Weight", hives, "kg",
           (n) => fmt(m[weightKey(m, n)], 2),
-          anyWeight ? `Total ${fmt(totalWeight, 2)} kg` : "Total of active scales")
+          anyWeight
+            ? `Total ${fmt(totalWeight, 2)} kg${total24 != null ? ` · 24h ${signed(total24, 2, "kg")}` : ""}`
+            : "Total of active scales",
+          (n) => (deltas.get(n) != null ? signed(deltas.get(n), 2) : null))
       : metricCard("Weight", anyWeight ? fmt(totalWeight, 2) : DASH, "kg",
-          w24 != null ? `24h ${signed(w24, 2, "kg")}` : "Total of active scales"),
+          hives.length === 0
+            ? "No hives reported yet"
+            : w24 != null ? `24h ${signed(w24, 2, "kg")}` : "Total of active scales"),
     perHiveCard(state, "Hive temperature", hives, "°C",
       (n) => fmt(m[`hive_${n}_temp_c`], 1),
       isNum(m.ambient_temp_c) ? `Ambient ${fmt(m.ambient_temp_c, 1)} °C` : "Brood zone"),
@@ -636,11 +657,14 @@ function renderDevice(root, state) {
     };
   });
   const chBtn = el("button", { class: "btn", type: "submit" }, "Save names");
-  const chForm = el("form", {},
-    ...chInputs.map(({ n, input }) =>
-      el("div", { class: "form-row" }, el("label", {}, `Hive ${n} name`), input)),
-    el("p", { class: "note" }, "Shown as the hive labels across every chart and card."),
-    el("div", { class: "form-actions" }, chBtn));
+  const chForm = chInputs.length
+    ? el("form", {},
+        ...chInputs.map(({ n, input }) =>
+          el("div", { class: "form-row" }, el("label", {}, `Hive ${n} name`), input)),
+        el("p", { class: "note" }, "Shown as the hive labels across every chart and card."),
+        el("div", { class: "form-actions" }, chBtn))
+    : el("p", { class: "muted-text" },
+        "No hives reported yet — names can be set once the device sends its first reading.");
   chForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const names = {};
@@ -668,6 +692,11 @@ function renderDevice(root, state) {
   if (fw.update_available && fw.pending_approval) {
     const approveBtn = el("button", { class: "btn", type: "button" }, "Approve & flash latest");
     approveBtn.addEventListener("click", async () => {
+      const version = fw.latest_version ? ` ${fw.latest_version}` : "";
+      if (!window.confirm(
+        `Approve firmware${version} and flash it over the air?\n\n` +
+        "The device installs it on its next check-in and reboots. " +
+        "A remote device that fails mid-update may need physical access to recover.")) return;
       approveBtn.disabled = true;
       try { await state.actions.approveFirmware(); state.toast("Firmware approved — device will update on next check-in", "success"); state.reload(); }
       catch (e) { state.toast(e.message, "error"); approveBtn.disabled = false; }
@@ -675,23 +704,40 @@ function renderDevice(root, state) {
     fwPanel.append(el("div", { class: "form-actions" }, approveBtn));
   }
 
-  // Firmware upload form
+  // Firmware upload form. The main-unit ("hivescale") target ships for two
+  // boards, and the server refuses a release whose board it cannot determine
+  // from this field or a board-stamped filename — so the board is a select of
+  // the valid values, shown only for that target.
   const fileInput = el("input", { type: "file", accept: ".bin", required: true });
   const versionInput = el("input", { type: "text", placeholder: "e.g. 0.21.0", required: true });
   const targetSelect = el("select", { class: "full" },
-    el("option", { value: "hivescale" }, "HiveScale (hivehub)"),
+    el("option", { value: "hivescale" }, "Main unit (HiveHub / HiveScale)"),
     el("option", { value: "hiveinside" }, "HiveInside"),
     el("option", { value: "beecounter" }, "BeeCounter"));
-  const boardInput = el("input", { type: "text", placeholder: "optional (e.g. esp32, esp32c6)" });
+  const boardSelect = el("select", { class: "full" },
+    el("option", { value: "" }, "Detect from filename (…_esp32_… / …_esp32-c6_…)"),
+    el("option", { value: "esp32" }, "ESP32 (classic 30-pin)"),
+    el("option", { value: "esp32-c6" }, "ESP32-C6"));
+  const boardRow = el("div", { class: "form-row" }, el("label", {}, "Board"), boardSelect);
+  const boardNote = el("p", { class: "note" },
+    "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.");
+  const syncBoardRow = () => {
+    const isHivescale = targetSelect.value === "hivescale";
+    boardRow.hidden = !isHivescale;
+    boardNote.hidden = !isHivescale;
+  };
+  targetSelect.addEventListener("change", syncBoardRow);
   const uploadBtn = el("button", { class: "btn", type: "submit" }, "Upload firmware");
 
   const uploadForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Firmware .bin"), fileInput),
     el("div", { class: "form-row" }, el("label", {}, "Version"), versionInput),
     el("div", { class: "form-row" }, el("label", {}, "Target"), targetSelect),
-    el("div", { class: "form-row" }, el("label", {}, "Board"), boardInput),
+    boardRow,
+    boardNote,
     el("p", { class: "note" }, "Uploading registers a new firmware release for this target. To install it, approve the update in the Firmware panel above — the device flashes on its next check-in."),
     el("div", { class: "form-actions" }, uploadBtn));
+  syncBoardRow();
   uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!fileInput.files[0]) return;
@@ -699,7 +745,7 @@ function renderDevice(root, state) {
     fd.append("file", fileInput.files[0]);
     fd.append("version", versionInput.value.trim());
     fd.append("target", targetSelect.value);
-    if (boardInput.value.trim()) fd.append("board", boardInput.value.trim());
+    if (targetSelect.value === "hivescale" && boardSelect.value) fd.append("board", boardSelect.value);
     uploadBtn.disabled = true;
     try { await state.actions.uploadFirmware(fd); state.toast("Firmware uploaded", "success"); state.reload(); }
     catch (err) { state.toast(err.message, "error"); }
@@ -713,11 +759,16 @@ function renderDevice(root, state) {
   const startBtn = el("button", { class: "btn", type: "button" }, "Start calibration mode");
   const stopBtn = el("button", { class: "btn ghost", type: "button" }, "Stop calibration mode");
   startBtn.addEventListener("click", async () => {
+    if (!window.confirm(
+      "Start calibration mode?\n\n" +
+      "The device switches to frequent load-cell sampling and stays in this mode " +
+      "until you stop it — normal readings are affected while it is active.")) return;
     startBtn.disabled = true;
     try { await state.actions.startCalibration({}); state.toast("Calibration mode requested", "success"); }
     catch (e) { state.toast(e.message, "error"); } finally { startBtn.disabled = false; }
   });
   stopBtn.addEventListener("click", async () => {
+    if (!window.confirm("Stop calibration mode and return the device to normal measuring?")) return;
     stopBtn.disabled = true;
     try { await state.actions.stopCalibration(); state.toast("Stop calibration requested", "success"); }
     catch (e) { state.toast(e.message, "error"); } finally { stopBtn.disabled = false; }
@@ -838,6 +889,7 @@ function usersCard(state) {
         const del = el("button", { class: "btn small ghost", type: "button" }, "Remove");
         del.addEventListener("click", async () => {
           if (usr.username === state.authUser?.username) { state.toast("You cannot remove your own account", "error"); return; }
+          if (!window.confirm(`Remove the account "${usr.username}" (${usr.role})?\n\nThis cannot be undone; they are signed out and lose dashboard access.`)) return;
           del.disabled = true;
           try { await state.actions.deleteUser(usr.id); state.toast("User removed", "success"); refresh(); }
           catch (err) { state.toast(err.message, "error"); del.disabled = false; }

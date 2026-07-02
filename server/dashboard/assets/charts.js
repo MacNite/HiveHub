@@ -40,8 +40,13 @@ export function drawLineChart(canvas, series, opts = {}) {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 600;
   const cssH = canvas.clientHeight || 300;
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(cssH * dpr);
+  // Only touch the bitmap size when it actually changed: assigning
+  // canvas.width/height reallocates the backing store, which is the expensive
+  // part of a redraw and pointless during cursor-scrub repaints.
+  const bmpW = Math.round(cssW * dpr);
+  const bmpH = Math.round(cssH * dpr);
+  if (canvas.width !== bmpW) canvas.width = bmpW;
+  if (canvas.height !== bmpH) canvas.height = bmpH;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 

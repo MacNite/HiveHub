@@ -54,11 +54,11 @@
       <div class="field" id="range-field">
         <span class="field-label">Range</span>
         <div class="range-group" id="range-group" role="group" aria-label="Time range">
-          <button data-range="1d" type="button">Day</button>
-          <button data-range="7d" type="button" class="active">7 days</button>
-          <button data-range="30d" type="button">Month</button>
-          <button data-range="365d" type="button">Year</button>
-          <button data-range="1825d" type="button">5 years</button>
+          <button data-range="1d" type="button" aria-pressed="false">Day</button>
+          <button data-range="7d" type="button" class="active" aria-pressed="true">7 days</button>
+          <button data-range="30d" type="button" aria-pressed="false">Month</button>
+          <button data-range="365d" type="button" aria-pressed="false">Year</button>
+          <button data-range="1825d" type="button" aria-pressed="false">5 years</button>
         </div>
       </div>
 
@@ -73,7 +73,7 @@
     </main>
   </div>
 
-  <div id="device-status" class="device-status" hidden></div>
+  <div id="device-status" class="device-status" role="status" aria-live="polite" hidden></div>
 
   <script type="module" src="assets/app.js"></script>
 </body>
