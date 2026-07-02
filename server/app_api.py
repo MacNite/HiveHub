@@ -21,6 +21,7 @@ from firmware import (
     get_approved_firmware_version,
     get_device_board,
     latest_release_for_owner,
+    other_board_releases,
     parse_version,
     set_approved_firmware_version,
     store_firmware_upload,
@@ -383,7 +384,8 @@ def firmware_status_from_app(device_id: str, user_id: str = Depends(require_user
     # Resolve the latest release for this device's reported board so a C6 device is
     # never shown an esp32-only build as "available" (and vice versa). Falls back to
     # board-agnostic when the device has not yet checked in with the board param.
-    release = latest_release_for_owner("hivescale", owner_id, get_device_board(device_id))
+    device_board = get_device_board(device_id)
+    release = latest_release_for_owner("hivescale", owner_id, device_board)
     latest_version = release[0] if release else None
     latest_is_official = bool(release) and release[3] is None
     approved_version = get_approved_firmware_version(device_id)
@@ -402,6 +404,13 @@ def firmware_status_from_app(device_id: str, user_id: str = Depends(require_user
         "approved_version": approved_version,
         "update_available": update_available,
         "pending_approval": update_available and approved_version != latest_version,
+        # The board this device reports, plus any newer releases uploaded for a
+        # DIFFERENT board — so a wrong-board upload is explained rather than
+        # silently filtered out of "latest".
+        "device_board": device_board,
+        "other_board_releases": other_board_releases(
+            "hivescale", owner_id, device_board, current_version
+        ),
     }
 
 
