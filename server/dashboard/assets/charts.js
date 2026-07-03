@@ -23,6 +23,7 @@ export function withAlpha(hex, alpha) {
 const AXIS = "#8a9088";
 const GRID = "rgba(31,36,33,0.08)";
 const FONT = "11px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+const LATEST_COLOR = "#111"; // spectrum chart: latest snapshot, drawn in black regardless of hive colour
 
 function niceTicks(min, max, count = 5) {
   if (min === max) { min -= 1; max += 1; }
@@ -159,10 +160,10 @@ export function drawLineChart(canvas, series, opts = {}) {
 
 // FFT-style spectrum chart: x-axis is a fixed set of categories (e.g. frequency
 // bands), y-axis is value (dB). Each snapshot is one measurement's reading
-// across every category, drawn as its own line; snapshots are coloured with
-// the same base hue but faded by age (oldest = faint/thin, newest = solid/
-// bold) so a whole time range overlays like a waterfall without needing an
-// entry per line in the legend.
+// across every category, drawn as its own line. Older snapshots share the
+// base hue but fade with age (oldest = faint/thin); the latest snapshot is
+// drawn separately in solid black so the current spectrum is unmistakable at
+// a glance, regardless of hive colour.
 //
 // drawSpectrumChart(canvas, categories, snapshots, opts)
 //   categories: [label, ...]
@@ -240,14 +241,17 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
     ctx.fillText(categories[i], x, cssH - padB / 2);
   }
 
-  // Snapshot lines, oldest→newest, faded by age so recency reads at a glance.
+  // Older snapshot lines, oldest→newest, faded by age so recency reads at a
+  // glance. The latest snapshot is excluded here and drawn separately below in
+  // solid black so the current spectrum is unmistakable regardless of hue.
   const base = opts.color || "#f2a900";
-  const count = snapshots.length;
+  const older = snapshots.slice(0, -1);
+  const count = older.length;
   ctx.lineJoin = "round";
-  snapshots.forEach((s, idx) => {
-    const age = count <= 1 ? 1 : idx / (count - 1); // 0 = oldest, 1 = newest
-    ctx.strokeStyle = withAlpha(base, 0.15 + age * 0.75);
-    ctx.lineWidth = 1.2 + age * 1.6;
+  older.forEach((s, idx) => {
+    const age = count <= 1 ? 1 : idx / (count - 1); // 0 = oldest, 1 = most recent of the older ones
+    ctx.strokeStyle = withAlpha(base, 0.15 + age * 0.6);
+    ctx.lineWidth = 1.2 + age * 1.2;
     ctx.beginPath();
     let started = false;
     s.values.forEach((v, i) => {
@@ -258,10 +262,20 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
     if (started) ctx.stroke();
   });
 
-  // Marker dots on the newest snapshot so the current spectrum stands out.
+  // Latest snapshot: solid black line + dots, drawn last so it's on top.
   const latest = snapshots[snapshots.length - 1];
   if (latest) {
-    ctx.fillStyle = base;
+    ctx.strokeStyle = LATEST_COLOR;
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    let started = false;
+    latest.values.forEach((v, i) => {
+      if (typeof v !== "number" || !Number.isFinite(v)) return;
+      const x = xOf(i), y = yOf(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    });
+    if (started) ctx.stroke();
+    ctx.fillStyle = LATEST_COLOR;
     latest.values.forEach((v, i) => {
       if (typeof v !== "number" || !Number.isFinite(v)) return;
       ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2); ctx.fill();
