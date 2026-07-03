@@ -14,6 +14,12 @@
 
 export const PALETTE = ["#f2a900", "#2563a8", "#2e7d32", "#b00020", "#7b3fb0", "#0f8a8a"];
 
+// "#rrggbb" -> "rgba(r,g,b,alpha)", for fading a series colour by age.
+function withAlpha(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 const AXIS = "#8a9088";
 const GRID = "rgba(31,36,33,0.08)";
 const FONT = "11px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
@@ -112,12 +118,21 @@ export function drawLineChart(canvas, series, opts = {}) {
     ctx.fillText(new Date(t).toLocaleString(undefined, dtOpts), x, cssH - padB / 2);
   }
 
-  // Series lines
+  // Series lines. With opts.fadeAge, each line is stroked with a left-to-right
+  // gradient (faint at the oldest point, full colour at the newest) so a wide
+  // time range reads at a glance without needing a separate age legend.
   ctx.lineWidth = 1.8;
   ctx.lineJoin = "round";
   for (const s of series) {
     if (!s.points.length) continue;
-    ctx.strokeStyle = s.color;
+    if (opts.fadeAge) {
+      const grad = ctx.createLinearGradient(xOf(tMin), 0, xOf(tMax), 0);
+      grad.addColorStop(0, withAlpha(s.color, 0.22));
+      grad.addColorStop(1, withAlpha(s.color, 1));
+      ctx.strokeStyle = grad;
+    } else {
+      ctx.strokeStyle = s.color;
+    }
     ctx.beginPath();
     s.points.forEach((p, i) => {
       const x = xOf(p.t), y = yOf(p.y);
