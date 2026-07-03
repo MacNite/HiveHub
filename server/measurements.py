@@ -382,25 +382,45 @@ def insert_hive_readings(cur, payload: "MeasurementIn",
         cur.executemany(HIVE_READINGS_INSERT_SQL, rows)
 
 
+def resolve_measured_at(
+    client_ts: "datetime | None",
+    device_id: str,
+    now: "datetime | None" = None,
+) -> datetime:
+    """Return a trustworthy ``measured_at``, falling back to the server clock.
+
+    A device whose RTC and NTP have both failed sends no timestamp, or the 1970
+    epoch fallback, or (more generally) a clock far from reality. Storing that
+    verbatim freezes "last data" in the dashboard even though uploads keep
+    arriving, and on the SD-import path it collapses every untimed row onto a
+    single ``(device_id, measured_at)`` natural key. For any missing or
+    implausible timestamp we substitute the server clock at ingest.
+
+    Both ingest paths — live POST and bulk SD import — must resolve timestamps
+    through this one helper so they can never drift apart. Because there is no
+    RTC/NTP anchor for such a reading, the resulting ``measured_at`` is the
+    server's receive time; it is the best estimate available, not the true
+    moment of measurement.
+    """
+    now = now or datetime.now(timezone.utc)
+    if client_ts is not None and (
+        client_ts.year >= MIN_PLAUSIBLE_YEAR and client_ts <= now + timedelta(days=1)
+    ):
+        return client_ts
+    if client_ts is not None:
+        logger.warning(
+            "Ignoring implausible client timestamp %s from device %s; using server time",
+            client_ts.isoformat(), device_id,
+        )
+    return now
+
+
 @router.post("/api/v1/measurements")
 def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="")):
     if len(x_api_key) < 16:
         raise HTTPException(status_code=401, detail="Invalid API key")
     now = datetime.now(timezone.utc)
-    # A device whose RTC and NTP have both failed sends the 1970 epoch fallback
-    # (or, more generally, a clock far from reality). Storing that verbatim
-    # freezes "last data" in the dashboard even though uploads keep arriving, so
-    # we fall back to the server clock for any missing or implausible timestamp.
-    measured_at = payload.timestamp
-    if measured_at is None or not (
-        measured_at.year >= MIN_PLAUSIBLE_YEAR and measured_at <= now + timedelta(days=1)
-    ):
-        if measured_at is not None:
-            logger.warning(
-                "Ignoring implausible client timestamp %s from device %s; using server time",
-                measured_at.isoformat(), payload.device_id,
-            )
-        measured_at = now
+    measured_at = resolve_measured_at(payload.timestamp, payload.device_id, now)
     ensure_device_config(
         payload.device_id, payload.claim_code, payload.firmware_version, x_api_key,
         touch_last_seen=True,
@@ -457,7 +477,11 @@ def import_measurements(
     # in under a different device the caller may not own.
     prepared: list[tuple[datetime, MeasurementIn]] = []
     for measurement in payload.measurements:
-        measured_at = measurement.timestamp or datetime.now(timezone.utc)
+        # Clamp missing *and* implausible timestamps (e.g. the 1970 epoch a
+        # no-RTC device writes into its SD cache) to the server clock, matching
+        # the live-ingest path. Storing 1970 verbatim would otherwise both
+        # mis-date the reading and collapse every untimed row onto one key.
+        measured_at = resolve_measured_at(measurement.timestamp, device_id)
         prepared.append(
             (measured_at, measurement.model_copy(update={"device_id": device_id}))
         )

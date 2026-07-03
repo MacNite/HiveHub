@@ -64,46 +64,49 @@ String timestampNow() {
 }
 
 void syncTime() {
-  if (!connectWifi()) {
-    Serial.println("[TIME] Cannot sync time: WiFi unavailable");
-    return;
-  }
+  if (connectWifi()) {
+    Serial.println("[TIME] Syncing with NTP...");
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
 
-  Serial.println("[TIME] Syncing with NTP...");
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
+    struct tm tmNow;
+    for (int i = 0; i < 20; i++) {
+      if (getLocalTime(&tmNow, 500)) {
+        time_t nowUnix = mktime(&tmNow);
 
-  struct tm tmNow;
-  for (int i = 0; i < 20; i++) {
-    if (getLocalTime(&tmNow, 500)) {
-      time_t nowUnix = mktime(&tmNow);
+        if (nowUnix > 1700000000) {
+          Serial.println("[TIME] NTP sync OK");
+          timeSource = "ntp";
 
-      if (nowUnix > 1700000000) {
-        Serial.println("[TIME] NTP sync OK");
-        timeSource = "ntp";
+          if (rtcOk) {
+            struct tm* utc = gmtime(&nowUnix);
+            rtc.adjust(DateTime(utc->tm_year + 1900, utc->tm_mon + 1, utc->tm_mday, utc->tm_hour, utc->tm_min, utc->tm_sec));
+            Serial.println("[TIME] RTC updated from NTP");
+          }
 
-        if (rtcOk) {
-          struct tm* utc = gmtime(&nowUnix);
-          rtc.adjust(DateTime(utc->tm_year + 1900, utc->tm_mon + 1, utc->tm_mday, utc->tm_hour, utc->tm_min, utc->tm_sec));
-          Serial.println("[TIME] RTC updated from NTP");
+          Serial.print("[TIME] Current timestamp: ");
+          Serial.println(timestampNow());
+          return;
         }
-
-        Serial.print("[TIME] Current timestamp: ");
-        Serial.println(timestampNow());
-        return;
       }
+      delay(500);
     }
-    delay(500);
+
+    Serial.println("[TIME] NTP sync FAILED");
+  } else {
+    Serial.println("[TIME] Cannot sync time: WiFi unavailable");
   }
 
-  Serial.println("[TIME] NTP sync FAILED");
-
-  if (rtcOk) {
-    DateTime now = rtc.now();
-    if (now.year() >= 2024 && now.year() <= 2099) {
-      timeSource = "rtc";
-      Serial.println("[TIME] Using RTC");
-      return;
-    }
+  // NTP was unavailable (no WiFi, or the sync attempt failed). Fall back to the
+  // RTC if it holds a plausible time; otherwise we have no trustworthy wall
+  // clock. Both no-WiFi and NTP-failure paths must land here so the outcome is
+  // the same: mark the time invalid instead of leaving a stale "unknown", which
+  // previously caused the offline no-RTC path to emit a bogus 1970 timestamp.
+  // "invalid" makes createMeasurementJson() omit the timestamp entirely and lets
+  // the server stamp the reading with its receive time.
+  if (rtcHasValidTime()) {
+    timeSource = "rtc";
+    Serial.println("[TIME] Using RTC");
+    return;
   }
 
   timeSource = "invalid";
