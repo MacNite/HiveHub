@@ -151,6 +151,7 @@ select {
 .chart-legend .lg { display: inline-flex; align-items: center; gap: .35rem; color: var(--ink-soft); }
 .chart-legend .lg-value { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
 .chart-legend .swatch { width: .8rem; height: .8rem; border-radius: 3px; display: inline-block; }
+.chart-legend .spectrum-gradient { width: 3.5rem; height: .5rem; border-radius: 4px; display: inline-block; }
 .chart-hint { margin-left: auto; font-size: .78rem; color: var(--ink-faint); }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-faint); font-size: .95rem; }
 

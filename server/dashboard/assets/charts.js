@@ -15,7 +15,7 @@
 export const PALETTE = ["#f2a900", "#2563a8", "#2e7d32", "#b00020", "#7b3fb0", "#0f8a8a"];
 
 // "#rrggbb" -> "rgba(r,g,b,alpha)", for fading a series colour by age.
-function withAlpha(hex, alpha) {
+export function withAlpha(hex, alpha) {
   const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
@@ -118,21 +118,12 @@ export function drawLineChart(canvas, series, opts = {}) {
     ctx.fillText(new Date(t).toLocaleString(undefined, dtOpts), x, cssH - padB / 2);
   }
 
-  // Series lines. With opts.fadeAge, each line is stroked with a left-to-right
-  // gradient (faint at the oldest point, full colour at the newest) so a wide
-  // time range reads at a glance without needing a separate age legend.
+  // Series lines
   ctx.lineWidth = 1.8;
   ctx.lineJoin = "round";
   for (const s of series) {
     if (!s.points.length) continue;
-    if (opts.fadeAge) {
-      const grad = ctx.createLinearGradient(xOf(tMin), 0, xOf(tMax), 0);
-      grad.addColorStop(0, withAlpha(s.color, 0.22));
-      grad.addColorStop(1, withAlpha(s.color, 1));
-      ctx.strokeStyle = grad;
-    } else {
-      ctx.strokeStyle = s.color;
-    }
+    ctx.strokeStyle = s.color;
     ctx.beginPath();
     s.points.forEach((p, i) => {
       const x = xOf(p.t), y = yOf(p.y);
@@ -163,6 +154,118 @@ export function drawLineChart(canvas, series, opts = {}) {
       ctx.strokeStyle = "#fff";
       ctx.stroke();
     }
+  }
+}
+
+// FFT-style spectrum chart: x-axis is a fixed set of categories (e.g. frequency
+// bands), y-axis is value (dB). Each snapshot is one measurement's reading
+// across every category, drawn as its own line; snapshots are coloured with
+// the same base hue but faded by age (oldest = faint/thin, newest = solid/
+// bold) so a whole time range overlays like a waterfall without needing an
+// entry per line in the legend.
+//
+// drawSpectrumChart(canvas, categories, snapshots, opts)
+//   categories: [label, ...]
+//   snapshots:  [{ t: epochMillis, values: [number|null, ...] }] oldest→newest,
+//               values aligned 1:1 with categories
+//   opts:       { unit, yDigits, color }
+export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
+  const wrap = canvas.parentElement;
+  let empty = wrap.querySelector(".chart-empty");
+  const hasData = snapshots.some((s) => s.values.some((v) => typeof v === "number" && Number.isFinite(v)));
+
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 600;
+  const cssH = canvas.clientHeight || 300;
+  const bmpW = Math.round(cssW * dpr);
+  const bmpH = Math.round(cssH * dpr);
+  if (canvas.width !== bmpW) canvas.width = bmpW;
+  if (canvas.height !== bmpH) canvas.height = bmpH;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  if (!hasData) {
+    if (!empty) {
+      empty = document.createElement("div");
+      empty.className = "chart-empty";
+      empty.textContent = "No data available";
+      wrap.append(empty);
+    }
+    return;
+  }
+  if (empty) empty.remove();
+
+  const padL = 48, padR = 14, padT = 12, padB = 26;
+  const plotW = cssW - padL - padR;
+  const plotH = cssH - padT - padB;
+  const n = categories.length;
+
+  let yMin = Infinity, yMax = -Infinity;
+  for (const s of snapshots) {
+    for (const v of s.values) {
+      if (typeof v !== "number" || !Number.isFinite(v)) continue;
+      if (v < yMin) yMin = v;
+      if (v > yMax) yMax = v;
+    }
+  }
+  const pad = (yMax - yMin) * 0.12 || 1;
+  yMin -= pad; yMax += pad;
+
+  const xOf = (i) => (n <= 1 ? padL + plotW / 2 : padL + (i / (n - 1)) * plotW);
+  const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
+
+  ctx.font = FONT;
+  ctx.textBaseline = "middle";
+
+  // Y gridlines + labels
+  const yTicks = niceTicks(yMin, yMax, 5);
+  ctx.strokeStyle = GRID;
+  ctx.fillStyle = AXIS;
+  ctx.lineWidth = 1;
+  ctx.textAlign = "right";
+  for (const t of yTicks) {
+    const y = yOf(t);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(cssW - padR, y); ctx.stroke();
+    ctx.fillText(t.toFixed(opts.yDigits ?? 1), padL - 6, y);
+  }
+
+  // X gridlines + category labels (one per band, evenly spaced)
+  ctx.textAlign = "center";
+  for (let i = 0; i < n; i++) {
+    const x = xOf(i);
+    ctx.strokeStyle = GRID;
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, cssH - padB); ctx.stroke();
+    ctx.fillStyle = AXIS;
+    ctx.fillText(categories[i], x, cssH - padB / 2);
+  }
+
+  // Snapshot lines, oldest→newest, faded by age so recency reads at a glance.
+  const base = opts.color || "#f2a900";
+  const count = snapshots.length;
+  ctx.lineJoin = "round";
+  snapshots.forEach((s, idx) => {
+    const age = count <= 1 ? 1 : idx / (count - 1); // 0 = oldest, 1 = newest
+    ctx.strokeStyle = withAlpha(base, 0.15 + age * 0.75);
+    ctx.lineWidth = 1.2 + age * 1.6;
+    ctx.beginPath();
+    let started = false;
+    s.values.forEach((v, i) => {
+      if (typeof v !== "number" || !Number.isFinite(v)) return;
+      const x = xOf(i), y = yOf(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    });
+    if (started) ctx.stroke();
+  });
+
+  // Marker dots on the newest snapshot so the current spectrum stands out.
+  const latest = snapshots[snapshots.length - 1];
+  if (latest) {
+    ctx.fillStyle = base;
+    latest.values.forEach((v, i) => {
+      if (typeof v !== "number" || !Number.isFinite(v)) return;
+      ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2); ctx.fill();
+    });
   }
 }
 

@@ -3,7 +3,7 @@
 // the admin action callbacks (see app.js buildState()).
 
 import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, fmtDateTime, DASH } from "./format.js";
-import { drawLineChart, seriesFrom, dailyMaxSeries, valueAt, PALETTE } from "./charts.js";
+import { drawLineChart, drawSpectrumChart, seriesFrom, dailyMaxSeries, valueAt, PALETTE, withAlpha } from "./charts.js";
 
 // ── chart manager: views register charts; app.js redraws them after mount ────
 let activeCharts = [];
@@ -17,6 +17,10 @@ let cursorT = null;
 export function clearCharts() { activeCharts = []; }
 export function drawCharts() {
   for (const c of activeCharts) {
+    if (c.kind === "spectrum") {
+      drawSpectrumChart(c.canvas, c.categories, c.snapshots, c.opts);
+      continue;
+    }
     drawLineChart(c.canvas, c.series, { ...c.opts, cursorT });
     updateReadout(c);
   }
@@ -89,6 +93,28 @@ function chartCard(title, sub, series, opts = {}) {
     el("h2", {}, title),
     sub ? el("p", { class: "card-sub" }, sub) : null,
     series.length ? legend : null,
+    wrap);
+}
+
+// FFT-style spectrum card: x-axis is a fixed set of categories (bands), y-axis
+// is value; each snapshot (one per sampled measurement) draws its own line,
+// faded by age, so a whole time range overlays like a waterfall. `snapshots`
+// is oldest→newest (see spectrumSnapshots below).
+function spectrumChartCard(title, sub, categories, snapshots, color, opts = {}) {
+  const canvas = el("canvas");
+  const wrap = el("div", { class: "chart-wrap" }, canvas);
+  const oldest = snapshots[0], newest = snapshots[snapshots.length - 1];
+  const legend = el("div", { class: "chart-legend" },
+    el("span", { class: "lg" }, "Older"),
+    el("span", { class: "spectrum-gradient", style: `background:linear-gradient(90deg, ${withAlpha(color, 0.15)}, ${color})` }),
+    el("span", { class: "lg" }, "Newer"),
+    oldest && newest ? el("span", { class: "chart-hint" }, `${fmtDateTime(oldest.t)} – ${fmtDateTime(newest.t)}`) : null);
+  const chart = { canvas, kind: "spectrum", categories, snapshots, opts: { ...opts, color } };
+  activeCharts.push(chart);
+  return el("div", { class: "card chart-card" },
+    el("h2", {}, title),
+    sub ? el("p", { class: "card-sub" }, sub) : null,
+    snapshots.length ? legend : null,
     wrap);
 }
 
@@ -423,18 +449,53 @@ const BANDS = [
   ["stress", "Stress"], ["high", "High"],
 ];
 
+// Max spectrum lines drawn per chart. Measurements can arrive every few
+// seconds, so plotting one line per row over a multi-day range would be an
+// unreadable smear — sample evenly across the range instead, always keeping
+// the newest reading so the current spectrum is exact.
+const SPECTRUM_MAX_SNAPSHOTS = 12;
+
+// Build oldest→newest {t, values} rows (one per sampled measurement, values
+// aligned to `keysList`) from newest-first `measurements`, downsampled to at
+// most SPECTRUM_MAX_SNAPSHOTS evenly spaced rows.
+function spectrumSnapshots(measurements, keysList) {
+  const rows = [];
+  for (let i = measurements.length - 1; i >= 0; i--) {
+    const m = measurements[i];
+    if (m == null) continue;
+    const values = keysList.map((keys) => {
+      for (const k of keys) {
+        if (m[k] == null || m[k] === "") continue;
+        const y = typeof m[k] === "number" ? m[k] : Number(m[k]);
+        return Number.isFinite(y) ? y : null;
+      }
+      return null;
+    });
+    if (!values.some(isNum)) continue;
+    const t = new Date(m.measured_at).getTime();
+    if (Number.isNaN(t)) continue;
+    rows.push({ t, values });
+  }
+  if (rows.length <= SPECTRUM_MAX_SNAPSHOTS) return rows;
+  const step = (rows.length - 1) / (SPECTRUM_MAX_SNAPSHOTS - 1);
+  const out = [];
+  for (let i = 0; i < SPECTRUM_MAX_SNAPSHOTS; i++) out.push(rows[Math.round(i * step)]);
+  return out;
+}
+
 function renderFrequency(root, state) {
   const hives = selectedHives(state);
+  const categories = BANDS.map(([, label]) => label);
   const charts = [];
-  for (const n of hives) {
-    const series = BANDS.map(([k, label], i) =>
-      seriesCoalesce(state.measurements, micKeys(n, `band_${k}_dbfs`), label, paletteColor(i)));
-    if (series.some((s) => s.points.length)) {
-      charts.push(chartCard(`Frequency bands — ${hiveLabel(state, n)}`,
-        "Per-band FFT energy over the selected time range — fainter lines are older readings",
-        series, { unit: "dBFS", yDigits: 0, fadeAge: true }));
+  hives.forEach((n, i) => {
+    const keysList = BANDS.map(([k]) => micKeys(n, `band_${k}_dbfs`));
+    const snapshots = spectrumSnapshots(state.measurements, keysList);
+    if (snapshots.length) {
+      charts.push(spectrumChartCard(`Frequency bands — ${hiveLabel(state, n)}`,
+        "FFT energy by band, like a spectrum analyzer — solid is the latest reading, fainter lines are earlier ones",
+        categories, snapshots, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
     }
-  }
+  });
   if (!charts.length) {
     charts.push(el("div", { class: "card" }, el("p", { class: "muted-text" }, "No frequency-band data reported by this device.")));
   }
