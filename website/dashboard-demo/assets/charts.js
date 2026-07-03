@@ -169,7 +169,14 @@ export function drawLineChart(canvas, series, opts = {}) {
 //   categories: [label, ...]
 //   snapshots:  [{ t: epochMillis, values: [number|null, ...] }] oldest→newest,
 //               values aligned 1:1 with categories
-//   opts:       { unit, yDigits, color }
+//   opts:       { unit, yDigits, color, cursorIndex, bandStats }
+//
+// When opts.cursorIndex (a category index) is set, draws a vertical guide at
+// that band plus a bracket spanning bandStats[cursorIndex].min..max — the
+// full range for that band across the selected time range, not just the
+// downsampled lines actually drawn — and stashes the pixel<->category mapping
+// on canvas._catScale so callers can turn a pointer x back into a category
+// index (see attachSpectrumCursor in views.js).
 export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   const wrap = canvas.parentElement;
   let empty = wrap.querySelector(".chart-empty");
@@ -215,6 +222,7 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
 
   const xOf = (i) => (n <= 1 ? padL + plotW / 2 : padL + (i / (n - 1)) * plotW);
   const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
+  canvas._catScale = { padL, plotW, n };
 
   ctx.font = FONT;
   ctx.textBaseline = "middle";
@@ -280,6 +288,29 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
       if (typeof v !== "number" || !Number.isFinite(v)) return;
       ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2); ctx.fill();
     });
+  }
+
+  // Interactive cursor: dashed vertical guide at the hovered band, plus a
+  // bracket spanning that band's min..max across the full selected time
+  // range so scrubbing reads off the spread even where the drawn lines are
+  // downsampled.
+  if (opts.cursorIndex != null && n) {
+    const idx = Math.min(n - 1, Math.max(0, opts.cursorIndex));
+    const cx = xOf(idx);
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = "rgba(31,36,33,0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, cssH - padB); ctx.stroke();
+    ctx.setLineDash([]);
+    const stats = opts.bandStats && opts.bandStats[idx];
+    if (stats) {
+      const yLo = yOf(stats.min), yHi = yOf(stats.max);
+      ctx.strokeStyle = "rgba(31,36,33,0.5)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx, yLo); ctx.lineTo(cx, yHi); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx - 5, yLo); ctx.lineTo(cx + 5, yLo); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx - 5, yHi); ctx.lineTo(cx + 5, yHi); ctx.stroke();
+    }
   }
 }
 
