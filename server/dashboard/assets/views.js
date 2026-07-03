@@ -3,7 +3,7 @@
 // the admin action callbacks (see app.js buildState()).
 
 import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, fmtDateTime, DASH } from "./format.js";
-import { drawLineChart, seriesFrom, valueAt, PALETTE } from "./charts.js";
+import { drawLineChart, seriesFrom, dailyMaxSeries, valueAt, PALETTE } from "./charts.js";
 
 // ── chart manager: views register charts; app.js redraws them after mount ────
 let activeCharts = [];
@@ -352,9 +352,14 @@ function renderWeight(root, state) {
   });
   const series = hives.map((n, i) =>
     seriesFrom(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i)));
+  const dailyMax = hives.map((n, i) =>
+    dailyMaxSeries(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i)));
 
   root.append(tsView("Weight", "Mass changes and harvest trend", state,
-    { cards, charts: [chartCard("Weight", null, series, { unit: "kg", yDigits: 1 })] }));
+    { cards, charts: [
+      chartCard("Weight", null, series, { unit: "kg", yDigits: 1 }),
+      chartCard("Daily max weight", "Highest reading per day over the selected range", dailyMax, { unit: "kg", yDigits: 1 }),
+    ] }));
 }
 
 function renderEnvironment(root, state) {
