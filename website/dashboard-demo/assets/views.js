@@ -418,28 +418,16 @@ const BANDS = [
   ["stress", "Stress"], ["high", "High"],
 ];
 
-function barChart(title, sub, items) {
-  // items: [{label, value(dBFS, negative)}]; map -90..0 dBFS to 0..1 height.
-  const cols = items.map((it) => {
-    const frac = isNum(it.value) ? Math.max(0, Math.min(1, (it.value + 90) / 90)) : 0;
-    return el("div", { class: "bar-col" },
-      el("span", { class: "bar-val" }, isNum(it.value) ? fmt(it.value, 0) : DASH),
-      el("div", { class: "bar", style: `height:${(frac * 100).toFixed(1)}%` }),
-      el("span", { class: "bar-label" }, it.label));
-  });
-  return el("div", { class: "card chart-card" },
-    el("h2", {}, title), sub ? el("p", { class: "card-sub" }, sub) : null,
-    el("div", { class: "bars" }, ...cols));
-}
-
 function renderFrequency(root, state) {
-  const m = state.latest || {};
   const hives = selectedHives(state);
   const charts = [];
   for (const n of hives) {
-    const items = BANDS.map(([k, label]) => ({ label, value: latestCoalesce([m], micKeys(n, `band_${k}_dbfs`)) }));
-    if (items.some((i) => isNum(i.value))) {
-      charts.push(barChart(`Frequency bands — ${hiveLabel(state, n)}`, "Latest per-band FFT energy (dBFS)", items));
+    const series = BANDS.map(([k, label], i) =>
+      seriesCoalesce(state.measurements, micKeys(n, `band_${k}_dbfs`), label, paletteColor(i)));
+    if (series.some((s) => s.points.length)) {
+      charts.push(chartCard(`Frequency bands — ${hiveLabel(state, n)}`,
+        "Per-band FFT energy over the selected time range — fainter lines are older readings",
+        series, { unit: "dBFS", yDigits: 0, fadeAge: true }));
     }
   }
   if (!charts.length) {

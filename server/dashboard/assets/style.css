@@ -154,13 +154,6 @@ select {
 .chart-hint { margin-left: auto; font-size: .78rem; color: var(--ink-faint); }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-faint); font-size: .95rem; }
 
-/* ── Bars (frequency) ────────────────────────────────────────── */
-.bars { display: flex; align-items: flex-end; gap: .6rem; height: 200px; padding-top: .5rem; }
-.bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: .35rem; height: 100%; justify-content: flex-end; }
-.bar { width: 100%; max-width: 48px; background: linear-gradient(180deg, var(--honey), var(--honey-dark)); border-radius: 6px 6px 0 0; min-height: 2px; }
-.bar-label { font-size: .72rem; color: var(--ink-soft); text-align: center; }
-.bar-val { font-size: .72rem; font-weight: 700; }
-
 /* ── Tables / definition rows ────────────────────────────────── */
 .rows { display: flex; flex-direction: column; }
 .rows .row { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--line); }
