@@ -792,8 +792,8 @@ MEASUREMENT_SELECT_COLUMNS = """
 # bounded to a few hundred rows per chart request rather than the whole range.
 # That makes it affordable to mirror the fallbacks the `latest`/app paths use for
 # the charted fields, so a chart matches its metric card on legacy rows that
-# stored a value only in raw_json (in-hive humidity, pressure, mic level, battery,
-# solar, bee-counter). Weight / hive & ambient temperature / ambient humidity /
+# stored a value only in raw_json (in-hive humidity, pressure, mic level, mic FFT
+# bands, battery, solar, bee-counter). Weight / hive & ambient temperature / ambient humidity /
 # RSSI have no raw_json fallback in MEASUREMENT_SELECT_COLUMNS either, so they stay
 # bare typed columns here — there is nothing extra to coalesce.
 CHART_MEASUREMENT_COLUMNS = """
@@ -811,6 +811,16 @@ CHART_MEASUREMENT_COLUMNS = """
     COALESCE(mic_right_rms_dbfs, NULLIF(raw_json->>'mic_right_rms_dbfs', '')::double precision) AS mic_right_rms_dbfs,
     COALESCE(mic_left_peak_dbfs, NULLIF(raw_json->>'mic_left_peak_dbfs', '')::double precision) AS mic_left_peak_dbfs,
     COALESCE(mic_right_peak_dbfs, NULLIF(raw_json->>'mic_right_peak_dbfs', '')::double precision) AS mic_right_peak_dbfs,
+    COALESCE(mic_left_band_sub_bass_dbfs, NULLIF(raw_json->>'mic_left_band_sub_bass_dbfs', '')::double precision) AS mic_left_band_sub_bass_dbfs,
+    COALESCE(mic_left_band_hum_dbfs, NULLIF(raw_json->>'mic_left_band_hum_dbfs', '')::double precision) AS mic_left_band_hum_dbfs,
+    COALESCE(mic_left_band_piping_dbfs, NULLIF(raw_json->>'mic_left_band_piping_dbfs', '')::double precision) AS mic_left_band_piping_dbfs,
+    COALESCE(mic_left_band_stress_dbfs, NULLIF(raw_json->>'mic_left_band_stress_dbfs', '')::double precision) AS mic_left_band_stress_dbfs,
+    COALESCE(mic_left_band_high_dbfs, NULLIF(raw_json->>'mic_left_band_high_dbfs', '')::double precision) AS mic_left_band_high_dbfs,
+    COALESCE(mic_right_band_sub_bass_dbfs, NULLIF(raw_json->>'mic_right_band_sub_bass_dbfs', '')::double precision) AS mic_right_band_sub_bass_dbfs,
+    COALESCE(mic_right_band_hum_dbfs, NULLIF(raw_json->>'mic_right_band_hum_dbfs', '')::double precision) AS mic_right_band_hum_dbfs,
+    COALESCE(mic_right_band_piping_dbfs, NULLIF(raw_json->>'mic_right_band_piping_dbfs', '')::double precision) AS mic_right_band_piping_dbfs,
+    COALESCE(mic_right_band_stress_dbfs, NULLIF(raw_json->>'mic_right_band_stress_dbfs', '')::double precision) AS mic_right_band_stress_dbfs,
+    COALESCE(mic_right_band_high_dbfs, NULLIF(raw_json->>'mic_right_band_high_dbfs', '')::double precision) AS mic_right_band_high_dbfs,
     COALESCE(battery_soc_percent, NULLIF(raw_json->>'battery_soc_percent', '')::double precision) AS battery_soc_percent,
     COALESCE(battery_voltage, NULLIF(raw_json->>'battery_voltage_v', '')::double precision, NULLIF(raw_json->>'battery_voltage', '')::double precision) AS battery_voltage,
     COALESCE(solar_power_mw, NULLIF(raw_json->>'solar_power_mw', '')::double precision) AS solar_power_mw,

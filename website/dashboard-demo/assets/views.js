@@ -14,11 +14,16 @@ let activeCharts = [];
 // leaves a chart, so a slid position survives a data reload.
 let cursorT = null;
 
+// Selected/hovered category index for spectrum charts (x-axis is a fixed set
+// of bands rather than time), shared the same way cursorT is.
+let cursorBand = null;
+
 export function clearCharts() { activeCharts = []; }
 export function drawCharts() {
   for (const c of activeCharts) {
     if (c.kind === "spectrum") {
-      drawSpectrumChart(c.canvas, c.categories, c.snapshots, c.opts);
+      drawSpectrumChart(c.canvas, c.categories, c.snapshots, { ...c.opts, cursorIndex: cursorBand, bandStats: c.bandStats });
+      updateSpectrumReadout(c);
       continue;
     }
     drawLineChart(c.canvas, c.series, { ...c.opts, cursorT });
@@ -33,6 +38,17 @@ function updateReadout(c) {
     valueEl.textContent = p ? `: ${fmt(p.y, c.opts.yDigits ?? 1, c.opts.unit ? " " + c.opts.unit : "")}` : ": " + DASH;
   }
   if (c.hint) c.hint.textContent = cursorT == null ? "Drag to inspect" : fmtDateTime(cursorT);
+}
+
+function updateSpectrumReadout(c) {
+  if (!c.hint) return;
+  if (cursorBand == null) { c.hint.textContent = "Drag to inspect"; return; }
+  const idx = Math.min(c.categories.length - 1, Math.max(0, cursorBand));
+  const unit = c.opts.unit ? " " + c.opts.unit : "";
+  const digits = c.opts.yDigits ?? 1;
+  const stats = c.bandStats[idx];
+  if (!stats) { c.hint.textContent = `${c.categories[idx]}: ${DASH}`; return; }
+  c.hint.textContent = `${c.categories[idx]}: ${fmt(stats.min, digits)} to ${fmt(stats.max, digits)}${unit}`;
 }
 
 // Turn a pointer event's x position into a timestamp using the chart's last
@@ -53,6 +69,21 @@ function setCursorFromEvent(canvas, e) {
   }
 }
 
+// Same idea as setCursorFromEvent, but for a spectrum chart's categorical
+// x-axis (stashed as canvas._catScale by drawSpectrumChart): map the pointer
+// x to the nearest band index instead of a timestamp.
+function setCursorBandFromEvent(canvas, e) {
+  const scale = canvas._catScale;
+  if (!scale) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const frac = scale.n <= 1 ? 0 : Math.min(1, Math.max(0, (x - scale.padL) / scale.plotW));
+  cursorBand = Math.round(frac * (scale.n - 1));
+  if (!cursorRaf) {
+    cursorRaf = requestAnimationFrame(() => { cursorRaf = 0; drawCharts(); });
+  }
+}
+
 // Mouse hover scrubs live and clears on leave; touch drags (pointermove only
 // fires while the finger is down) and the selection stays pinned after lift so
 // the tapped/slid value remains readable.
@@ -68,6 +99,22 @@ function attachChartCursor(canvas) {
   canvas.addEventListener("pointerleave", (e) => {
     if (e.pointerType !== "mouse") return; // keep the touch-selected point visible
     cursorT = null;
+    drawCharts();
+  });
+}
+
+function attachSpectrumCursor(canvas) {
+  canvas.addEventListener("pointerdown", (e) => {
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
+    setCursorBandFromEvent(canvas, e);
+  });
+  canvas.addEventListener("pointermove", (e) => setCursorBandFromEvent(canvas, e));
+  canvas.addEventListener("pointerup", (e) => {
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
+  });
+  canvas.addEventListener("pointerleave", (e) => {
+    if (e.pointerType !== "mouse") return;
+    cursorBand = null;
     drawCharts();
   });
 }
@@ -99,22 +146,27 @@ function chartCard(title, sub, series, opts = {}) {
 // FFT-style spectrum card: x-axis is a fixed set of categories (bands), y-axis
 // is value; each snapshot (one per sampled measurement) draws its own line,
 // faded by age, so a whole time range overlays like a waterfall. `snapshots`
-// is oldest→newest (see spectrumSnapshots below).
-function spectrumChartCard(title, sub, categories, snapshots, color, opts = {}) {
+// is oldest→newest and `bandStats` is a {min,max} per category across the full
+// selected time range (not just the downsampled snapshots), used for the
+// hover cursor's range readout (see spectrumSnapshots/bandMinMax below).
+function spectrumChartCard(title, sub, categories, snapshots, bandStats, color, opts = {}) {
   const canvas = el("canvas");
   const wrap = el("div", { class: "chart-wrap" }, canvas);
   const oldest = snapshots[0], newest = snapshots[snapshots.length - 1];
+  const hint = el("span", { class: "chart-hint" }, "Drag to inspect");
   const legend = el("div", { class: "chart-legend" },
     el("span", { class: "lg" }, "Older"),
     el("span", { class: "spectrum-gradient", style: `background:linear-gradient(90deg, ${withAlpha(color, 0.15)}, ${color})` }),
     el("span", { class: "lg" },
       el("span", { class: "swatch", style: "background:#111" }), "Latest"),
-    oldest && newest ? el("span", { class: "chart-hint" }, `${fmtDateTime(oldest.t)} – ${fmtDateTime(newest.t)}`) : null);
-  const chart = { canvas, kind: "spectrum", categories, snapshots, opts: { ...opts, color } };
+    hint);
+  const rangeNote = oldest && newest ? ` (${fmtDateTime(oldest.t)} – ${fmtDateTime(newest.t)})` : "";
+  const chart = { canvas, kind: "spectrum", categories, snapshots, bandStats, opts: { ...opts, color }, hint };
   activeCharts.push(chart);
+  if (snapshots.length) attachSpectrumCursor(canvas);
   return el("div", { class: "card chart-card" },
     el("h2", {}, title),
-    sub ? el("p", { class: "card-sub" }, sub) : null,
+    sub ? el("p", { class: "card-sub" }, sub + rangeNote) : null,
     snapshots.length ? legend : null,
     wrap);
 }
@@ -451,6 +503,18 @@ const BANDS = [
 // the newest reading so the current spectrum is exact.
 const SPECTRUM_MAX_SNAPSHOTS = 12;
 
+// First non-null, numeric-coercible value of `keys` on row `m` (candidate
+// keys are tried in priority order, e.g. a per-hive key before its legacy
+// left/right alias — see micKeys).
+function coalesceNumeric(m, keys) {
+  for (const k of keys) {
+    if (m[k] == null || m[k] === "") continue;
+    const y = typeof m[k] === "number" ? m[k] : Number(m[k]);
+    return Number.isFinite(y) ? y : null;
+  }
+  return null;
+}
+
 // Build oldest→newest {t, values} rows (one per sampled measurement, values
 // aligned to `keysList`) from newest-first `measurements`, downsampled to at
 // most SPECTRUM_MAX_SNAPSHOTS evenly spaced rows.
@@ -459,14 +523,7 @@ function spectrumSnapshots(measurements, keysList) {
   for (let i = measurements.length - 1; i >= 0; i--) {
     const m = measurements[i];
     if (m == null) continue;
-    const values = keysList.map((keys) => {
-      for (const k of keys) {
-        if (m[k] == null || m[k] === "") continue;
-        const y = typeof m[k] === "number" ? m[k] : Number(m[k]);
-        return Number.isFinite(y) ? y : null;
-      }
-      return null;
-    });
+    const values = keysList.map((keys) => coalesceNumeric(m, keys));
     if (!values.some(isNum)) continue;
     const t = new Date(m.measured_at).getTime();
     if (Number.isNaN(t)) continue;
@@ -479,6 +536,23 @@ function spectrumSnapshots(measurements, keysList) {
   return out;
 }
 
+// Per-category {min, max} across every measurement in the selected time
+// range (not just the downsampled snapshots actually drawn), so the hover
+// cursor's range readout reflects the true spread even on a wide range.
+function bandMinMax(measurements, keysList) {
+  return keysList.map((keys) => {
+    let min = Infinity, max = -Infinity;
+    for (const m of measurements) {
+      if (m == null) continue;
+      const y = coalesceNumeric(m, keys);
+      if (y == null) continue;
+      if (y < min) min = y;
+      if (y > max) max = y;
+    }
+    return min === Infinity ? null : { min, max };
+  });
+}
+
 function renderFrequency(root, state) {
   const hives = selectedHives(state);
   const categories = BANDS.map(([, label]) => label);
@@ -487,9 +561,10 @@ function renderFrequency(root, state) {
     const keysList = BANDS.map(([k]) => micKeys(n, `band_${k}_dbfs`));
     const snapshots = spectrumSnapshots(state.measurements, keysList);
     if (snapshots.length) {
+      const bandStats = bandMinMax(state.measurements, keysList);
       charts.push(spectrumChartCard(`Frequency bands — ${hiveLabel(state, n)}`,
         "FFT energy by band, like a spectrum analyzer — black is the latest reading, fainter lines are earlier ones",
-        categories, snapshots, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
+        categories, snapshots, bandStats, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
     }
   });
   if (!charts.length) {
