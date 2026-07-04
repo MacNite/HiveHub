@@ -1,5 +1,7 @@
-// hive_config.cpp — load/save the dynamic hive registry to NVS, with one-time
-// migration from the legacy two-slot keys.
+// hive_config.cpp — load/save the dynamic hive registry to NVS. Before any
+// portal-saved registry exists, seeds it either from secrets.h HIVE_i_JSON
+// macros (seedHivesFromSecrets, any hive count up to MAX_HIVES) or, absent
+// those, by migrating the legacy two-slot keys (migrateLegacy, 2 hives only).
 #include "hive_config.h"
 #include "globals.h"
 #include "config.h"
@@ -236,11 +238,88 @@ static void bridgeLegacyGlobals() {
 #endif
 }
 
+// ── Secrets.h pre-seed (HIVE_COUNT / HIVE_i_JSON) ──────────────────────────
+// Builds the registry straight from up to MAX_HIVES HIVE_i_JSON macros, each
+// the exact blob shape hiveToJson() emits / hiveFromJson() parses (see the
+// struct comment above and website/assets/configurator.js, which generates
+// this format). Runs ONLY on a device that has never been configured from the
+// on-device portal (loadHiveConfig() below gates this on the absence of the
+// "hive_count" NVS key) and only when HIVE_COUNT > 0; otherwise migrateLegacy()
+// keeps producing the historical 2-hive registry. Like migrateLegacy(), this
+// is NOT persisted to NVS — it is cheap to re-derive from the compiled-in
+// macros every boot until the owner saves anything from the portal.
+static void seedHivesFromSecrets() {
+  uint8_t want = (uint8_t)((HIVE_COUNT) > MAX_HIVES ? MAX_HIVES : (HIVE_COUNT));
+  gHiveCount = 0;
+
+#ifdef HIVE_1_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_1_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_2_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_2_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_3_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_3_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_4_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_4_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_5_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_5_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_6_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_6_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_7_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_7_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_8_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_8_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_9_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_9_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_10_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_10_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_11_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_11_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_12_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_12_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_13_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_13_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_14_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_14_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_15_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_15_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_16_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_16_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_17_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_17_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+#ifdef HIVE_18_JSON
+  if (gHiveCount < want) { Hive h; if (hiveFromJson(HIVE_18_JSON, h)) gHives[gHiveCount++] = h; }
+#endif
+
+  Serial.printf("[HIVECFG] Seeded %u hive(s) from secrets.h (HIVE_COUNT=%d)\n",
+                gHiveCount, (int)(HIVE_COUNT));
+}
+
 void loadHiveConfig() {
   prefs.begin("hivescale", true);
 
   if (!prefs.isKey("hive_count")) {
+#if HIVE_COUNT > 0
+    seedHivesFromSecrets();
+#else
     migrateLegacy(prefs);
+#endif
     prefs.end();
     bridgeLegacyGlobals();
     return;

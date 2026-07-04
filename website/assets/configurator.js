@@ -7,35 +7,6 @@
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
   var $$ = function (sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
 
-  // ── Wireless sensor catalog ─────────────────────────────────────────────────
-  // Each entry: human label, category (slotting + limit), transport protocol and
-  // — for GATT devices — the service / characteristic UUIDs to pre-fill. The
-  // `supported` flag drives the "not in firmware yet" warning shown in the UI.
-  var WTYPES = {
-    holyiot:    { label: "HolyIot 25015 (BLE beacon)",                       cat: "inhive",     proto: "beacon", supported: true  },
-    hiveinside: { label: "HiveInside ESP32-C6 (GATT)",                       cat: "inhive",     proto: "gatt",   supported: true,
-                  svc: "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01", chr: "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01" },
-    hiveheart:  { label: "HiveHeart — beehivemonitoring.com (GATT)",         cat: "inhive",     proto: "gatt",   supported: true, bhgatt: true,
-                  svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
-    hivescale:  { label: "HiveScale — beehivemonitoring.com (GATT)",         cat: "scale",      proto: "gatt",   supported: true, bhgatt: true,
-                  svc: "0d01c3b8-eff2-44bc-9260-3256eb957268", chr: "513849eb-913d-4f80-8c44-3f0685533d6e" },
-    beecounter: { label: "HiveTraffic — entrance bee counter (GATT)",        cat: "beecounter", proto: "gatt",   supported: true,  gattmac: true,
-                  svc: "8e8b0101-7a1c-4b9e-9a2f-1d6e0b9c1a01", chr: "8e8b0102-7a1c-4b9e-9a2f-1d6e0b9c1a01" },
-    ruvitag:    { label: "RuuviTag 4-in-1 (BLE beacon)",                     cat: "inhive",     proto: "beacon", supported: true  }
-  };
-  var TYPE_ORDER = ["holyiot", "hiveinside", "hiveheart", "hivescale", "beecounter", "ruvitag"];
-  var CAT_LABEL = { inhive: "In-hive", scale: "Scale", beecounter: "HiveTraffic" };
-  var CAT_SLOT  = { inhive: "hive", scale: "scale", beecounter: "counter" };
-  // Per-category slot labels shown in the "Maps to" dropdown. The index + 1 is
-  // the slot number emitted into the macro name (INHIVE_1, WSCALE_2, …).
-  var CAT_SLOT_LABEL = {
-    inhive:     ["Hive 1", "Hive 2"],
-    scale:      ["Scale 1", "Scale 2"],
-    beecounter: ["HiveTraffic 1", "HiveTraffic 2"]
-  };
-  var CAT_LIMIT = 2;
-  var MAX_TOTAL = 6;
-
   // ── Build the Wi-Fi rows (network 1 always on, 2 & 3 optional) ──────────────
   var wifiDefs = [
     { i: 1, on: true,  ssid: "your-wifi-ssid-1", pass: "your-wifi-password-1", required: true },
@@ -70,197 +41,221 @@
     cb.addEventListener("change", function () { s.classList.toggle("on", cb.checked); render(); });
   });
 
-  // ── Wireless sensor rows (dynamic add / remove) ─────────────────────────────
-  var wireList = $("#wireless-list");
-  var widSeq = 0;
+  // ── Hive registry ────────────────────────────────────────────────────────────
+  // Mirrors the on-device provisioning portal's model (firmware/src/portal.cpp):
+  // each hive owns at most one scale channel (HX711 pin pair, a NAU7802 channel —
+  // main bus or behind a TCA9548A mux — or a wireless beehivemonitoring.com
+  // HiveScale) and at most one in-hive sensor (a wired DS18B20 ROM or one
+  // wireless BLE/GATT pairing). Up to MAX_HIVES (matches firmware's default).
+  var MAX_HIVES = 18;
+  var SENSOR_TYPES = [
+    ["holyiot", "HolyIot 25015 — beacon"],
+    ["ruuvitag", "RuuviTag — beacon"],
+    ["hiveinside", "HiveInside — GATT"],
+    ["hiveheart", "HiveHeart — GATT (beehivemonitoring.com)"],
+    ["beecounter", "HiveTraffic counter — GATT (polled on hives 1-2 only)"]
+  ];
+  var SCAN_TYPES = { holyiot: 1, ruuvitag: 1, hiveinside: 1, hiveheart: 1 };
 
-  function typeOptionsHtml(selected) {
-    return TYPE_ORDER.map(function (k) {
-      return '<option value="' + k + '"' + (k === selected ? " selected" : "") + ">" + WTYPES[k].label + "</option>";
-    }).join("");
-  }
+  var hiveList = $("#hive-list");
+  var HIVES = []; // {i, n, sk, ds: string|null, bl: {t,m}|null, wm}
 
-  // Rows currently configured for a category (DOM order), optionally excluding one.
-  function rowsInCat(cat, except) {
-    return $$(".wsensor", wireList).filter(function (r) {
-      if (r === except) return false;
-      return WTYPES[$('[data-wtype]', r).value].cat === cat;
-    });
-  }
+  function isC6() { return val("#mcu") === "xiao_esp32c6"; }
 
-  // Slot numbers already taken by other rows in a category (DOM order ignored).
-  function slotsTaken(cat, except) {
-    var taken = {};
-    $$(".wsensor", wireList).forEach(function (r) {
-      if (r === except) return;
-      if (WTYPES[$('[data-wtype]', r).value].cat !== cat) return;
-      var sel = $('[data-wslot]', r);
-      if (sel) taken[parseInt(sel.value, 10)] = true;
-    });
-    return taken;
-  }
-
-  // First free slot (1-based) in a category, or the last slot if all are taken.
-  function firstFreeSlot(cat, except) {
-    var taken = slotsTaken(cat, except);
-    for (var n = 1; n <= CAT_LIMIT; n++) if (!taken[n]) return n;
-    return CAT_LIMIT;
-  }
-
-  function slotOptionsHtml(cat, selected) {
-    return CAT_SLOT_LABEL[cat].map(function (lab, i) {
-      var n = i + 1;
-      return '<option value="' + n + '"' + (n === selected ? " selected" : "") + ">" + lab + "</option>";
-    }).join("");
-  }
-
-  // (Re)build a row's "Maps to" dropdown for its current category, keeping the
-  // desired slot when given and free, otherwise picking the first free slot.
-  function rebuildSlots(row, desired) {
-    var cat = WTYPES[$('[data-wtype]', row).value].cat;
-    var sel = $('[data-wslot]', row);
-    var want = desired || firstFreeSlot(cat, row);
-    if (slotsTaken(cat, row)[want]) want = firstFreeSlot(cat, row);
-    sel.innerHTML = slotOptionsHtml(cat, want);
-  }
-
-  // The first catalog type whose category still has a free slot, or null if full.
-  function firstAvailableType() {
-    for (var i = 0; i < TYPE_ORDER.length; i++) {
-      var k = TYPE_ORDER[i];
-      if (rowsInCat(WTYPES[k].cat).length < CAT_LIMIT) return k;
+  // Every theoretical wired scale channel; HX711 only exists on the classic
+  // board (config.h force-disables it on the XIAO C6).
+  function allWiredScales() {
+    var out = [];
+    if (!isC6()) {
+      out.push({ b: "hx", hx: 0, label: "HX711 #1 (pins)" });
+      out.push({ b: "hx", hx: 1, label: "HX711 #2 (pins)" });
     }
+    out.push({ b: "nau", mux: -1, adc: 1, label: "NAU7802 main bus CH1" });
+    out.push({ b: "nau", mux: -1, adc: 2, label: "NAU7802 main bus CH2" });
+    for (var ch = 0; ch < 8; ch++) {
+      out.push({ b: "nau", mux: ch, adc: 1, label: "NAU7802 mux ch" + ch + " CH1" });
+      out.push({ b: "nau", mux: ch, adc: 2, label: "NAU7802 mux ch" + ch + " CH2" });
+    }
+    return out;
+  }
+  function scaleKey(o) { return o.b === "nau" ? ("nau:" + o.mux + ":" + o.adc) : ("hx:" + o.hx); }
+  function findWiredScale(k) {
+    var scales = allWiredScales();
+    for (var i = 0; i < scales.length; i++) if (scaleKey(scales[i]) === k) return scales[i];
     return null;
   }
+  function usedScaleKeys(except) {
+    var u = {};
+    HIVES.forEach(function (h) { if (h !== except && h.sk !== "none" && h.sk !== "ble") u[h.sk] = 1; });
+    return u;
+  }
+  function nextFreeScaleKey() {
+    var used = usedScaleKeys();
+    var scales = allWiredScales();
+    for (var i = 0; i < scales.length; i++) if (!used[scaleKey(scales[i])]) return scaleKey(scales[i]);
+    return "none";
+  }
+  function nextHiveIndex() {
+    var used = {};
+    HIVES.forEach(function (h) { used[h.i] = 1; });
+    for (var n = 1; n <= MAX_HIVES; n++) if (!used[n]) return n;
+    return MAX_HIVES;
+  }
 
-  function addWireless(typeKey) {
-    var key = typeKey || firstAvailableType();
-    if (!key) { toast("⚠ Max 6 wireless sensors (2 per category)"); return; }
-
-    var id = ++widSeq;
-    var row = document.createElement("div");
-    row.className = "wsensor";
-    row.setAttribute("data-wid", id);
-    row.innerHTML =
-      '<div class="row" style="align-items:flex-end">' +
-        '<div class="field" style="margin:0"><label>Sensor type</label>' +
-          '<select data-wtype>' + typeOptionsHtml(key) + '</select></div>' +
-        '<div class="field" style="margin:0;flex:0 0 130px"><label>Maps to</label>' +
-          '<select data-wslot></select></div>' +
-        '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-wremove title="Remove">✕</button></div>' +
-      '</div>' +
-      '<p class="wmeta muted" style="font-size:.82rem;margin:.4rem 0 0"></p>' +
-      '<div class="wgatt" style="display:none">' +
-        '<div class="field"><label>Service UUID</label><input type="text" data-wsvc placeholder="service UUID" /></div>' +
-        '<div class="field"><label>Characteristic UUID</label><input type="text" data-wchr placeholder="characteristic UUID" /></div>' +
-      '</div>' +
-      '<div class="wmac" style="display:none">' +
-        '<div class="field"><label>MAC address <span class="hint">— optional; leave blank to pair in the device portal</span></label>' +
-          '<input type="text" data-wmac placeholder="AA:BB:CC:DD:EE:FF" /></div>' +
-      '</div>' +
-      '<div class="note warn wunsupported" style="display:none">⚠ <strong>Not supported by the firmware yet.</strong> ' +
-        'Its macros are written to <code>secrets.h</code> as a placeholder so your config is ready for a future build.</div>';
-    wireList.appendChild(row);
-
-    var sel = $('[data-wtype]', row);
-    sel.addEventListener("change", function () { onTypeChange(row); });
-    rebuildSlots(row);
-    $('[data-wslot]', row).addEventListener("change", function () { onSlotChange(row); });
-    $('[data-wremove]', row).addEventListener("click", function () {
-      row.parentNode.removeChild(row); refreshWireless(); render();
+  function scaleSelectHtml(h) {
+    var used = usedScaleKeys(h);
+    var scales = allWiredScales().filter(function (o) { return !used[scaleKey(o)]; });
+    var sel = h.sk || "none";
+    var html = '<option value="none"' + (sel === "none" ? " selected" : "") + '>(no scale)</option>';
+    var seenSel = (sel === "none" || sel === "ble");
+    scales.forEach(function (o) {
+      var k = scaleKey(o);
+      if (k === sel) seenSel = true;
+      html += '<option value="' + k + '"' + (k === sel ? " selected" : "") + '>' + o.label + '</option>';
     });
-    fillUuids(row, key);
-    refreshWireless();
+    if (!seenSel) {
+      var saved = findWiredScale(sel);
+      html = '<option value="' + sel + '" selected>' + (saved ? saved.label : sel) + ' (unavailable on this board)</option>' + html;
+    }
+    html += '<option value="ble"' + (sel === "ble" ? " selected" : "") + '>BLE HiveScale from Beehivemonitoring</option>';
+    return html;
+  }
+
+  function sensorTypeSelectHtml(selected) {
+    return SENSOR_TYPES.map(function (t) {
+      return '<option value="' + t[0] + '"' + (t[0] === selected ? " selected" : "") + '>' + t[1] + '</option>';
+    }).join("");
+  }
+
+  function addHive() {
+    if (HIVES.length >= MAX_HIVES) { toast("⚠ Max " + MAX_HIVES + " hives"); return; }
+    HIVES.push({ i: nextHiveIndex(), n: "", sk: nextFreeScaleKey(), ds: null, bl: null, wm: "" });
+    renderHives();
+    render();
+  }
+  function removeHive(h) {
+    var idx = HIVES.indexOf(h);
+    if (idx >= 0) HIVES.splice(idx, 1);
+    renderHives();
     render();
   }
 
-  // Reject a type change that would overflow its category; otherwise re-fill UUIDs.
-  function onTypeChange(row) {
-    var sel = $('[data-wtype]', row);
-    var cat = WTYPES[sel.value].cat;
-    if (rowsInCat(cat, row).length >= CAT_LIMIT) {
-      toast("⚠ Only " + CAT_LIMIT + " " + CAT_LABEL[cat].toLowerCase() + " sensors allowed");
-      // Revert to a type whose category still has room.
-      sel.value = firstAvailableTypeFor(row);
-    }
-    // The category may have changed — rebuild the "Maps to" dropdown for it.
-    rebuildSlots(row);
-    fillUuids(row, sel.value, true);
-    refreshWireless();
-    render();
-  }
+  function renderHives() {
+    hiveList.innerHTML = "";
+    HIVES.forEach(function (h) {
+      var card = document.createElement("div");
+      card.className = "sensor on";
+      card.setAttribute("data-hive", h.i);
 
-  // Reject a slot choice already taken by another row in the same category.
-  function onSlotChange(row) {
-    var cat = WTYPES[$('[data-wtype]', row).value].cat;
-    var sel = $('[data-wslot]', row);
-    if (slotsTaken(cat, row)[parseInt(sel.value, 10)]) {
-      toast("⚠ That " + CAT_LABEL[cat].toLowerCase() + " slot is already taken");
-      sel.value = firstFreeSlot(cat, row);
-    }
-    refreshWireless();
-    render();
-  }
+      var scaleExtra = h.sk === "ble"
+        ? '<div class="field" style="margin-top:.4rem"><label>HiveScale MAC address</label>' +
+          '<input type="text" data-hwm placeholder="AA:BB:CC:DD:EE:FF" /></div>'
+        : "";
 
-  function firstAvailableTypeFor(row) {
-    for (var i = 0; i < TYPE_ORDER.length; i++) {
-      var k = TYPE_ORDER[i];
-      if (rowsInCat(WTYPES[k].cat, row).length < CAT_LIMIT) return k;
-    }
-    return TYPE_ORDER[0];
-  }
+      var sensorHtml;
+      if (h.ds !== null) {
+        sensorHtml =
+          '<div class="field row" style="align-items:flex-end">' +
+            '<div class="field" style="margin:0;flex:1"><label>DS18B20 ROM <span class="hint">— optional, 16 hex chars; blank falls back to probe order</span></label>' +
+              '<input type="text" data-hds pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="28FF64B2711304A3" /></div>' +
+            '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-hsensor-remove>✕</button></div>' +
+          '</div>';
+      } else if (h.bl !== null) {
+        sensorHtml =
+          '<div class="field row" style="align-items:flex-end">' +
+            '<div class="field" style="margin:0"><label>Sensor type</label><select data-hbt>' + sensorTypeSelectHtml(h.bl.t) + '</select></div>' +
+            '<div class="field" style="margin:0;flex:1"><label>MAC address</label><input type="text" data-hbm placeholder="AA:BB:CC:DD:EE:FF" /></div>' +
+            '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-hsensor-remove>✕</button></div>' +
+          '</div>';
+      } else {
+        sensorHtml =
+          '<p class="muted" style="font-size:.85rem;margin:.2rem 0">No in-hive sensor.</p>' +
+          '<button type="button" class="btn ghost small" data-add-ds style="margin-right:.4rem">➕ Add DS18B20</button>' +
+          '<button type="button" class="btn ghost small" data-add-ble>➕ Add BLE sensor</button>';
+      }
 
-  // Pre-fill the GATT UUID inputs from the catalog. `force` (set on an explicit
-  // type change) refreshes them to the new type's defaults; otherwise only empty
-  // fields are filled so a user's manual edits survive.
-  function fillUuids(row, key, force) {
-    var def = WTYPES[key];
-    var svc = $('[data-wsvc]', row), chr = $('[data-wchr]', row);
-    if (def.proto !== "gatt") { svc.value = ""; chr.value = ""; return; }
-    if (force || !svc.value.trim()) svc.value = def.svc || "";
-    if (force || !chr.value.trim()) chr.value = def.chr || "";
-  }
+      card.innerHTML =
+        '<div class="row" style="align-items:flex-end">' +
+          '<div class="field" style="margin:0;flex:1"><label>Hive ' + h.i + ' name <span class="hint">— optional</span></label>' +
+            '<input type="text" data-hn placeholder="e.g. Apiary A #3" /></div>' +
+          '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-hremove>Remove hive</button></div>' +
+        '</div>' +
+        '<div class="field" style="margin-top:.4rem"><label>Scale</label><select data-hscale>' + scaleSelectHtml(h) + '</select></div>' +
+        scaleExtra +
+        '<div style="margin-top:.6rem"><span class="hint" style="display:block;margin-bottom:.3rem">In-hive sensor</span>' + sensorHtml + '</div>';
+      hiveList.appendChild(card);
 
-  // Recompute slot labels, warnings and the shared in-hive block visibility.
-  function refreshWireless() {
-    var rows = $$(".wsensor", wireList);
-    var haveInhive = false;
-    rows.forEach(function (r) {
-      var def = WTYPES[$('[data-wtype]', r).value];
-      var slot = parseInt($('[data-wslot]', r).value, 10);
-      if (def.cat === "inhive") haveInhive = true;
-      $('.wmeta', r).textContent = CAT_LABEL[def.cat] + " · " + CAT_SLOT[def.cat] + " " + slot +
-        "  ·  " + (def.proto === "gatt" ? "GATT" : "BLE beacon");
-      $('.wgatt', r).style.display = def.proto === "gatt" ? "block" : "none";
-      $('.wmac', r).style.display = (def.bhgatt || def.gattmac) ? "block" : "none";
-      $('.wunsupported', r).style.display = def.supported ? "none" : "block";
+      $('[data-hn]', card).value = h.n || "";
+      $('[data-hn]', card).addEventListener("input", function () { h.n = this.value; render(); });
+
+      $('[data-hscale]', card).addEventListener("change", function () {
+        h.sk = this.value;
+        if (h.sk !== "ble") h.wm = "";
+        renderHives(); render();
+      });
+      var wm = $('[data-hwm]', card);
+      if (wm) {
+        wm.value = h.wm || "";
+        wm.addEventListener("input", function () { h.wm = this.value.trim(); render(); });
+      }
+      $('[data-hremove]', card).addEventListener("click", function () { removeHive(h); });
+
+      var dsInput = $('[data-hds]', card);
+      if (dsInput) {
+        dsInput.value = h.ds || "";
+        dsInput.addEventListener("input", function () { h.ds = this.value.trim().toUpperCase(); render(); });
+      }
+      var btSel = $('[data-hbt]', card);
+      if (btSel) btSel.addEventListener("change", function () { h.bl.t = this.value; render(); });
+      var bmInput = $('[data-hbm]', card);
+      if (bmInput) {
+        bmInput.value = (h.bl && h.bl.m) || "";
+        bmInput.addEventListener("input", function () { h.bl.m = this.value.trim(); render(); });
+      }
+      var rmSensor = $('[data-hsensor-remove]', card);
+      if (rmSensor) rmSensor.addEventListener("click", function () { h.ds = null; h.bl = null; renderHives(); render(); });
+      var addDs = $('[data-add-ds]', card);
+      if (addDs) addDs.addEventListener("click", function () { h.ds = ""; h.bl = null; renderHives(); render(); });
+      var addBle = $('[data-add-ble]', card);
+      if (addBle) addBle.addEventListener("click", function () { h.bl = { t: "holyiot", m: "" }; h.ds = null; renderHives(); render(); });
     });
-    $("#wireless-empty").style.display = rows.length ? "none" : "block";
-    $("#inhive-global").style.display = haveInhive ? "block" : "none";
-    var full = rows.length >= MAX_TOTAL || firstAvailableType() === null;
-    $("#add-wireless").disabled = full;
-    $("#wireless-full").style.display = full ? "block" : "none";
+
+    $("#hive-empty").style.display = HIVES.length ? "none" : "block";
+    var full = HIVES.length >= MAX_HIVES;
+    $("#add-hive").disabled = full;
+    $("#hive-full").style.display = full ? "block" : "none";
+
+    var anyInHiveBle = HIVES.some(function (h) { return h.bl && SCAN_TYPES[h.bl.t]; }) ||
+                        HIVES.some(function (h) { return h.bl && h.bl.t === "beecounter"; }) ||
+                        HIVES.some(function (h) { return h.sk === "ble"; });
+    $("#inhive-global").style.display = anyInHiveBle ? "block" : "none";
   }
 
-  $("#add-wireless").addEventListener("click", function () { addWireless(); });
+  $("#add-hive").addEventListener("click", addHive);
 
   // ── MCU selection ─────────────────────────────────────────────────────────
   function onMcuChange() {
-    var isC6 = val("#mcu") === "xiao_esp32c6";
-    $("#antenna-row").style.display = isC6 ? "block" : "none";
-    $("#c6-wired-notice").style.display = isC6 ? "block" : "none";
-    ["ds18b20", "mics", "accel"].forEach(function (name) {
+    var isC6v = isC6();
+    $("#antenna-row").style.display = isC6v ? "block" : "none";
+    $("#c6-wired-notice").style.display = isC6v ? "block" : "none";
+    ["mics", "accel"].forEach(function (name) {
       var s = $('.sensor[data-sensor="' + name + '"]');
       if (!s) return;
       var cb = $('[data-toggle]', s);
-      cb.disabled = isC6;
-      s.style.opacity = isC6 ? "0.4" : "";
-      s.style.pointerEvents = isC6 ? "none" : "";
-      if (isC6) s.classList.remove("on");
+      cb.disabled = isC6v;
+      s.style.opacity = isC6v ? "0.4" : "";
+      s.style.pointerEvents = isC6v ? "none" : "";
+      if (isC6v) s.classList.remove("on");
       else if (cb.checked) s.classList.add("on");
     });
+    // HX711 doesn't exist on the C6 — drop any hive currently pinned to it
+    // rather than silently emitting a channel the firmware force-disables.
+    if (isC6v) {
+      HIVES.forEach(function (h) { if (h.sk && h.sk.indexOf("hx:") === 0) h.sk = "none"; });
+    }
     var envSpan = $("#pio-env");
-    if (envSpan) envSpan.textContent = isC6 ? "xiao_esp32c6" : "esp32dev";
+    if (envSpan) envSpan.textContent = isC6v ? "xiao_esp32c6" : "esp32dev";
+    renderHives();
     render();
   }
   $("#mcu").addEventListener("change", onMcuChange);
@@ -292,7 +287,7 @@
   function build() {
     var L = [];
     var p = function (s) { L.push(s === undefined ? "" : s); };
-    var isC6 = val("#mcu") === "xiao_esp32c6";
+    var isC6v = val("#mcu") === "xiao_esp32c6";
 
     p("#ifndef SECRETS_H");
     p("#define SECRETS_H");
@@ -302,7 +297,7 @@
     p("// Build: pio run -e " + val("#mcu") + " --target upload");
     p("");
 
-    if (isC6) {
+    if (isC6v) {
       p("// ==============================");
       p("// XIAO ESP32-C6 HARDWARE");
       p("// ==============================");
@@ -352,16 +347,17 @@
     p("// Each flag is numeric 0/1 because the firmware switches on it with #if.");
     p("");
 
-    // DS18B20
-    p("// DS18B20 wired in-hive temperature probes (hive 1 + hive 2 on GPIO 4).");
-    if (isC6) p("// Not available on XIAO ESP32-C6 — use wireless BLE in-hive sensors.");
-    p(def("ENABLE_DS18B20_HIVE_TEMP", (enabled("ds18b20") && !isC6) ? "1" : "0"));
+    // DS18B20 — a global bus enable; which hives actually have a probe mapped
+    // lives in each hive's HIVE_i_JSON "ds" field (see the HIVES section below).
+    var anyDs = HIVES.some(function (h) { return h.ds !== null; });
+    p("// DS18B20 wired in-hive temperature (single 1-Wire bus, ROM-addressed per hive).");
+    p(def("ENABLE_DS18B20_HIVE_TEMP", anyDs ? "1" : "0"));
     p("");
 
     // INMP441 mics
     p("// INMP441 stereo I2S microphones with per-band FFT.");
-    if (isC6) p("// Not available on XIAO ESP32-C6.");
-    var micsOn = enabled("mics") && !isC6;
+    if (isC6v) p("// Not available on XIAO ESP32-C6.");
+    var micsOn = enabled("mics") && !isC6v;
     p(def("ENABLE_INMP441_MICS", micsOn ? "1" : "0"));
     if (micsOn) {
       p(def("INMP441_BCLK_PIN", opt("mics", "bclk")));
@@ -372,10 +368,13 @@
     }
     p("");
 
-    // Accelerometer
-    p("// LIS3DH / LIS2DH12 per-hive vibration accelerometers (I2C).");
-    if (isC6) p("// Not available on XIAO ESP32-C6.");
-    var accelOn = enabled("accel") && !isC6;
+    // Accelerometer (legacy — genuinely capped at 2 by I2C address space: the
+    // LIS3DH/LIS2DH12 SDO/SA0 pin only selects between 0x18 and 0x19).
+    p("// LIS3DH / LIS2DH12 vibration accelerometers (I2C) — legacy, 2 fixed I2C");
+    p("// addresses, so at most 2 regardless of hive count. Prefer a BLE in-hive");
+    p("// sensor for vibration on any other hive.");
+    if (isC6v) p("// Not available on XIAO ESP32-C6.");
+    var accelOn = enabled("accel") && !isC6v;
     p(def("ENABLE_LIS3DH_ACCEL", accelOn ? "1" : "0"));
     if (accelOn) {
       p(def("LIS3DH_ADDR_SLOT_1", opt("accel", "addr1")));
@@ -386,7 +385,7 @@
     }
     p("");
 
-    buildWireless(p);
+    buildHives(p);
 
     // INA219 solar
     p("// INA219 solar / load power telemetry (off-grid).");
@@ -416,93 +415,81 @@
     return L.join("\n");
   }
 
-  // ── Wireless sensor macros ────────────────────────────────────────────────
-  function buildWireless(p) {
-    var rows = $$(".wsensor", wireList);
-    var byCat = { inhive: [], scale: [], beecounter: [] };
-    rows.forEach(function (r) {
-      var key = $('[data-wtype]', r).value;
-      var slot = parseInt($('[data-wslot]', r).value, 10);
-      byCat[WTYPES[key].cat].push({ row: r, key: key, meta: WTYPES[key], slot: slot });
-    });
-    // Emit in slot order so INHIVE_1/2, WSCALE_1/2 … read top-to-bottom.
-    Object.keys(byCat).forEach(function (c) {
-      byCat[c].sort(function (a, b) { return a.slot - b.slot; });
-    });
+  // Build a hive's JSON blob in the exact shape hiveToJson()/hiveFromJson()
+  // (firmware/src/hive_config.cpp) use, so HIVE_i_JSON round-trips through the
+  // same parser the on-device portal's save handler feeds.
+  function hiveJson(h) {
+    var o = { i: h.i };
+    if (h.n && h.n.trim()) o.n = h.n.trim();
 
-    p("// ==============================");
-    p("// WIRELESS SENSORS (BLE)");
-    p("// ==============================");
-    p("// Up to 6 wireless sensors: at most 2 in-hive sensors, 2 scales, 2 bee");
-    p("// counters. Pair each sensor's MAC from the provisioning portal after flashing.");
-    p("// The in-hive BLE bridge, the beehivemonitoring.com GATT sensors (HiveHeart");
-    p("// / HiveScale) and HiveTraffic (the wireless entrance bee counter) are all");
-    p("// consumed by the firmware.");
-    p("");
-
-    // beehivemonitoring.com GATT (HiveHeart / HiveScale) master switch + shared UUIDs.
-    var bh = rows.filter(function (r) { return WTYPES[$('[data-wtype]', r).value].bhgatt; });
-    if (bh.length) {
-      var first = WTYPES[$('[data-wtype]', bh[0]).value];
-      p("// ---- beehivemonitoring.com GATT (HiveHeart / HiveScale) ----");
-      p(def("ENABLE_BEEHIVE_GATT", "1"));
-      p(defStr("BEEHIVE_GATT_SERVICE_UUID", first.svc));
-      p(defStr("BEEHIVE_GATT_CHAR_UUID", first.chr));
-      p("");
+    o.s = [];
+    if (h.sk && h.sk !== "none" && h.sk !== "ble") {
+      var wired = findWiredScale(h.sk);
+      if (wired) {
+        o.s.push(wired.b === "nau"
+          ? { b: "nau", mux: wired.mux, adc: wired.adc, off: 0, fac: -7050.0 }
+          : { b: "hx", hx: wired.hx, off: 0, fac: -7050.0 });
+      }
     }
 
-    // --- In-hive sensors (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) -------------
-    var inhive = byCat.inhive;
-    p("// ---- In-hive BLE sensors (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) ----");
-    p(def("ENABLE_BLE_SCAN", inhive.length ? "1" : "0"));
-    if (inhive.length) {
+    if (h.ds !== null) o.ds = h.ds || "";
+
+    o.bl = [];
+    if (h.bl !== null && h.bl.m && h.bl.m.trim()) o.bl.push({ t: h.bl.t, m: h.bl.m.trim() });
+    if (h.sk === "ble" && h.wm && h.wm.trim()) o.bl.push({ t: "hivescale", m: h.wm.trim() });
+
+    return JSON.stringify(o);
+  }
+
+  // ── HIVES + the global flags their sensor choices imply ─────────────────────
+  function buildHives(p) {
+    var anyBeacon = HIVES.some(function (h) { return h.bl && SCAN_TYPES[h.bl.t]; });
+    var anyHiveInsideGatt = HIVES.some(function (h) { return h.bl && h.bl.t === "hiveinside"; });
+    var anyBeehive = HIVES.some(function (h) { return (h.bl && h.bl.t === "hiveheart") || h.sk === "ble"; });
+    var anyBeecounter = HIVES.some(function (h) { return h.bl && h.bl.t === "beecounter"; });
+
+    p("// ==============================");
+    p("// HIVES (up to 18 — matches the on-device provisioning portal's registry)");
+    p("// ==============================");
+    p("// Each HIVE_i_JSON pre-seeds hive i's scale source and in-hive sensor on");
+    p("// FIRST BOOT, in the exact blob shape the portal itself saves to NVS (see");
+    p("// hive_config.cpp / docs/multi-hive.md). Entirely optional — skip this");
+    p("// section and configure hives from the on-device portal instead.");
+    p(def("HIVE_COUNT", String(HIVES.length)));
+    HIVES.forEach(function (h) {
+      p(defStr("HIVE_" + h.i + "_JSON", hiveJson(h)));
+    });
+    p("");
+
+    p("// In-hive BLE bridge: one shared passive scan per cycle for beacon sensors");
+    p("// (HolyIot / RuuviTag / HiveInside beacon mode) and to locate GATT sensors");
+    p("// by MAC before connecting. Needed whenever any hive uses one of these.");
+    p(def("ENABLE_BLE_SCAN", anyBeacon ? "1" : "0"));
+    if (anyBeacon) {
       p(def("HOLYIOT_BLE_SCAN_SECONDS", val("#ble_scan") || "6"));
       p(def("HOLYIOT_BLE_ACTIVE_SCAN", $("#ble_active").checked ? "1" : "0"));
       p(def("HOLYIOT_COMPANY_ID", val("#ble_company") || "0xFFFF"));
-      var usesGatt = inhive.some(function (s) { return s.key === "hiveinside" && s.meta.proto === "gatt"; });
-      p(def("HIVEINSIDE_USE_GATT", usesGatt ? "1" : "0"));
-      inhive.forEach(function (s) { emitSlot(p, "INHIVE_" + s.slot, s); });
-      p("");
-      p("// In-hive BLE overrides the wired sensor measuring the same quantity (per hive).");
+    }
+    if (anyHiveInsideGatt) p(def("HIVEINSIDE_USE_GATT", "1"));
+    p("");
+
+    p("// beehivemonitoring.com GATT: HiveHeart (in-hive sensor) and/or a wireless");
+    p("// HiveScale (scale source). Both share one service/characteristic UUID.");
+    p(def("ENABLE_BEEHIVE_GATT", anyBeehive ? "1" : "0"));
+    p("");
+
+    p("// HiveTraffic wireless entrance bee counter (GATT). Currently only polled");
+    p("// on hives 1-2 regardless of which hive(s) a counter is paired to.");
+    p(def("ENABLE_WIRELESS_BEECOUNTER", anyBeecounter ? "1" : "0"));
+    p("");
+
+    if (anyBeacon || anyBeehive) {
+      p("// Collision avoidance: a hive's BLE in-hive sensor overrides its wired");
+      p("// sensor for the same quantity, per hive.");
       p(def("BLE_OVERRIDE_DS18B20", $("#ovr_temp").checked ? "1" : "0"));
       p(def("BLE_OVERRIDE_MICS", $("#ovr_mics").checked ? "1" : "0"));
       p(def("BLE_OVERRIDE_ACCEL", $("#ovr_accel").checked ? "1" : "0"));
-    }
-    p("");
-
-    // --- Wireless scales ------------------------------------------------------
-    var scales = byCat.scale;
-    p("// ---- Wireless scales (beehivemonitoring.com HiveScale, GATT) ----");
-    p(def("ENABLE_WIRELESS_SCALE", scales.length ? "1" : "0"));
-    scales.forEach(function (s) { emitSlot(p, "WSCALE_" + s.slot, s); });
-    p("");
-
-    // --- Wireless bee counters (HiveTraffic, GATT) ---------------------------
-    var bc = byCat.beecounter;
-    p("// ---- HiveTraffic wireless bee counters (GATT) ----");
-    p(def("ENABLE_WIRELESS_BEECOUNTER", bc.length ? "1" : "0"));
-    bc.forEach(function (s) { emitSlot(p, "WBEECNT_" + s.slot, s); });
-    p("");
-  }
-
-  function emitSlot(p, prefix, s) {
-    var m = s.meta;
-    var tail = m.supported ? "" : "   // placeholder — no firmware support yet";
-    p(defStr(prefix + "_TYPE", s.key) + tail);
-    p(defStr(prefix + "_PROTOCOL", m.proto));
-    if (m.proto === "gatt") {
-      var svcEl = $('[data-wsvc]', s.row), chrEl = $('[data-wchr]', s.row);
-      var svc = (svcEl && svcEl.value.trim()) || m.svc || "";
-      var chr = (chrEl && chrEl.value.trim()) || m.chr || "";
-      if (svc) p(defStr(prefix + "_GATT_SERVICE_UUID", svc));
-      if (chr) p(defStr(prefix + "_GATT_CHAR_UUID", chr));
-    }
-    // Optional MAC seeding for GATT devices that connect by MAC — the
-    // beehivemonitoring.com sensors and HiveTraffic (blank = pair in portal).
-    if (m.bhgatt || m.gattmac) {
-      var macEl = $('[data-wmac]', s.row);
-      var mac = macEl && macEl.value.trim();
-      if (mac) p(defStr(prefix + "_MAC", mac));
+      p("");
     }
   }
 
@@ -544,7 +531,9 @@
     toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 1800);
   }
 
-  // Initial paint.
-  refreshWireless();
+  // Initial paint — seed the historical default of 2 hives (HX711 #1 / #2 on
+  // the classic board), matching the pre-multi-hive tool's starting point.
+  addHive();
+  addHive();
   onMcuChange();
 })();

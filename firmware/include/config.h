@@ -142,6 +142,20 @@
 #ifndef MAX_HIVES
 #define MAX_HIVES 18
 #endif
+
+// Optional first-boot pre-seed of the WHOLE dynamic registry from secrets.h,
+// bypassing the 2-hive migrateLegacy() path entirely. When HIVE_COUNT is > 0,
+// hive_config.cpp reads HIVE_1_JSON..HIVE_<HIVE_COUNT>_JSON (each the exact
+// blob shape hiveToJson()/hiveFromJson() use — see hive_config.cpp) and loads
+// them straight into gHives, so a device can ship pre-configured for any
+// number of hives up to MAX_HIVES instead of only the first two. Leave at 0
+// (the default) to keep the historical 2-hive secrets.h behavior; once a
+// device has been configured from the on-device portal ("hive_count" exists
+// in NVS) this is never consulted again. See website/assets/configurator.js,
+// which emits this format, and docs/multi-hive.md.
+#ifndef HIVE_COUNT
+#define HIVE_COUNT 0
+#endif
 // Upper bound on physically attached WIRED load-cell channels.
 //
 // IMPORTANT — how to actually reach 18 (the NAU7802 has NO address-select pin;
@@ -428,12 +442,13 @@
 // ==============================
 // WIRELESS SENSOR CATALOG (configurator)
 // ==============================
-// The secrets.h configurator can describe up to six wireless BLE sensors across
-// three categories: in-hive (max 2), scale (max 2) and bee counter (max 2). The
-// in-hive bridge (ENABLE_BLE_SCAN above) is the only category the current
-// firmware reads; the two flags below — plus the per-slot WSCALE_* / WBEECNT_*
-// and INHIVE_* TYPE / PROTOCOL / GATT-UUID macros the configurator writes — are
-// captured for a future firmware build and are otherwise unused today.
+// The secrets.h configurator (website/assets/configurator.js) assigns wireless
+// sensors per hive, either through the modern HIVE_i_JSON pre-seed above (its
+// "bl" array — see hive_config.cpp) or, for a legacy 2-hive secrets.h, the
+// per-slot INHIVE_n_MAC / WSCALE_n_MAC / WBEECNT_n_MAC macros consumed by
+// device_prefs.cpp. ENABLE_WIRELESS_SCALE is captured for a future firmware
+// build and is otherwise unused today — the beehivemonitoring.com HiveScale
+// weight itself is already decoded over GATT via ENABLE_BEEHIVE_GATT below.
 #ifndef ENABLE_WIRELESS_SCALE
 #define ENABLE_WIRELESS_SCALE 0
 #endif
@@ -445,15 +460,16 @@
 // HiveTraffic (wireless entrance bee counter, BLE/GATT)
 // ------------------------------------------------------------------
 // When ENABLE_WIRELESS_BEECOUNTER is set, the firmware acts as a GATT client:
-// once per upload cycle it connects to each paired HiveTraffic MAC
-// (counter_mac{0,1}, paired in the portal or seeded via WBEECNT_n_MAC), reads
-// its JSON measurement characteristic and folds the lifetime IN/OUT totals into
-// the same bee_counter_{slot}_* fields the wired I2C BeeCounter uses. The wire
-// format is totals-only: the backend differences consecutive totals into
-// per-interval counts (see 2026-easy-bee-counter/docs/ble-mode.md), so no
-// CMD_LATCH reset is written. A slot with a paired MAC uses BLE; a slot without
-// one falls back to the wired I2C BeeCounter. All HiveTraffic devices share one
-// service/characteristic UUID, so a single pair of macros covers both slots.
+// once per upload cycle it connects to each paired HiveTraffic MAC (a
+// "beecounter" BLE pairing in the hive registry — paired in the portal, seeded
+// via a HIVE_i_JSON blob, or via the legacy WBEECNT_n_MAC / counter_mac{0,1}
+// keys), reads its JSON measurement characteristic and folds the lifetime
+// IN/OUT totals into the same bee_counter_{slot}_* fields the wired I2C
+// BeeCounter uses. The wire format is totals-only: the backend differences
+// consecutive totals into per-interval counts (see
+// 2026-easy-bee-counter/docs/ble-mode.md), so no CMD_LATCH reset is written. A
+// hive with a paired MAC uses BLE; one without falls back to the wired I2C
+// BeeCounter. All HiveTraffic devices share one service/characteristic UUID.
 #ifndef BEECOUNTER_GATT_SERVICE_UUID
 #define BEECOUNTER_GATT_SERVICE_UUID "8e8b0101-7a1c-4b9e-9a2f-1d6e0b9c1a01"
 #endif
@@ -476,7 +492,8 @@
 // pushed notification and disconnects (see firmware/src/beehive_gatt.cpp). Both
 // products share the same service + characteristic UUID; only the payload (and
 // the configured slot type) differ. Enable per device in secrets.h, pair the
-// MACs in the provisioning portal (or seed INHIVE_n_MAC / WSCALE_n_MAC here).
+// MACs in the provisioning portal, seed a HIVE_i_JSON blob above, or (legacy
+// 2-hive secrets.h) seed INHIVE_n_MAC / WSCALE_n_MAC here.
 #ifndef ENABLE_BEEHIVE_GATT
 #define ENABLE_BEEHIVE_GATT 0
 #endif

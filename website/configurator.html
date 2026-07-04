@@ -117,23 +117,10 @@
           </p>
 
           <div id="c6-wired-notice" class="note warn" style="display:none; margin-bottom:.8rem">
-            ⚠ <strong>XIAO ESP32-C6 selected</strong> — wired sensors (DS18B20, INMP441 mics,
-            accelerometer) are <strong>not supported</strong> on this board. Use wireless BLE
-            in-hive sensors instead.
-          </div>
-
-          <!-- DS18B20 -->
-          <div class="sensor" data-sensor="ds18b20">
-            <span class="tag">Wired · I2C/1-Wire</span>
-            <label class="toggle">
-              <input type="checkbox" data-toggle />
-              <span><span class="t-title">🌡️ DS18B20 in-hive temperature</span>
-              <span class="t-desc">Two waterproof 1-Wire probes (hive 1 + hive 2) on GPIO 4.</span></span>
-            </label>
-            <div class="opts">
-              <p class="muted" style="font-size:.85rem;margin:0">No extra options. If you rely on a BLE
-                sensor for in-hive temperature instead, turn this off.</p>
-            </div>
+            ⚠ <strong>XIAO ESP32-C6 selected</strong> — wired INMP441 mics and the legacy LIS3DH
+            accelerometer are <strong>not supported</strong> on this board (no spare pins/HX711).
+            A single wired DS18B20 probe still works (see Hives below); use wireless BLE
+            in-hive sensors for anything else.
           </div>
 
           <!-- INMP441 mics -->
@@ -184,62 +171,6 @@
             </div>
           </div>
 
-          <!-- Wireless BLE sensors (dynamic — up to 6: max 2 in-hive, 2 scales, 2 bee counters) -->
-          <div class="sensor on" data-wireless>
-            <span class="tag ble">Wireless · BLE</span>
-            <span class="t-title">📶 Wireless sensors</span>
-            <span class="t-desc">Battery BLE sensors, paired by MAC later from the provisioning portal.
-              Add up to 6 — at most 2 in-hive sensors, 2 scales and 2 bee counters.</span>
-
-            <div class="opts" style="display:block">
-              <p class="muted" id="wireless-empty" style="font-size:.85rem;margin:.2rem 0 0">
-                No wireless sensors yet — add one to scan paired beacons / GATT devices each cycle.</p>
-              <div id="wireless-list"></div>
-              <button type="button" class="btn ghost small" id="add-wireless" style="margin-top:.6rem">➕ Add wireless sensor</button>
-              <p class="muted" id="wireless-full" style="display:none;font-size:.82rem;margin:.5rem 0 0">
-                Maximum of 6 wireless sensors reached (2 per category).</p>
-
-              <!-- Shared in-hive scan + collision-avoidance options (only when an in-hive sensor is present) -->
-              <div id="inhive-global" style="display:none">
-                <div class="note info" style="margin:1rem 0 .5rem">In-hive sensors are scanned passively
-                  each cycle. Use each sensor's <strong>Maps to</strong> dropdown to assign it to hive 1 or
-                  hive 2 — so you can, e.g., leave hive 1 on its wired probe and add a wireless sensor for hive 2
-                  only. HiveInside / HiveHeart vibration bands map onto <code>accel_N_band_*</code> and their
-                  acoustic bands onto <code>mic_left/right_band_*</code>.</div>
-                <div class="field row">
-                  <div><label>Scan seconds / cycle</label><input type="number" id="ble_scan" value="6" min="1" /></div>
-                  <div><label>HolyIot Company ID (16-bit)</label><input type="text" id="ble_company" value="0xFFFF" /></div>
-                </div>
-                <label class="toggle" style="margin:.4rem 0">
-                  <input type="checkbox" id="ble_active" checked />
-                  <span><span class="t-title" style="font-size:.92rem">Active scan</span>
-                  <span class="t-desc">Also fetch the device name (better pairing, slightly more power).</span></span>
-                </label>
-
-                <p class="muted" style="margin:.6rem 0 .2rem; font-size:.85rem"><strong>Collision avoidance</strong>
-                  — when a paired in-hive sensor supplies one of these, disable the wired sensor for that hive so each
-                  value has a single source:</p>
-                <label class="toggle" style="margin:.3rem 0">
-                  <input type="checkbox" id="ovr_temp" checked />
-                  <span><span class="t-title" style="font-size:.92rem">Override wired DS18B20 temperature</span>
-                  <span class="t-desc">In-hive temp comes from the BLE sensor instead of the 1-Wire probe.</span></span>
-                </label>
-                <label class="toggle" style="margin:.3rem 0">
-                  <input type="checkbox" id="ovr_mics" checked />
-                  <span><span class="t-title" style="font-size:.92rem">Override wired INMP441 microphones</span>
-                  <span class="t-desc">Acoustics come from a HiveInside / HiveHeart sensor; the wired stereo mics are skipped.</span></span>
-                </label>
-                <label class="toggle" style="margin:.3rem 0">
-                  <input type="checkbox" id="ovr_accel" checked />
-                  <span><span class="t-title" style="font-size:.92rem">Override wired accelerometer</span>
-                  <span class="t-desc">Vibration comes from the BLE sensor; the wired LIS3DH is skipped.</span></span>
-                </label>
-                <div class="note info">The ambient SHT40 is never overridden — it measures outside-hive
-                  climate, a different quantity stored separately, so it does not collide.</div>
-              </div>
-            </div>
-          </div>
-
           <!-- INA219 solar -->
           <div class="sensor" data-sensor="ina219">
             <span class="tag">Off-grid · I2C</span>
@@ -270,6 +201,62 @@
                 <input type="number" data-opt="alert" value="20" min="1" max="99" />
               </div>
             </div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Hives &amp; sensors <span class="hint" style="font-weight:400">— up to 18, matches the on-device provisioning portal</span></legend>
+          <p class="muted" style="margin:.2rem 0 .6rem; font-size:.9rem">
+            Add a hive, choose its single scale source, then optionally one in-hive sensor: a
+            wired DS18B20 probe or one wireless BLE/GATT sensor. Pre-seeding this here is
+            <strong>optional</strong> — it saves a trip to the portal on first boot, but you can
+            just add hives from the portal instead and skip this section entirely.
+          </p>
+          <div id="hive-list"></div>
+          <p class="muted" id="hive-empty" style="font-size:.85rem;margin:.4rem 0 0">No hives yet — add one below.</p>
+          <button type="button" class="btn ghost small" id="add-hive" style="margin-top:.6rem">➕ Add hive</button>
+          <p class="muted" id="hive-full" style="display:none;font-size:.82rem;margin:.5rem 0 0">
+            Maximum of 18 hives reached.</p>
+
+          <!-- Shared in-hive BLE scan + collision-avoidance options (only when a hive uses a beacon/GATT sensor) -->
+          <div id="inhive-global" style="display:none; margin-top:1rem">
+            <div class="note info" style="margin:1rem 0 .5rem">Beacon in-hive sensors (HolyIot,
+              RuuviTag, HiveInside beacon mode) are scanned passively in one shared window each
+              cycle, so any number of them costs the same scan. GATT sensors (HiveInside GATT,
+              HiveHeart, wireless HiveScale, HiveTraffic) connect serially and are capped at
+              <code>MAX_GATT_READS_PER_CYCLE</code> per wake — see <code>docs/multi-hive.md</code>.
+              <strong>HiveTraffic wireless bee counters are currently only polled on hives 1 and 2</strong>
+              regardless of which hive you pair one to.</div>
+            <div class="field row">
+              <div><label>Scan seconds / cycle</label><input type="number" id="ble_scan" value="6" min="1" /></div>
+              <div><label>HolyIot Company ID (16-bit)</label><input type="text" id="ble_company" value="0xFFFF" /></div>
+            </div>
+            <label class="toggle" style="margin:.4rem 0">
+              <input type="checkbox" id="ble_active" checked />
+              <span><span class="t-title" style="font-size:.92rem">Active scan</span>
+              <span class="t-desc">Also fetch the device name (better pairing, slightly more power).</span></span>
+            </label>
+
+            <p class="muted" style="margin:.6rem 0 .2rem; font-size:.85rem"><strong>Collision avoidance</strong>
+              — when a hive's in-hive BLE sensor supplies one of these, disable the wired sensor for
+              that hive so each value has a single source:</p>
+            <label class="toggle" style="margin:.3rem 0">
+              <input type="checkbox" id="ovr_temp" checked />
+              <span><span class="t-title" style="font-size:.92rem">Override wired DS18B20 temperature</span>
+              <span class="t-desc">In-hive temp comes from the BLE sensor instead of the 1-Wire probe.</span></span>
+            </label>
+            <label class="toggle" style="margin:.3rem 0">
+              <input type="checkbox" id="ovr_mics" checked />
+              <span><span class="t-title" style="font-size:.92rem">Override wired INMP441 microphones</span>
+              <span class="t-desc">Acoustics come from a HiveInside / HiveHeart sensor; the wired stereo mics are skipped.</span></span>
+            </label>
+            <label class="toggle" style="margin:.3rem 0">
+              <input type="checkbox" id="ovr_accel" checked />
+              <span><span class="t-title" style="font-size:.92rem">Override wired accelerometer</span>
+              <span class="t-desc">Vibration comes from the BLE sensor; the wired LIS3DH is skipped.</span></span>
+            </label>
+            <div class="note info">The ambient SHT40 is never overridden — it measures outside-hive
+              climate, a different quantity stored separately, so it does not collide.</div>
           </div>
         </fieldset>
 
