@@ -94,6 +94,22 @@ two-hive registry, so an existing device keeps working until you remap it.
 
 ---
 
+## Pre-seeding the registry from secrets.h (optional)
+
+The portal is the recommended way to set this up, but a brand-new device can
+also ship already knowing every hive on **first boot**, before it has ever
+visited the portal: set `HIVE_COUNT` (1..18) and one `HIVE_<n>_JSON` macro per
+hive in `secrets.h`, in exactly the JSON shape `hiveToJson()` /
+`hiveFromJson()` use (`firmware/src/hive_config.cpp`). The
+[website config tool](../website/configurator.html) builds these for you from
+a per-hive form (scale source, DS18B20 ROM or one wireless sensor) — see
+`firmware/include/secrets.example.h` for the full macro reference and a
+worked example. Once a device saves anything from the on-device portal, these
+macros are never consulted again; leaving `HIVE_COUNT` at its default (`0`)
+keeps the pre-0.20 two-slot migration behavior described above.
+
+---
+
 ## BLE budget
 
 A passive BLE **scan** hears every nearby **beacon** in one window. The portal
@@ -168,9 +184,12 @@ read, insights and temperature-compensation paths keep working unchanged.
 
 ## Known limitations
 
-- Connection-based **HiveHeart / wireless HiveScale / HiveTraffic** GATT sensors
-  are read for **hives 1–2** in this release (beacons cover all hives). Their
-  pairings for higher hives are stored but not yet polled.
+- Connection-based **HiveHeart / wireless HiveScale** GATT sensors are read for
+  **any hive up to 18** (`beehive_gatt.cpp` walks the whole registry), same as
+  the passive beacons. **HiveTraffic** wireless bee counters are still read for
+  **hives 1–2 only** (`bee_counter_client.cpp` uses the legacy two-slot
+  `trafficMac0/1` globals) — a pairing stored on hive 3+ is saved but not yet
+  polled.
 - Server-side **temperature compensation** is applied to hives 1–2; hives 3–18
   use raw weight for insights. The firmware already accepts a per-hive
   `hive_scales` calibration array over remote config for all hives.

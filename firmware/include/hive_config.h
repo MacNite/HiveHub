@@ -10,8 +10,11 @@
 //
 // The whole registry is persisted as one compact JSON blob per hive in NVS
 // ("h0_cfg" .. "h17_cfg") plus a "hive_count" key, written by the provisioning
-// portal (portal.cpp) and parsed back here at boot. The first boot after an
-// upgrade migrates the legacy two-slot keys so existing devices keep their setup.
+// portal (portal.cpp) and parsed back here at boot. Before that NVS key ever
+// exists, a device instead seeds gHives from either up to MAX_HIVES HIVE_i_JSON
+// secrets.h macros (same blob shape, see hive_config.cpp's seedHivesFromSecrets)
+// or, absent those, migrates the legacy two-slot keys into a 2-hive registry —
+// either way existing devices keep working without a portal visit.
 #pragma once
 
 #include <Arduino.h>

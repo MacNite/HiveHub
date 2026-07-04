@@ -129,29 +129,64 @@
 #define RUUVI_COMPANY_ID         0x0499
 
 // ==============================
-// WIRELESS SENSOR CATALOG (optional)
+// MULTI-HIVE PRE-SEED (optional, up to 18 hives)
 // ==============================
-// The secrets.h configurator (website/configurator.html) can describe up to six
-// wireless BLE sensors across three categories — at most 2 in-hive sensors, 2
-// scales and 2 bee counters. In-hive sensors are scanned by the bridge above
-// (ENABLE_BLE_SCAN); HiveTraffic bee counters are read over GATT.
+// Firmware v0.20.0+ generalises HiveHub to a dynamic registry of up to
+// MAX_HIVES (18) hives, each with one scale source and at most one in-hive
+// sensor — see hive_config.h and docs/multi-hive.md. The provisioning portal
+// (hold the setup button after flashing) configures this registry directly and
+// is the recommended way to set it up. To pre-seed it from secrets.h instead
+// (so a device already knows every hive on FIRST BOOT, before ever visiting
+// the portal), set HIVE_COUNT and one HIVE_<n>_JSON per hive, 1..HIVE_COUNT.
+// The website config tool (website/configurator.html) generates these for you
+// from a per-hive form; hand-editing is only for reference.
 //
-// Supported in-hive types: HolyIot 25015 (beacon), RuuviTag 4-in-1 (beacon),
-// HiveInside ESP32-C6 (beacon or GATT), HiveHeart (GATT, beehivemonitoring.com).
-// Supported scale: HiveScale (GATT, beehivemonitoring.com) via ENABLE_BEEHIVE_GATT.
-// Supported bee counter: HiveTraffic (GATT). The separate ENABLE_WIRELESS_SCALE
-// flag below is captured for a future build and not consumed yet.
+// Each HIVE_<n>_JSON is the exact blob shape the portal itself saves — see
+// hiveToJson()/hiveFromJson() in firmware/src/hive_config.cpp:
+//   i   hive index (matches <n>)
+//   n   optional display name
+//   s   scale array (0 or 1 entries — MAX_SCALES_PER_HIVE is 1): either
+//         {"b":"hx","hx":0|1,"off":<raw offset>,"fac":<kg factor>}       (HX711, classic board only)
+//       or {"b":"nau","mux":-1..7,"adc":1|2,"off":...,"fac":...}         (NAU7802; mux -1 = main bus)
+//   ds  optional DS18B20 1-Wire ROM, 16 hex chars (omit to fall back to
+//       probe enumeration order — fine if you don't know ROMs yet)
+//   bl  optional array with AT MOST ONE entry: {"t":"holyiot"|"ruuvitag"|
+//       "hiveinside"|"hiveheart"|"beecounter"|"hivescale","m":"AA:BB:CC:DD:EE:FF"}
+//       — "hivescale" is a WIRELESS SCALE SOURCE (used instead of "s", not
+//       alongside a wired one or "ds"); every other type is the hive's one
+//       non-scale in-hive sensor and is mutually exclusive with "ds". NOTE:
+//       "beecounter" (wireless HiveTraffic) is currently only POLLED on hives
+//       1-2 (see docs/multi-hive.md's Known limitations) — pairing it to a
+//       higher hive is stored but has no effect yet.
 //
-// Each in-hive slot (INHIVE_1 -> hive 1, INHIVE_2 -> hive 2) records the chosen
-// sensor type, its transport and, for GATT devices, the service / characteristic
-// UUIDs. Example (HiveHeart on hive 1, HolyIot beacon on hive 2):
-//#define HIVEINSIDE_USE_GATT          1
-//#define INHIVE_1_TYPE                "hiveheart"
-//#define INHIVE_1_PROTOCOL            "gatt"
-//#define INHIVE_1_GATT_SERVICE_UUID   "0d01c3b8-eff2-44bc-9260-3256eb957268"
-//#define INHIVE_1_GATT_CHAR_UUID      "513849eb-913d-4f80-8c44-3f0685533d6e"
-//#define INHIVE_2_TYPE                "holyiot"
-//#define INHIVE_2_PROTOCOL            "beacon"
+// Example: 3 hives — hive 1 on HX711 #1 with a HiveHeart GATT sensor, hive 2
+// on HX711 #2 with a DS18B20 probe, hive 3 on a wireless HiveScale:
+//#define HIVE_COUNT 3
+//#define HIVE_1_JSON "{\"i\":1,\"n\":\"Hive 1\",\"s\":[{\"b\":\"hx\",\"hx\":0,\"off\":0,\"fac\":-7050.0}],\"bl\":[{\"t\":\"hiveheart\",\"m\":\"AA:BB:CC:DD:EE:01\"}]}"
+//#define HIVE_2_JSON "{\"i\":2,\"n\":\"Hive 2\",\"s\":[{\"b\":\"hx\",\"hx\":1,\"off\":0,\"fac\":-7050.0}],\"ds\":\"28FF64B2711304A3\"}"
+//#define HIVE_3_JSON "{\"i\":3,\"n\":\"Hive 3\",\"s\":[],\"bl\":[{\"t\":\"hivescale\",\"m\":\"AA:BB:CC:DD:EE:03\"}]}"
+// Also needs, since hive 1 and 3 use beehivemonitoring.com GATT sensors:
+//#define ENABLE_BEEHIVE_GATT 1
+//
+// Leaving HIVE_COUNT at its default (0, below) keeps the historical behavior:
+// first boot migrates whatever legacy 2-slot keys exist (or none) into a
+// 2-hive registry, exactly as before this feature existed. Once a device has
+// saved anything from the on-device portal, HIVE_COUNT/HIVE_i_JSON are never
+// consulted again — the portal's NVS registry always wins from then on.
+#define HIVE_COUNT 0
+
+// ==============================
+// WIRELESS SENSOR CATALOG — LEGACY 2-HIVE FORM (optional)
+// ==============================
+// Only read when HIVE_COUNT above is 0 (i.e. no HIVE_i_JSON pre-seed), and only
+// pre-seeds a beehivemonitoring.com HiveHeart pairing for the first two hives
+// (device_prefs.cpp writes INHIVE_n_MAC straight into the HiveHeart MAC slot
+// regardless of what device is actually paired) — it predates the general
+// per-hive sensor type. HolyIot / RuuviTag / HiveInside beacons and HiveTraffic
+// counters cannot be pre-seeded through this legacy form; use HIVE_COUNT /
+// HIVE_i_JSON above for those, or pair anything from the provisioning portal.
+//#define INHIVE_1_MAC                 "AA:BB:CC:DD:EE:01"   // HiveHeart on hive 1
+//#define INHIVE_2_MAC                 "AA:BB:CC:DD:EE:02"   // HiveHeart on hive 2
 
 // Wireless scale category (placeholder — not consumed yet).
 #define ENABLE_WIRELESS_SCALE        0
@@ -161,8 +196,6 @@
 // slot with a paired MAC is read over BLE; a slot without one falls back to the
 // wired I2C BeeCounter. The firmware uses the shared BEECOUNTER_GATT_* UUIDs.
 #define ENABLE_WIRELESS_BEECOUNTER   0
-//#define WBEECNT_1_TYPE               "beecounter"
-//#define WBEECNT_1_PROTOCOL           "gatt"
 //#define WBEECNT_1_MAC                "AA:BB:CC:DD:EE:FF"   // HiveTraffic counter 1
 //#define WBEECNT_2_MAC                "AA:BB:CC:DD:EE:00"   // HiveTraffic counter 2
 
