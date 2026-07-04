@@ -5,6 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Device config tool — HiveHub</title>
 <meta name="description" content="Optional HiveHub device config tool: build a firmware secrets.h in your browser to pre-seed a device before first boot. The recommended way to configure a device is the on-device provisioning portal. Nothing leaves your machine." />
+<meta name="color-scheme" content="light dark" />
+<!-- Set the theme before the stylesheet paints, so there's no light flash. -->
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem("hivehub-theme");
+      if (t !== "dark" && t !== "light") {
+        t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) { /* localStorage blocked — fall back to the light default */ }
+  })();
+</script>
 <link rel="stylesheet" href="assets/style.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%99%EF%B8%8F%3C/text%3E%3C/svg%3E" />
 </head>
@@ -20,6 +33,7 @@
       <a href="dashboard-demo/">Dashboard demo</a>
       <a href="insights.html">Insights</a>
       <a href="https://github.com/MacNite/HiveHub">GitHub</a>
+      <button data-theme-toggle class="btn small ghost theme-toggle" type="button" aria-label="Toggle dark mode"></button>
     </nav>
   </div>
 </header>
@@ -302,5 +316,6 @@
 
 <div class="toast" id="toast"></div>
 <script src="assets/configurator.js"></script>
+<script src="assets/theme.js"></script>
 </body>
 </html>

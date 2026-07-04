@@ -198,6 +198,8 @@ function wireEvents() {
   });
   ui.refreshBtn.addEventListener("click", loadData);
   window.addEventListener("resize", () => requestAnimationFrame(drawCharts));
+  // Canvas charts don't inherit CSS colours, so redraw them when the theme flips.
+  window.addEventListener("themechange", () => requestAnimationFrame(drawCharts));
   // auto-refresh every 60s
   setInterval(() => { if (!document.hidden && !state.loading) loadData(); }, 60000);
 }

@@ -5,6 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Insights — rule-based colony detection — HiveHub</title>
 <meta name="description" content="How the HiveHub Insights module turns weight, temperature, sound, entrance traffic and comb vibration into rule-based colony alerts: twelve detectors for swarming, queenlessness, robbing, foraging, winter risk and harvest timing." />
+<meta name="color-scheme" content="light dark" />
+<!-- Set the theme before the stylesheet paints, so there's no light flash. -->
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem("hivehub-theme");
+      if (t !== "dark" && t !== "light") {
+        t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) { /* localStorage blocked — fall back to the light default */ }
+  })();
+</script>
 <link rel="stylesheet" href="assets/style.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E" />
 </head>
@@ -22,6 +35,7 @@
       <a href="dashboard-demo/">Dashboard demo</a>
       <a href="configurator.html">Config tool</a>
       <a href="https://github.com/MacNite/HiveHub">GitHub</a>
+      <button data-theme-toggle class="btn small ghost theme-toggle" type="button" aria-label="Toggle dark mode"></button>
     </nav>
   </div>
 </header>
@@ -312,5 +326,6 @@ HARVEST_FLOW_KG_PER_WEEK        = 2.0
   </div>
 </footer>
 
+<script src="assets/theme.js"></script>
 </body>
 </html>

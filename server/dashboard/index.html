@@ -3,7 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>HiveHub Dashboard</title>
+  <!-- Set the theme before the stylesheet paints, so there's no light flash. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("hivehub-theme");
+        if (t !== "dark" && t !== "light") {
+          t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) { /* localStorage blocked — fall back to the light default */ }
+    })();
+  </script>
   <link rel="stylesheet" href="assets/style.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🐝</text></svg>" />
 </head>
@@ -45,6 +58,8 @@
         ↻ Refresh
       </button>
 
+      <button data-theme-toggle class="btn small ghost theme-toggle" type="button" aria-label="Toggle dark mode"></button>
+
       <div class="user-area" id="user-area" hidden>
         <span class="user-chip" id="user-chip"></span>
         <button id="logout-btn" class="btn small ghost" type="button" title="Sign out">Sign out</button>
@@ -66,6 +81,7 @@
 
   <div id="device-status" class="device-status" role="status" aria-live="polite" hidden></div>
 
+  <script src="assets/theme.js"></script>
   <script type="module" src="assets/app.js"></script>
 </body>
 </html>

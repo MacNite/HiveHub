@@ -5,12 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>HiveHub Dashboard — live demo</title>
   <meta name="description" content="Interactive demo of the built-in HiveHub dashboard with sample data — weight, temperature, audio, battery and insights for your self-hosted beehive monitor. No backend required." />
+  <meta name="color-scheme" content="light dark" />
+  <!-- Set the theme before the stylesheet paints, so there's no light flash. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("hivehub-theme");
+        if (t !== "dark" && t !== "light") {
+          t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) { /* localStorage blocked — fall back to the light default */ }
+    })();
+  </script>
   <link rel="stylesheet" href="assets/style.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🐝</text></svg>" />
   <style>
     /* demo-only chrome on top of the shared dashboard stylesheet */
     .demo-banner {
-      background: var(--ink); color: #fff; text-align: center;
+      background: var(--overlay-bg); color: var(--overlay-fg); text-align: center;
       font-size: .82rem; padding: .35rem .8rem;
     }
     .demo-banner a { color: var(--honey); font-weight: 700; }
@@ -63,6 +76,8 @@
       </div>
 
       <button id="refresh-btn" class="btn small" type="button" title="Refresh">↻ Refresh</button>
+
+      <button data-theme-toggle class="btn small ghost theme-toggle" type="button" aria-label="Toggle dark mode"></button>
     </div>
   </header>
 
@@ -75,6 +90,7 @@
 
   <div id="device-status" class="device-status" role="status" aria-live="polite" hidden></div>
 
+  <script src="assets/theme.js"></script>
   <script type="module" src="assets/app.js"></script>
 </body>
 </html>

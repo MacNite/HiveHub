@@ -3,6 +3,7 @@
    page (index.html) and the secrets.h configurator (configurator.html). */
 
 :root {
+  color-scheme: light;
   --honey: #f2a900;
   --honey-dark: #c98a00;
   --comb: #fff8e6;
@@ -18,6 +19,38 @@
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --radius: 14px;
   --shadow: 0 1px 2px rgba(31, 36, 33, .06), 0 8px 24px rgba(31, 36, 33, .06);
+
+  /* Surfaces previously hardcoded — tokenised so the dark theme can swap them. */
+  --nav-bg: rgba(251, 247, 238, .85);
+  --overlay-bg: var(--ink);   /* toast pill */
+  --overlay-fg: #ffffff;
+  --on-accent: #1f2421;       /* text on the honey accent */
+  --field-bg: #ffffff;        /* form inputs, sensor cards */
+}
+
+/* ── Dark theme ──────────────────────────────────────────────────
+   Set by a small inline script in each page's <head> (saved preference, else
+   the OS `prefers-color-scheme`), so pages paint in the right theme with no
+   flash. Toggled via the 🌙/☀️ button in the nav (see assets/theme.js). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --honey: #f5b421;
+  --honey-dark: #ffca4d;   /* hover reads brighter, not darker, on a dark bg */
+  --comb: #2c2717;
+  --ink: #f3eee1;
+  --ink-soft: #c2bcac;
+  --line: #38342a;
+  --card: #211f18;
+  --bg: #15140e;
+  --good: #6cc077;
+  --warn: #e6a93a;
+  --danger: #f0687d;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .45);
+  --nav-bg: rgba(21, 20, 14, .85);
+  --overlay-bg: #2f2b20;
+  --overlay-fg: var(--ink);
+  --on-accent: #1f2421;
+  --field-bg: #1b1a13;
 }
 
 * { box-sizing: border-box; }
@@ -40,7 +73,7 @@ a:hover { text-decoration: underline; }
 /* ── Header / nav ─────────────────────────────────────────────── */
 .site-nav {
   position: sticky; top: 0; z-index: 20;
-  background: rgba(251, 247, 238, .85);
+  background: var(--nav-bg);
   backdrop-filter: saturate(180%) blur(8px);
   border-bottom: 1px solid var(--line);
 }
@@ -59,14 +92,16 @@ a:hover { text-decoration: underline; }
   display: inline-flex; align-items: center; gap: .5rem;
   padding: .65rem 1.1rem; border-radius: 999px;
   font-weight: 700; font-size: .95rem; cursor: pointer;
-  border: 1px solid transparent; background: var(--honey); color: #1f2421;
+  border: 1px solid transparent; background: var(--honey); color: var(--on-accent);
   transition: transform .05s ease, box-shadow .15s ease, background .15s ease;
 }
 .btn:hover { background: var(--honey-dark); text-decoration: none; box-shadow: var(--shadow); }
 .btn:active { transform: translateY(1px); }
 .btn.ghost { background: transparent; border-color: var(--line); color: var(--ink); }
-.btn.ghost:hover { background: #fff; }
+.btn.ghost:hover { background: var(--card); }
 .btn.small { padding: .4rem .8rem; font-size: .85rem; }
+/* Icon-only theme switcher in the nav (🌙 / ☀️, filled by theme.js). */
+.theme-toggle { padding: .4rem; width: 2.1rem; justify-content: center; font-size: 1rem; line-height: 1; }
 
 /* ── Hero ─────────────────────────────────────────────────────── */
 .hero { padding: 4rem 0 3rem; }
@@ -103,7 +138,7 @@ section .sub { color: var(--ink-soft); margin: 0 0 2rem; max-width: 65ch; }
 }
 .step .n {
   width: 36px; height: 36px; border-radius: 50%; background: var(--honey);
-  color: #1f2421; font-weight: 800; display: grid; place-items: center;
+  color: var(--on-accent); font-weight: 800; display: grid; place-items: center;
 }
 .step h3 { margin: .1rem 0 .4rem; }
 .step p { margin: 0 0 .5rem; color: var(--ink-soft); }
@@ -140,7 +175,7 @@ fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
 .field input[type="url"],
 .field select {
   width: 100%; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 9px;
-  font-family: var(--sans); font-size: .95rem; background: #fff; color: var(--ink);
+  font-family: var(--sans); font-size: .95rem; background: var(--field-bg); color: var(--ink);
 }
 .field input:focus, .field select:focus { outline: 2px solid var(--honey); border-color: var(--honey); }
 
@@ -152,7 +187,7 @@ fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
 .toggle .t-title { font-weight: 700; }
 .toggle .t-desc { font-weight: 400; color: var(--ink-soft); font-size: .85rem; display: block; }
 
-.sensor { border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; margin: .7rem 0; background: #fffdf7; }
+.sensor { border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; margin: .7rem 0; background: var(--field-bg); }
 .sensor .opts { margin-top: .8rem; padding-top: .8rem; border-top: 1px dashed var(--line); display: none; }
 .sensor.on .opts { display: block; }
 .sensor .tag {
@@ -161,9 +196,11 @@ fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
 }
 .sensor .tag.exp { color: var(--warn); border-color: #e7c98a; background: #fff4dd; }
 .sensor .tag.ble { color: #1565c0; border-color: #bcd6f5; background: #eaf2fd; }
+:root[data-theme="dark"] .sensor .tag.exp { border-color: rgba(230, 169, 58, .4); background: rgba(230, 169, 58, .15); }
+:root[data-theme="dark"] .sensor .tag.ble { color: #8ab8ec; border-color: rgba(107, 167, 230, .4); background: rgba(107, 167, 230, .15); }
 
 /* Wireless sensor rows (dynamically added) */
-.wsensor { border: 1px solid var(--line); border-radius: 10px; padding: .7rem .85rem; margin: .6rem 0; background: #fff; }
+.wsensor { border: 1px solid var(--line); border-radius: 10px; padding: .7rem .85rem; margin: .6rem 0; background: var(--field-bg); }
 .wsensor .field { margin: .5rem 0; }
 .wsensor [data-wremove] { padding: .4rem .65rem; }
 #add-wireless[disabled] { opacity: .5; cursor: not-allowed; }
@@ -171,6 +208,8 @@ fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
 .note { font-size: .85rem; padding: .6rem .8rem; border-radius: 9px; margin-top: .7rem; }
 .note.warn { background: #fff4dd; border: 1px solid #e7c98a; color: var(--warn); }
 .note.info { background: #eaf2fd; border: 1px solid #bcd6f5; color: #1565c0; }
+:root[data-theme="dark"] .note.warn { background: rgba(230, 169, 58, .12); border-color: rgba(230, 169, 58, .4); }
+:root[data-theme="dark"] .note.info { background: rgba(107, 167, 230, .12); border-color: rgba(107, 167, 230, .4); color: #8ab8ec; }
 
 /* Output panel */
 .output { position: sticky; top: 76px; }
@@ -182,7 +221,7 @@ fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
 }
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
-  background: var(--ink); color: #fff; padding: .7rem 1.2rem; border-radius: 999px;
+  background: var(--overlay-bg); color: var(--overlay-fg); padding: .7rem 1.2rem; border-radius: 999px;
   font-weight: 700; opacity: 0; pointer-events: none; transition: all .2s ease; z-index: 50;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -201,6 +240,10 @@ fieldset legend { font-weight: 800; padding: 0 .5rem; font-size: 1.05rem; }
 .sev.watch    { color: #7a5e00;      border-color: #ecd98a; background: #fdf6dc; }
 .sev.warning  { color: var(--warn);  border-color: #e7c98a; background: #fff4dd; }
 .sev.critical { color: var(--danger); border-color: #f0c2cb; background: #fdecef; }
+:root[data-theme="dark"] .sev.info     { color: #8ab8ec; border-color: rgba(107, 167, 230, .4); background: rgba(107, 167, 230, .14); }
+:root[data-theme="dark"] .sev.watch    { color: #e6c357; border-color: rgba(230, 195, 87, .4); background: rgba(230, 195, 87, .12); }
+:root[data-theme="dark"] .sev.warning  { color: #e6a93a; border-color: rgba(230, 169, 58, .45); background: rgba(230, 169, 58, .14); }
+:root[data-theme="dark"] .sev.critical { color: #f2818f; border-color: rgba(240, 104, 125, .45); background: rgba(240, 104, 125, .14); }
 
 /* Severity legend cards */
 .sev-legend { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
