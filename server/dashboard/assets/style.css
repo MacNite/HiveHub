@@ -3,6 +3,7 @@
    the app shell: top bar, fixed sidebar and a responsive card grid. */
 
 :root {
+  color-scheme: light;
   --honey: #f2a900;
   --honey-dark: #c98a00;
   --comb: #fff8e6;
@@ -22,6 +23,55 @@
   --shadow: 0 1px 2px rgba(31, 36, 33, .06), 0 8px 24px rgba(31, 36, 33, .06);
   --topbar-h: 60px;
   --sidebar-w: 220px;
+
+  /* Surfaces that used to be hardcoded — tokenised so the dark theme can swap
+     them (see the [data-theme="dark"] block below). */
+  --topbar-bg: rgba(251, 247, 238, .9);
+  --overlay-bg: var(--ink);   /* toasts, floating status pill */
+  --overlay-fg: #ffffff;
+  --on-accent: #1f2421;       /* text on the honey accent */
+
+  /* Chart canvas colours — read at draw time by charts.js (getComputedStyle),
+     so the dependency-free canvas charts follow the active theme. */
+  --chart-axis: #8a9088;
+  --chart-grid: rgba(31, 36, 33, .08);
+  --chart-cursor: rgba(31, 36, 33, .35);
+  --chart-cursor-strong: rgba(31, 36, 33, .5);
+  --chart-latest: #111111;
+  --chart-marker-ring: #ffffff;
+}
+
+/* ── Dark theme ──────────────────────────────────────────────────
+   Applied when <html data-theme="dark"> is set. The attribute is chosen up
+   front by a tiny inline script in index.html (saved preference, else the OS
+   `prefers-color-scheme`), so the whole app — including the login screen —
+   paints in the right theme with no flash. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --honey: #f5b421;
+  --honey-dark: #ffca4d;   /* hover reads brighter, not darker, on a dark bg */
+  --comb: #2c2717;         /* subtle warm hover/fill tint */
+  --ink: #f3eee1;
+  --ink-soft: #c2bcac;
+  --ink-faint: #8c8676;
+  --line: #38342a;
+  --card: #211f18;
+  --bg: #15140e;
+  --good: #6cc077;
+  --warn: #e6a93a;
+  --danger: #f0687d;
+  --info: #6ba7e6;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .45);
+  --topbar-bg: rgba(21, 20, 14, .9);
+  --overlay-bg: #2f2b20;
+  --overlay-fg: var(--ink);
+  --on-accent: #1f2421;
+  --chart-axis: #8c8676;
+  --chart-grid: rgba(243, 238, 225, .09);
+  --chart-cursor: rgba(243, 238, 225, .38);
+  --chart-cursor-strong: rgba(243, 238, 225, .55);
+  --chart-latest: #f3eee1;
+  --chart-marker-ring: #211f18;   /* == --card, so markers punch out on lines */
 }
 
 * { box-sizing: border-box; }
@@ -39,7 +89,7 @@ body {
   height: var(--topbar-h);
   display: flex; align-items: center; gap: 1.25rem;
   padding: 0 1.1rem;
-  background: rgba(251, 247, 238, .9);
+  background: var(--topbar-bg);
   backdrop-filter: saturate(180%) blur(8px);
   border-bottom: 1px solid var(--line);
 }
@@ -63,12 +113,12 @@ select {
   padding: .35rem .7rem;
 }
 .range-group button:hover { background: var(--comb); }
-.range-group button.active { background: var(--honey); color: #1f2421; }
+.range-group button.active { background: var(--honey); color: var(--on-accent); }
 
 .btn {
   display: inline-flex; align-items: center; gap: .4rem;
   padding: .55rem 1rem; border-radius: 999px; font-weight: 700; font-size: .9rem;
-  cursor: pointer; border: 1px solid transparent; background: var(--honey); color: #1f2421;
+  cursor: pointer; border: 1px solid transparent; background: var(--honey); color: var(--on-accent);
   transition: background .15s ease, box-shadow .15s ease, transform .05s ease;
 }
 .btn:hover { background: var(--honey-dark); box-shadow: var(--shadow); }
@@ -79,6 +129,9 @@ select {
 .btn.small { padding: .4rem .8rem; font-size: .82rem; }
 .btn.danger { background: var(--danger); color: #fff; }
 .btn.danger:hover { background: #8c0019; }
+
+/* Icon-only theme switcher in the top bar (🌙 / ☀️, filled by theme.js). */
+.theme-toggle { padding: .4rem; width: 2.1rem; justify-content: center; font-size: 1rem; line-height: 1; }
 
 /* ── Layout ──────────────────────────────────────────────────── */
 .layout { display: flex; min-height: calc(100vh - var(--topbar-h)); }
@@ -96,7 +149,7 @@ select {
   font: inherit; font-weight: 600; color: var(--ink-soft); cursor: pointer; text-align: left;
 }
 .nav-item:hover { background: var(--comb); color: var(--ink); }
-.nav-item.active { background: var(--honey); color: #1f2421; }
+.nav-item.active { background: var(--honey); color: var(--on-accent); }
 .nav-item .nav-ico { font-size: 1.05rem; width: 1.3rem; text-align: center; }
 
 .content { flex: 1 1 auto; padding: 1.25rem; min-width: 0; }
@@ -139,6 +192,13 @@ select {
 .badge.danger { background: #fbe3e6; color: var(--danger); }
 .badge.info { background: #e4eefb; color: var(--info); }
 .badge.muted { background: #eee9dd; color: var(--ink-soft); }
+/* Dark theme: the light pastel badge fills don't work on dark cards — swap them
+   for translucent tints of the same semantic hue. */
+:root[data-theme="dark"] .badge.good   { background: rgba(108, 192, 119, .16); }
+:root[data-theme="dark"] .badge.warn   { background: rgba(230, 169, 58, .16); }
+:root[data-theme="dark"] .badge.danger { background: rgba(240, 104, 125, .16); }
+:root[data-theme="dark"] .badge.info   { background: rgba(107, 167, 230, .16); }
+:root[data-theme="dark"] .badge.muted  { background: rgba(243, 238, 225, .08); }
 .dot { width: .55rem; height: .55rem; border-radius: 50%; display: inline-block; }
 .dot.good { background: var(--good); } .dot.warn { background: var(--warn); }
 .dot.danger { background: var(--danger); } .dot.muted { background: var(--ink-faint); }
@@ -184,14 +244,14 @@ select {
 .empty-state { display: grid; place-items: center; min-height: 40vh; color: var(--ink-faint); font-size: 1.05rem; }
 .toast {
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);
-  background: var(--ink); color: #fff; padding: .7rem 1.1rem; border-radius: 10px;
+  background: var(--overlay-bg); color: var(--overlay-fg); padding: .7rem 1.1rem; border-radius: 10px;
   box-shadow: var(--shadow); z-index: 60; font-size: .9rem; max-width: 90vw;
 }
-.toast.error { background: var(--danger); }
-.toast.success { background: var(--good); }
+.toast.error { background: var(--danger); color: #fff; }
+.toast.success { background: var(--good); color: #fff; }
 .device-status {
   position: fixed; bottom: 1rem; right: 1rem; z-index: 25;
-  background: var(--ink); color: #fff; font-size: .78rem;
+  background: var(--overlay-bg); color: var(--overlay-fg); font-size: .78rem;
   padding: .4rem .8rem; border-radius: 999px; opacity: .85;
 }
 

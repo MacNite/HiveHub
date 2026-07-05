@@ -23,7 +23,15 @@ export function withAlpha(hex, alpha) {
 const AXIS = "#8a9088";
 const GRID = "rgba(31,36,33,0.08)";
 const FONT = "11px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-const LATEST_COLOR = "#111"; // spectrum chart: latest snapshot, drawn in black regardless of hive colour
+const LATEST_COLOR = "#111"; // spectrum chart: latest snapshot, drawn near-black on light / near-white on dark
+
+// Canvas can't inherit CSS custom properties, so read the theme's chart colours
+// off :root at draw time (they change when the user toggles dark mode). Falls
+// back to the light-theme constants above if the variable isn't set.
+function themeColor(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
 
 function niceTicks(min, max, count = 5) {
   if (min === max) { min -= 1; max += 1; }
@@ -89,13 +97,16 @@ export function drawLineChart(canvas, series, opts = {}) {
   const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
   canvas._xScale = { padL, plotW, tMin, tMax };
 
+  const axis = themeColor("--chart-axis", AXIS);
+  const grid = themeColor("--chart-grid", GRID);
+
   ctx.font = FONT;
   ctx.textBaseline = "middle";
 
   // Y gridlines + labels
   const yTicks = niceTicks(yMin, yMax, 5);
-  ctx.strokeStyle = GRID;
-  ctx.fillStyle = AXIS;
+  ctx.strokeStyle = grid;
+  ctx.fillStyle = axis;
   ctx.lineWidth = 1;
   ctx.textAlign = "right";
   for (const t of yTicks) {
@@ -115,7 +126,7 @@ export function drawLineChart(canvas, series, opts = {}) {
   for (let i = 0; i <= xCount; i++) {
     const t = tMin + (spanMs * i) / xCount;
     const x = xOf(t);
-    ctx.fillStyle = AXIS;
+    ctx.fillStyle = axis;
     ctx.fillText(new Date(t).toLocaleString(undefined, dtOpts), x, cssH - padB / 2);
   }
 
@@ -139,10 +150,11 @@ export function drawLineChart(canvas, series, opts = {}) {
     const ct = Math.min(tMax, Math.max(tMin, opts.cursorT));
     const cx = xOf(ct);
     ctx.setLineDash([4, 3]);
-    ctx.strokeStyle = "rgba(31,36,33,0.35)";
+    ctx.strokeStyle = themeColor("--chart-cursor", "rgba(31,36,33,0.35)");
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, cssH - padB); ctx.stroke();
     ctx.setLineDash([]);
+    const markerRing = themeColor("--chart-marker-ring", "#fff");
     for (const s of series) {
       const p = valueAt(s.points, ct);
       if (!p) continue;
@@ -152,7 +164,7 @@ export function drawLineChart(canvas, series, opts = {}) {
       ctx.fillStyle = s.color;
       ctx.fill();
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = "#fff";
+      ctx.strokeStyle = markerRing;
       ctx.stroke();
     }
   }
@@ -224,13 +236,16 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
   canvas._catScale = { padL, plotW, n };
 
+  const axis = themeColor("--chart-axis", AXIS);
+  const grid = themeColor("--chart-grid", GRID);
+
   ctx.font = FONT;
   ctx.textBaseline = "middle";
 
   // Y gridlines + labels
   const yTicks = niceTicks(yMin, yMax, 5);
-  ctx.strokeStyle = GRID;
-  ctx.fillStyle = AXIS;
+  ctx.strokeStyle = grid;
+  ctx.fillStyle = axis;
   ctx.lineWidth = 1;
   ctx.textAlign = "right";
   for (const t of yTicks) {
@@ -243,9 +258,9 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   ctx.textAlign = "center";
   for (let i = 0; i < n; i++) {
     const x = xOf(i);
-    ctx.strokeStyle = GRID;
+    ctx.strokeStyle = grid;
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, cssH - padB); ctx.stroke();
-    ctx.fillStyle = AXIS;
+    ctx.fillStyle = axis;
     ctx.fillText(categories[i], x, cssH - padB / 2);
   }
 
@@ -270,10 +285,11 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
     if (started) ctx.stroke();
   });
 
-  // Latest snapshot: solid black line + dots, drawn last so it's on top.
+  // Latest snapshot: solid high-contrast line + dots, drawn last so it's on top.
+  const latestColor = themeColor("--chart-latest", LATEST_COLOR);
   const latest = snapshots[snapshots.length - 1];
   if (latest) {
-    ctx.strokeStyle = LATEST_COLOR;
+    ctx.strokeStyle = latestColor;
     ctx.lineWidth = 2.4;
     ctx.beginPath();
     let started = false;
@@ -283,7 +299,7 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
       if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
     });
     if (started) ctx.stroke();
-    ctx.fillStyle = LATEST_COLOR;
+    ctx.fillStyle = latestColor;
     latest.values.forEach((v, i) => {
       if (typeof v !== "number" || !Number.isFinite(v)) return;
       ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2); ctx.fill();
@@ -298,14 +314,14 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
     const idx = Math.min(n - 1, Math.max(0, opts.cursorIndex));
     const cx = xOf(idx);
     ctx.setLineDash([4, 3]);
-    ctx.strokeStyle = "rgba(31,36,33,0.35)";
+    ctx.strokeStyle = themeColor("--chart-cursor", "rgba(31,36,33,0.35)");
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(cx, padT); ctx.lineTo(cx, cssH - padB); ctx.stroke();
     ctx.setLineDash([]);
     const stats = opts.bandStats && opts.bandStats[idx];
     if (stats) {
       const yLo = yOf(stats.min), yHi = yOf(stats.max);
-      ctx.strokeStyle = "rgba(31,36,33,0.5)";
+      ctx.strokeStyle = themeColor("--chart-cursor-strong", "rgba(31,36,33,0.5)");
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(cx, yLo); ctx.lineTo(cx, yHi); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx - 5, yLo); ctx.lineTo(cx + 5, yLo); ctx.stroke();

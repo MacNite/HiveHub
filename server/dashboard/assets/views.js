@@ -158,7 +158,7 @@ function spectrumChartCard(title, sub, categories, snapshots, bandStats, color, 
     el("span", { class: "lg" }, "Older"),
     el("span", { class: "spectrum-gradient", style: `background:linear-gradient(90deg, ${withAlpha(color, 0.15)}, ${color})` }),
     el("span", { class: "lg" },
-      el("span", { class: "swatch", style: "background:#111" }), "Latest"),
+      el("span", { class: "swatch", style: "background:var(--chart-latest)" }), "Latest"),
     hint);
   const rangeNote = oldest && newest ? ` (${fmtDateTime(oldest.t)} – ${fmtDateTime(newest.t)})` : "";
   const chart = { canvas, kind: "spectrum", categories, snapshots, bandStats, opts: { ...opts, color }, hint };
@@ -568,7 +568,7 @@ function renderFrequency(root, state) {
     if (snapshots.length) {
       const bandStats = bandMinMax(state.measurements, keysList);
       charts.push(spectrumChartCard(`Frequency bands — ${hiveLabel(state, n)}`,
-        "FFT energy by band, like a spectrum analyzer — black is the latest reading, fainter lines are earlier ones",
+        "FFT energy by band, like a spectrum analyzer — the bold line is the latest reading, fainter lines are earlier ones",
         categories, snapshots, bandStats, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
     }
   });
