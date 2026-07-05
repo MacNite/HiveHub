@@ -158,6 +158,8 @@ select {
 .view-head { margin: 0 0 1rem; }
 .view-head h1 { margin: 0; font-size: 1.5rem; }
 .view-head p { margin: .25rem 0 0; color: var(--ink-soft); }
+.view-head p .doc-link { color: var(--honey-dark); font-weight: 600; text-decoration: none; }
+.view-head p .doc-link:hover { text-decoration: underline; }
 
 /* ── Cards & grid ────────────────────────────────────────────── */
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }

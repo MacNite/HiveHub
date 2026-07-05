@@ -687,7 +687,12 @@ function renderCounter(root, state) {
 function renderInsights(root, state) {
   const ins = state.insights;
   const node = el("div", {});
-  node.append(viewHead("Insights", "Rule-based colony alerts (14-day lookback)"));
+  node.append(viewHead("Insights", [
+    "Rule-based colony alerts (14-day lookback) · ",
+    el("a", { class: "doc-link", href: "https://github.com/MacNite/HiveHub/blob/main/docs/insights-sources-tldr.md", target: "_blank", rel: "noopener noreferrer" }, "TL;DR docs"),
+    " · ",
+    el("a", { class: "doc-link", href: "https://github.com/MacNite/HiveHub/blob/main/docs/insights.md", target: "_blank", rel: "noopener noreferrer" }, "Full docs"),
+  ]));
   if (!ins) { node.append(el("div", { class: "card" }, "No insight data.")); root.append(node); return; }
 
   const cats = ins.categories || {};
