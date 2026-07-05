@@ -573,6 +573,29 @@ function renderFrequency(root, state) {
   root.append(tsView("Frequency bands", "FFT energy by acoustic band", state, { charts }));
 }
 
+// Wireless (BLE) in-hive sensors that report their own battery, separate from
+// the ESP32 collector pack. Voltage-based sensors (HiveScale/HiveHeart) and the
+// percent-based BLE sensor (HolyIot/Ruuvi/HiveInside) are charted on separate
+// axes because their units differ. `low` drives a low-battery hint on the card.
+const WIRELESS_BATTERY = [
+  { key: (n) => `hivescale_${n}_battery_v`, label: "HiveScale", unit: "V", digits: 2, low: 3.4 },
+  { key: (n) => `hiveheart_${n}_battery_v`, label: "HiveHeart", unit: "V", digits: 2, low: 3.4 },
+  { key: (n) => `ble_${n}_battery_percent`, label: "BLE sensor", unit: "%", digits: 0, low: 20 },
+];
+
+// One line-chart series per hive+sensor that has data, for the given unit.
+function wirelessBatterySeries(state, hives, unit) {
+  const out = [];
+  for (const n of hives) {
+    for (const src of WIRELESS_BATTERY) {
+      if (src.unit !== unit) continue;
+      const s = seriesFrom(state.measurements, src.key(n), `${hiveLabel(state, n)} · ${src.label}`, paletteColor(out.length));
+      if (s.points.length) out.push(s);
+    }
+  }
+  return out;
+}
+
 function renderBattery(root, state) {
   const m = state.latest || {};
   const cards = [
@@ -589,7 +612,39 @@ function renderBattery(root, state) {
       [seriesFrom(state.measurements, "solar_power_mw", "Power mW", PALETTE[0]),
        seriesFrom(state.measurements, "solar_current_ma", "Current mA", PALETTE[1])], { yDigits: 0 }),
   ];
-  root.append(tsView("Battery & power", "Battery and solar telemetry", state, { cards, charts }));
+
+  const node = el("div", {});
+  node.append(viewHead("Battery & power", "Collector battery, solar and wireless-sensor batteries"));
+  node.append(el("div", { class: "grid" }, ...cards));
+  node.append(el("div", { class: "grid wide", style: "margin-top:1rem" }, ...charts));
+
+  // Wireless (BLE) sensor batteries — each in-hive scale/acoustic/environment
+  // sensor runs on its own cell, so surface them apart from the collector pack.
+  const hives = selectedHives(state);
+  const wCards = [];
+  for (const n of hives) {
+    for (const src of WIRELESS_BATTERY) {
+      const v = latestOf(state.measurements, src.key(n));
+      if (!isNum(v)) continue;
+      wCards.push(metricCard(`${hiveLabel(state, n)} · ${src.label}`, fmt(v, src.digits), src.unit,
+        v <= src.low ? "Low battery" : "Wireless sensor"));
+    }
+  }
+  const wCharts = [];
+  const voltSeries = wirelessBatterySeries(state, hives, "V");
+  const pctSeries = wirelessBatterySeries(state, hives, "%");
+  if (voltSeries.length) wCharts.push(chartCard("Wireless sensor battery", "In-hive BLE scale & acoustic sensor voltage", voltSeries, { unit: "V", yDigits: 2 }));
+  if (pctSeries.length) wCharts.push(chartCard("Wireless sensor charge", "In-hive BLE sensor state of charge", pctSeries, { unit: "%", yDigits: 0 }));
+
+  node.append(el("div", { style: "margin-top:2rem" }, viewHead("Wireless sensors", "Battery of each wireless in-hive sensor")));
+  if (wCards.length || wCharts.length) {
+    if (wCards.length) node.append(el("div", { class: "grid" }, ...wCards));
+    if (wCharts.length) node.append(el("div", { class: "grid wide", style: "margin-top:1rem" }, ...wCharts));
+  } else {
+    node.append(el("div", { class: "card" }, el("p", { class: "muted-text" },
+      "No wireless-sensor batteries reported by this device.")));
+  }
+  root.append(node);
 }
 
 function renderConnectivity(root, state) {

@@ -61,8 +61,9 @@ Related settings (all optional, see `server/.env.example`):
 
 - **Monitoring:** latest-value cards and time-series charts (day / 7 days / month
   / year / 5 years) for weight, temperatures, humidity & pressure, audio levels,
-  FFT frequency bands, battery & solar, connectivity and bee-counter traffic,
-  plus the rule-based insight summary.
+  FFT frequency bands, battery & solar (including the battery of each wireless
+  in-hive sensor), connectivity and bee-counter traffic, plus the rule-based
+  insight summary.
 - **Insights history:** the Insights view lists the persisted lifecycle of every
   alert — active *and* resolved — with an all/active/resolved filter, so you can
   see warnings that have since cleared, not just the current state.

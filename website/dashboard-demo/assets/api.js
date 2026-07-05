@@ -44,6 +44,11 @@ function point(dev, t, i) {
   const w1 = 42 + 3 * monthSwell + 0.8 * Math.sin(dayPhase) + 0.15 * noise(seed + 2);
   const w2 = 38 + 2.6 * monthSwell + 0.7 * Math.cos(dayPhase) + 0.15 * noise(seed + 3);
   const soc = Math.max(28, Math.min(100, 72 + 26 * Math.sin(dayPhase - 1.0)));
+  // Wireless in-hive sensors slowly discharge over the demo window (a coin/
+  // 18650 cell), with a little daily temperature ripple on the voltage.
+  const days = Math.max(0, (Date.now() - t) / DAY); // 0 at newest, larger going back
+  const scaleV = 3.75 - 0.02 * days + 0.02 * Math.sin(dayPhase) + 0.01 * noise(seed + 30);
+  const blePct = Math.max(5, Math.min(100, 88 - 2.4 * days + 1.5 * noise(seed + 31)));
   const solarP = dev.solar ? Math.max(0, 1500 * Math.sin(dayPhase - 1.2) + 80 * noise(seed + 4)) : null;
   const traffic = Math.max(0, 42 * Math.sin(dayPhase - 0.8));
 
@@ -83,6 +88,10 @@ function point(dev, t, i) {
     bee_counter_1_total_out: 11850 + Math.round((t / DAY) % 1000) * 4,
     bee_counter_1_interval_in: Math.round(traffic + 4 * noise(seed + 15) + 4),
     bee_counter_1_interval_out: Math.round(traffic * 0.95 + 4 * noise(seed + 16) + 4),
+    // Wireless in-hive sensors on hive 1: a BLE weighing scale (voltage) and a
+    // HolyIot/Ruuvi environment beacon (percent).
+    hivescale_1_battery_v: scaleV,
+    ble_1_battery_percent: Math.round(blePct),
   };
 
   if (dev.twoHives) {
@@ -93,6 +102,8 @@ function point(dev, t, i) {
     m.bee_counter_2_total_out = 9700 + Math.round((t / DAY) % 1000) * 3;
     m.bee_counter_2_interval_in = Math.round(traffic * 0.8 + 4 * noise(seed + 18) + 3);
     m.bee_counter_2_interval_out = Math.round(traffic * 0.78 + 4 * noise(seed + 19) + 3);
+    // Hive 2 carries a wireless acoustic sensor (HiveHeart) on its own cell.
+    m.hiveheart_2_battery_v = 3.68 - 0.02 * days + 0.015 * Math.sin(dayPhase) + 0.01 * noise(seed + 32);
   }
   if (dev.solar) {
     m.solar_power_mw = solarP;
