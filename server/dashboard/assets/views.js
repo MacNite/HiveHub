@@ -903,6 +903,61 @@ function renderDevice(root, state) {
   });
   const uploadCard = el("div", { class: "card" }, el("h2", {}, "Upload firmware"), uploadForm);
 
+  // SD-card data import. Uploads a backup pulled off the scale in AP mode
+  // (measurements.ndjson or the hivescale-sd-data.tar download) and back-fills the
+  // readings the device could not deliver while offline. Re-uploading the same
+  // file is safe — rows already stored are skipped by (device, timestamp).
+  const sdFileInput = el("input", {
+    type: "file",
+    accept: ".ndjson,.tar,.json,application/x-tar,application/octet-stream",
+    required: true,
+  });
+  const sdPicked = el("p", { class: "note", hidden: true });
+  sdFileInput.addEventListener("change", () => {
+    const f = sdFileInput.files[0];
+    sdPicked.hidden = !f;
+    if (f) sdPicked.textContent = `${f.name} (${(f.size / 1024).toFixed(0)} KB)`;
+  });
+  const sdBtn = el("button", { class: "btn", type: "submit" }, "Upload SD data");
+  const sdResult = el("p", { class: "note", hidden: true });
+  const sdForm = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "SD backup file"), sdFileInput),
+    sdPicked,
+    el("p", { class: "note" },
+      "Accepts measurements.ndjson or the hivescale-sd-data.tar download. " +
+      "Re-uploading the same file is safe — existing readings are skipped automatically."),
+    el("div", { class: "form-actions" }, sdBtn),
+    sdResult);
+  sdForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!sdFileInput.files[0]) return;
+    const fd = new FormData();
+    fd.append("file", sdFileInput.files[0]);
+    sdBtn.disabled = true;
+    const restore = sdBtn.textContent;
+    sdBtn.textContent = "Importing…";
+    try {
+      const res = await state.actions.importSdData(fd);
+      const dupes = res.duplicates
+        ? `, ${res.duplicates} duplicate${res.duplicates === 1 ? "" : "s"} skipped`
+        : "";
+      const unreadable = res.skipped
+        ? ` · ${res.skipped} unreadable line${res.skipped === 1 ? "" : "s"} skipped`
+        : "";
+      sdResult.hidden = false;
+      sdResult.textContent =
+        `Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${dupes}. ` +
+        `Parsed ${res.parsed} record${res.parsed === 1 ? "" : "s"}${unreadable}.`;
+      state.toast(`Imported ${res.inserted} new readings`, "success");
+      sdForm.reset();
+      sdPicked.hidden = true;
+      state.reload();
+    }
+    catch (err) { state.toast(err.message, "error"); }
+    finally { sdBtn.disabled = false; sdBtn.textContent = restore; }
+  });
+  const sdCard = el("div", { class: "card" }, el("h2", {}, "Import SD card data"), sdForm);
+
   // Calibration
   const calBadge = el("span", { class: `badge ${state.latest?.calibration_mode ? "warn" : "muted"}` },
     state.latest?.calibration_mode ? "Calibration mode active" : "Normal mode");
@@ -967,6 +1022,7 @@ function renderDevice(root, state) {
     el("div", { class: "grid wide" }, configCard, channelsCard),
     el("div", { class: "grid wide", style: "margin-top:1rem" }, fwPanel, uploadCard),
     el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard),
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, sdCard),
     el("div", { class: "grid wide", style: "margin-top:1rem" }, ...accountCards));
   root.append(node);
 }

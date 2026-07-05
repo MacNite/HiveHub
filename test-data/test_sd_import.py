@@ -9,9 +9,11 @@ the pure logic in sd_import.split_new_and_duplicate, which the import endpoint
 uses to decide which rows to insert.
 """
 
+import io
+import tarfile
 from datetime import datetime, timedelta, timezone
 
-from sd_import import split_new_and_duplicate
+from sd_import import parse_sd_measurements, split_new_and_duplicate
 
 
 NOW = datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc)
@@ -64,6 +66,61 @@ new, dupes = split_new_and_duplicate(keys, existing)
 check("inserted + duplicates == received", len(new) + dupes == len(keys))
 
 
+# ── SD file parsing (parse_sd_measurements) ─────────────────────────────────
+# The local dashboard and the mock HivePal proxy both parse the raw SD download
+# (NDJSON or the uncompressed TAR) client/server-side before de-duplicating.
+
+# 6. Raw NDJSON: objects are kept in order; blank, non-object and corrupt lines
+#    are skipped (not counted as records).
+ndjson = (
+    b'{"device_id":"d1","timestamp":"2024-06-15T12:00:00Z","scale_1_weight_kg":42.1}\n'
+    b"\n"
+    b"not-json\n"
+    b'{"device_id":"d1","timestamp":"2024-06-15T12:15:00Z"}\n'
+    b"[1,2,3]\n"
+)
+res = parse_sd_measurements(ndjson, "measurements.ndjson")
+check("ndjson keeps the two valid objects", len(res.records) == 2)
+check("ndjson skips corrupt line and JSON array", res.skipped == 2)
+check("ndjson preserves record fields", res.records[0]["scale_1_weight_kg"] == 42.1)
+
+
+def _make_tar(members):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, content in members:
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+_tar = _make_tar(
+    [
+        (
+            "measurements.ndjson",
+            b'{"device_id":"d1","timestamp":"2024-06-15T12:00:00Z"}\n'
+            b'{"device_id":"d1","timestamp":"2024-06-15T12:15:00Z"}\n',
+        ),
+        ("cache.ndjson", b'{"device_id":"d1","timestamp":"2024-06-15T12:30:00Z"}\n'),
+        ("README.txt", b"not measurements\n"),
+    ]
+)
+
+# 7. TAR download: every *.ndjson member is parsed, other members are ignored.
+res = parse_sd_measurements(_tar, "hivescale-sd-data.tar")
+check("tar reads all ndjson members", len(res.records) == 3)
+check("tar ignores non-ndjson members", res.skipped == 0)
+
+# 8. A mislabelled upload (wrong extension) is still detected via the USTAR magic.
+res = parse_sd_measurements(_tar, "download.bin")
+check("tar is sniffed even without a .tar name", len(res.records) == 3)
+
+# 9. Empty input yields no records and no crash.
+res = parse_sd_measurements(b"", "measurements.ndjson")
+check("empty file yields no records", res.records == [] and res.skipped == 0)
+
+
 if _failures:
     raise SystemExit(f"{_failures} check(s) failed")
-print("\nAll SD-import de-duplication checks passed.")
+print("\nAll SD-import parsing and de-duplication checks passed.")
