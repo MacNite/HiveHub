@@ -472,11 +472,26 @@ def import_measurements(
     file and rows already stored are both counted and ignored.
     """
     require_device_role(user_id, device_id, ["owner", "admin"])
+    return bulk_import_measurements(device_id, payload.measurements)
 
+
+def bulk_import_measurements(
+    device_id: str, measurements: list[MeasurementIn]
+) -> dict:
+    """Insert a batch of measurements for ``device_id``, skipping duplicates.
+
+    Shared by the HivePal-facing bulk import endpoint
+    (``POST /api/v1/app/devices/{device_id}/measurements/import``) and the local
+    dashboard's SD-upload endpoint so both paths de-duplicate and fan out
+    multi-hive rows identically. The caller is responsible for authorization; this
+    function assumes the device is already owned by the requester.
+
+    Returns ``{status, device_id, received, inserted, duplicates}``.
+    """
     # Force the path device_id onto every row so a file cannot smuggle readings
     # in under a different device the caller may not own.
     prepared: list[tuple[datetime, MeasurementIn]] = []
-    for measurement in payload.measurements:
+    for measurement in measurements:
         # Clamp missing *and* implausible timestamps (e.g. the 1970 epoch a
         # no-RTC device writes into its SD cache) to the server clock, matching
         # the live-ingest path. Storing 1970 verbatim would otherwise both
@@ -491,7 +506,7 @@ def import_measurements(
     for measured_at, measurement in prepared:
         record_by_key.setdefault(measured_at, measurement)
 
-    received = len(payload.measurements)
+    received = len(measurements)
     inserted = 0
     duplicates = 0
     with get_conn() as conn:

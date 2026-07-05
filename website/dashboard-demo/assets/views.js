@@ -878,6 +878,32 @@ function renderDevice(root, state) {
   });
   const uploadCard = el("div", { class: "card" }, el("h2", {}, "Upload firmware"), uploadForm);
 
+  // SD-card data import — back-fill readings from a backup pulled off the scale
+  // in AP mode (measurements.ndjson or the hivescale-sd-data.tar download).
+  const sdFileInput = el("input", {
+    type: "file",
+    accept: ".ndjson,.tar,.json,application/x-tar,application/octet-stream",
+    required: true,
+  });
+  const sdBtn = el("button", { class: "btn", type: "submit" }, "Upload SD data");
+  const sdForm = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "SD backup file"), sdFileInput),
+    el("p", { class: "note" },
+      "Accepts measurements.ndjson or the hivescale-sd-data.tar download. " +
+      "Re-uploading the same file is safe — existing readings are skipped automatically."),
+    el("div", { class: "form-actions" }, sdBtn));
+  sdForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!sdFileInput.files[0]) return;
+    const fd = new FormData();
+    fd.append("file", sdFileInput.files[0]);
+    sdBtn.disabled = true;
+    try { await state.actions.importSdData(fd); state.toast("SD data imported", "success"); state.reload(); }
+    catch (err) { state.toast(err.message, "error"); }
+    finally { sdBtn.disabled = false; }
+  });
+  const sdCard = el("div", { class: "card" }, el("h2", {}, "Import SD card data"), sdForm);
+
   // Calibration
   const calBadge = el("span", { class: `badge ${state.latest?.calibration_mode ? "warn" : "muted"}` },
     state.latest?.calibration_mode ? "Calibration mode active" : "Normal mode");
@@ -942,6 +968,7 @@ function renderDevice(root, state) {
     el("div", { class: "grid wide" }, configCard, channelsCard),
     el("div", { class: "grid wide", style: "margin-top:1rem" }, fwPanel, uploadCard),
     el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard),
+    el("div", { class: "grid wide", style: "margin-top:1rem" }, sdCard),
     el("div", { class: "grid wide", style: "margin-top:1rem" }, ...accountCards));
   root.append(node);
 }

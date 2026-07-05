@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import datetime
 from typing import Any, Literal, Optional
@@ -65,10 +66,12 @@ from insights_api import (
 from measurements import (
     CHART_MEASUREMENT_COLUMNS,
     MEASUREMENT_SELECT_COLUMNS,
+    bulk_import_measurements,
     execute_measurement_query,
     serialize_chart_measurements,
     serialize_measurements,
 )
+from pydantic import ValidationError
 from schemas import (
     AppCalibrationModeStartIn,
     DashboardChangePasswordIn,
@@ -79,8 +82,11 @@ from schemas import (
     DeviceChannelsUpdateIn,
     DeviceCommandIn,
     DeviceConfigUpdate,
+    MEASUREMENT_IMPORT_MAX,
+    MeasurementIn,
     TempCoefficientFitIn,
 )
+from sd_import import parse_sd_measurements
 
 router = APIRouter()
 
@@ -316,6 +322,87 @@ def local_latest_measurements(device_id: str, limit: int = 1):
             )
             rows = cur.fetchall()
     return serialize_measurements(rows)
+
+
+# SD backup uploads are fully buffered in memory, so cap the upload size to
+# avoid excessive memory usage / DoS from oversized files. Overridable via env
+# var to allow tuning without a code change (mirrors the HivePal proxy's cap).
+SD_IMPORT_MAX_FILE_SIZE = int(
+    os.environ.get("HIVEHUB_SD_IMPORT_MAX_FILE_SIZE", str(250 * 1024 * 1024))
+)
+
+
+@router.post(
+    "/api/v1/local/devices/{device_id}/measurements/import",
+    dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+)
+async def local_import_sd_measurements(
+    device_id: str,
+    file: UploadFile = File(...),
+):
+    """Import measurements from an SD-card backup pulled off the scale in AP mode.
+
+    Accepts either the raw ``measurements.ndjson`` or the
+    ``hivescale-sd-data.tar`` download. The file is parsed server-side into
+    measurement records, each row is pinned to the path ``device_id``, and the
+    batch is de-duplicated on ``(device_id, measured_at)`` so re-uploading the
+    same file inserts nothing. Mirrors the HivePal SD-upload feature for the
+    self-hosted dashboard that ships with HiveHub.
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="No SD data file provided")
+    if len(data) > SD_IMPORT_MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"SD file exceeds the {SD_IMPORT_MAX_FILE_SIZE // (1024 * 1024)} MB "
+                "upload limit"
+            ),
+        )
+
+    records, skipped = parse_sd_measurements(data, file.filename)
+
+    # Validate each record independently so a single corrupt row does not sink the
+    # whole upload — invalid rows join the unreadable-line "skipped" tally.
+    measurements: list[MeasurementIn] = []
+    for record in records:
+        # Fill the required device_id when the row omits it; bulk_import_measurements
+        # re-pins it to the path device anyway, so a mismatching value is harmless.
+        record.setdefault("device_id", device_id)
+        try:
+            measurements.append(MeasurementIn.model_validate(record))
+        except ValidationError:
+            skipped += 1
+
+    if not measurements:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No measurements found in the uploaded file. Expected a HiveHub "
+                ".ndjson backup or the .tar SD download."
+            ),
+        )
+
+    received = 0
+    inserted = 0
+    duplicates = 0
+    for start in range(0, len(measurements), MEASUREMENT_IMPORT_MAX):
+        chunk = measurements[start : start + MEASUREMENT_IMPORT_MAX]
+        result = bulk_import_measurements(device_id, chunk)
+        received += result["received"]
+        inserted += result["inserted"]
+        duplicates += result["duplicates"]
+
+    return {
+        "status": "ok",
+        "device_id": device_id,
+        "parsed": len(records),
+        "skipped": skipped,
+        "received": received,
+        "inserted": inserted,
+        "duplicates": duplicates,
+    }
 
 
 @router.get("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_DEP)

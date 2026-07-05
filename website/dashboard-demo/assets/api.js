@@ -192,6 +192,7 @@ export const api = {
 
   // write actions are disabled in the demo
   uploadFirmware: demoErr,
+  importSdData: demoErr,
   approveFirmware: demoErr,
   startCalibration: demoErr,
   stopCalibration: demoErr,

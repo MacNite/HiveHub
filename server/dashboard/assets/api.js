@@ -40,6 +40,15 @@ export const api = {
   latest: (deviceId, limit = 1) =>
     req(`/devices/${encodeURIComponent(deviceId)}/measurements/latest?limit=${limit}`),
 
+  // Upload an SD-card backup (measurements.ndjson or hivescale-sd-data.tar) pulled
+  // off the scale in AP mode. formData carries the file under the "file" field;
+  // the browser sets the multipart boundary, so no Content-Type header here.
+  importSdData: (deviceId, formData) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/measurements/import`, {
+      method: "POST",
+      body: formData,
+    }),
+
   config: (deviceId) => req(`/devices/${encodeURIComponent(deviceId)}/config`),
 
   updateConfig: (deviceId, patch) =>
