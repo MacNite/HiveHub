@@ -24,7 +24,9 @@ from db import get_conn
 
 
 def require_api_key(x_api_key: str = Header(default="")) -> str:
-    if x_api_key != API_KEY:
+    # compare_digest keeps the comparison constant-time so the key cannot be
+    # recovered byte-by-byte from response-timing differences.
+    if not hmac.compare_digest(x_api_key.encode(), API_KEY.encode()):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return x_api_key
 
@@ -32,7 +34,9 @@ def require_api_key(x_api_key: str = Header(default="")) -> str:
 def require_hivepal_service_key(x_hivepal_service_key: str = Header(default="")):
     if not HIVEPAL_SERVICE_API_KEY:
         raise HTTPException(status_code=500, detail="HIVEPAL_SERVICE_API_KEY is not configured")
-    if x_hivepal_service_key != HIVEPAL_SERVICE_API_KEY:
+    if not hmac.compare_digest(
+        x_hivepal_service_key.encode(), HIVEPAL_SERVICE_API_KEY.encode()
+    ):
         raise HTTPException(status_code=401, detail="Invalid HivePal service key")
 
 
@@ -314,24 +318,35 @@ def verify_device_key(device_id: str, api_key: str):
     if len(api_key) < 16:
         raise HTTPException(status_code=401, detail="Invalid API key")
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    # Verify BEFORE writing anything: the previous single UPDATE bumped
+    # last_seen_at (keeping an offline device looking "online" to anyone probing
+    # with a wrong key) and registered the caller's key on rows whose key slot
+    # was still empty — even when the request ultimately failed.
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                "SELECT api_key_hash FROM devices WHERE device_id = %s;",
+                (device_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=401, detail="Invalid API key")
+            if row[0] is not None and not hmac.compare_digest(row[0], key_hash):
+                raise HTTPException(
+                    status_code=401, detail="API key does not match this device"
+                )
+            # Authenticated (or legitimate first contact): register the key if
+            # the slot is still empty and record genuine device contact.
             cur.execute(
                 """
                 UPDATE devices
                 SET api_key_hash = COALESCE(api_key_hash, %s),
                     last_seen_at = now()
-                WHERE device_id = %s
-                RETURNING api_key_hash
+                WHERE device_id = %s;
                 """,
                 (key_hash, device_id),
             )
-            row = cur.fetchone()
             conn.commit()
-    if row is None:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    if row[0] != key_hash:
-        raise HTTPException(status_code=401, detail="API key does not match this device")
 
 
 class DeviceKeyGuard:

@@ -10,9 +10,16 @@ services:
       HIVEPAL_JWT_SECRET: '${HIVEPAL_JWT_SECRET:-}'
       DATABASE_URL: '${DATABASE_URL:-postgresql://hivescale:Strong-Password@hivescale-db:5432/hivescale}'
       TZ: Europe/Berlin
-      # Built-in auth-free local dashboard at /dashboard (single-owner self-host).
-      # Leave false on multi-tenant / internet-facing deployments.
+      # Built-in login-protected local dashboard at /dashboard (single-owner
+      # self-host; the first visit runs a setup wizard that creates the admin
+      # account). It exposes every device on this server behind that login, so
+      # leave it false on multi-tenant deployments.
       ENABLE_LOCAL_DASHBOARD: '${ENABLE_LOCAL_DASHBOARD:-false}'
+      # Rate limiter: trust CF-Connecting-IP / X-Forwarded-For for the client
+      # IP. Keep true behind a reverse proxy (the documented setup); set false
+      # when the API port is exposed directly, otherwise clients can spoof the
+      # header to bypass rate limiting.
+      TRUST_PROXY_HEADERS: '${TRUST_PROXY_HEADERS:-true}'
       # ── Optional MQTT bridge (Home Assistant etc.) — disabled by default ──
       MQTT_ENABLED: '${MQTT_ENABLED:-false}'
       MQTT_HOST: '${MQTT_HOST:-localhost}'

@@ -18,6 +18,15 @@
     })();
   </script>
   <link rel="stylesheet" href="assets/style.css" />
+  <!-- Preload the whole ES-module graph. Without these the browser discovers
+       app.js's imports only after fetching app.js (and charts.js only after
+       views.js), serialising three network round-trips before init() runs. -->
+  <link rel="modulepreload" href="assets/app.js" />
+  <link rel="modulepreload" href="assets/api.js" />
+  <link rel="modulepreload" href="assets/auth.js" />
+  <link rel="modulepreload" href="assets/format.js" />
+  <link rel="modulepreload" href="assets/views.js" />
+  <link rel="modulepreload" href="assets/charts.js" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🐝</text></svg>" />
 </head>
 <body>

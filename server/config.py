@@ -49,6 +49,14 @@ RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").strip().lower(
     "1", "true", "yes", "on",
 )
 RATE_LIMIT_DEFAULT = os.environ.get("RATE_LIMIT_DEFAULT", "120/minute")
+# Whether the rate limiter may trust CF-Connecting-IP / X-Forwarded-For for the
+# client IP. Defaults to true because the documented deployment sits behind a
+# reverse proxy (which overwrites these headers). Set it to false when the API
+# is exposed directly — otherwise any client can spoof the header to dodge the
+# limiter or poison another client's bucket.
+TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
 # Maximum size of a normal (JSON) request body. A measurement is only a few KB;
 # this leaves generous head-room while preventing memory/storage amplification.
 MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_BYTES", str(256 * 1024)))
