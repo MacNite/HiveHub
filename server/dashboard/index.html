@@ -39,17 +39,35 @@
     </div>
 
     <div class="topbar-controls">
-      <label class="field">
-        <span class="field-label">Device</span>
-        <select id="device-select" aria-label="Select device"></select>
-      </label>
+      <!-- Cross-device hive picker: one menu grouped by device replaces the old
+           Device + Hive dropdowns, so hives from different devices can be
+           compared side by side. Populated by app.js. -->
+      <div class="field hive-picker" id="hive-picker">
+        <span class="field-label">Hives</span>
+        <button class="hive-trigger" id="hive-trigger" type="button"
+                aria-haspopup="dialog" aria-expanded="false" aria-controls="hive-pop">
+          <span class="hive-trigger-label" id="hive-trigger-label">Select hives</span>
+          <span class="hive-count" id="hive-count" hidden>0</span>
+          <span class="hive-caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="hive-pop" id="hive-pop" role="dialog" aria-label="Select hives to compare" hidden>
+          <input class="hive-search" id="hive-search" type="text"
+                 placeholder="Filter hives or devices…" aria-label="Filter hives" />
+          <div class="hive-pop-list" id="hive-pop-list"><!-- groups injected by app.js --></div>
+          <div class="hive-pop-foot">
+            <button class="link-btn" id="hive-clear" type="button">Clear</button>
+            <span class="hive-pop-hint" id="hive-pop-hint"></span>
+            <button class="btn small" id="hive-done" type="button">Done</button>
+          </div>
+        </div>
+      </div>
 
-      <label class="field">
-        <span class="field-label">Hive</span>
-        <select id="hive-select" aria-label="Select hive">
-          <!-- populated by app.js from the device's reported hives (up to 18) -->
-          <option value="all">All hives</option>
-        </select>
+      <!-- Only shown when the selection spans more than one device: scopes the
+           device-level panels (Connectivity, collector battery, Insights,
+           Device & admin, ambient readings) to a single device. -->
+      <label class="field" id="active-device-field" hidden>
+        <span class="field-label">Device details</span>
+        <select id="active-device-select" aria-label="Device for device-level panels"></select>
       </label>
 
       <div class="field" id="range-field">
@@ -75,6 +93,9 @@
       </div>
     </div>
   </header>
+
+  <!-- ── Selection strip: the current comparison set, always visible ── -->
+  <div class="selection-strip" id="selection-strip" hidden></div>
 
   <div class="layout">
     <!-- ── Sidebar: one entry per data group (rigid, beehivemonitoring-style) ── -->

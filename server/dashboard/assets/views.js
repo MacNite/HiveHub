@@ -188,16 +188,16 @@ function metricCard(label, value, unit, sub) {
 // shown under the list (e.g. the shared ambient reading); `subFn(n)`, when
 // given, returns a small per-row annotation (e.g. the hive's 24h delta) or
 // null to omit it for that row.
-function perHiveCard(state, label, hives, unit, cellFn, footer, subFn) {
-  if (hives.length <= 1) {
-    return metricCard(label, hives.length ? cellFn(hives[0]) : DASH, unit, footer);
+function perHiveCard(state, label, refs, unit, cellFn, footer, subFn) {
+  if (refs.length <= 1) {
+    return metricCard(label, refs.length ? cellFn(refs[0]) : DASH, unit, footer);
   }
-  const rows = hives.map((n) => {
-    const sub = subFn ? subFn(n) : null;
+  const rows = refs.map((ref) => {
+    const sub = subFn ? subFn(ref) : null;
     return el("div", { class: "hive-row" },
-      el("span", { class: "hive-row-name" }, hiveLabel(state, n)),
+      el("span", { class: "hive-row-name" }, refLabel(state, ref)),
       el("span", { class: "hive-row-val" },
-        cellFn(n), unit ? el("span", { class: "hive-row-unit" }, " " + unit) : null,
+        cellFn(ref), unit ? el("span", { class: "hive-row-unit" }, " " + unit) : null,
         sub ? el("span", { class: "hive-row-delta" }, sub) : null));
   });
   return el("div", { class: "card" },
@@ -267,9 +267,46 @@ function weightKey(m, n) {
   return m && m[comp] != null ? comp : `scale_${n}_weight_kg`;
 }
 
-// hives shown given the top-bar hive selector ("all" | a specific index)
-function selectedHives(state) {
-  return state.hive === "all" ? availableHives(state) : [Number(state.hive)];
+// The comparison selection resolved into per-hive "refs". Each ref carries its
+// own device's data (latest reading, measurement history, channel names) so hives
+// from different devices can be charted side by side. Colour is assigned by
+// position — the same cycle as paletteColor — so a hive's swatch in the top-bar
+// chips matches its series here.
+function selectedRefs(state) {
+  return (state.selection || []).map((s) => ({
+    deviceId: s.deviceId,
+    hive: Number(s.hive),
+    key: `${s.deviceId}::${s.hive}`,
+    device: state.deviceMeta(s.deviceId),
+    latest: state.deviceLatest(s.deviceId),
+    measurements: state.deviceMeasurements(s.deviceId),
+    channels: state.deviceChannels(s.deviceId),
+  }));
+}
+
+// A device-shaped object so hiveLabel()/availableHives() resolve names for any
+// ref's device (custom channel names exist only for the active device; others
+// fall back to the firmware-reported hive name).
+function refState(ref) { return { latest: ref.latest, channels: ref.channels, device: ref.device }; }
+
+// A hive's display label. Device-qualified ("Linden · Garden") only while more
+// than one device is being compared, so the single-device case stays clean.
+function refLabel(state, ref) {
+  const base = hiveLabel(refState(ref), ref.hive);
+  if (!state.multiDevice) return base;
+  const dev = ref.device?.display_name || ref.device?.device_id || "";
+  return dev ? `${base} · ${dev}` : base;
+}
+
+// A note naming which device a device-scoped panel reflects — shown only while
+// several devices are compared, where "Battery", "Signal" etc. would otherwise be
+// ambiguous. Points at the "Device details" top-bar switcher.
+function deviceContextNote(state, what) {
+  if (!state.multiDevice) return null;
+  const name = state.device?.display_name || state.device?.device_id || "—";
+  return el("div", { class: "device-context-note" },
+    el("span", {}, `${what} shown for `), el("b", {}, name),
+    el("span", {}, " — switch with “Device details” in the top bar."));
 }
 
 // latest non-null among a list of candidate keys (first match wins)
@@ -309,19 +346,19 @@ function signed(v, digits, unit) {
 
 // ── OVERVIEW ─────────────────────────────────────────────────────────────────
 function renderOverview(root, state) {
-  const m = state.latest || {};
-  const hives = availableHives(state);
+  const refs = selectedRefs(state);
+  const m = state.latest || {};   // active device — for the device-level cards
   let totalWeight = 0, anyWeight = false;
-  for (const n of hives) {
-    const v = m[weightKey(m, n)];
+  for (const ref of refs) {
+    const v = ref.latest ? ref.latest[weightKey(ref.latest, ref.hive)] : null;
     if (isNum(v)) { totalWeight += v; anyWeight = true; }
   }
-  const w24 = hives.length ? changeOver(state.measurements, weightKey(m, hives[0]), 24) : null;
   // per-hive 24h weight deltas; total delta only when every hive has one, so a
   // hive with a data gap can't silently skew the apiary-wide number
-  const deltas = new Map(hives.map((n) => [n, changeOver(state.measurements, weightKey(m, n), 24)]));
-  const total24 = hives.length && hives.every((n) => deltas.get(n) != null)
-    ? hives.reduce((sum, n) => sum + deltas.get(n), 0)
+  const deltas = new Map(refs.map((ref) => [ref.key, changeOver(ref.measurements, weightKey(ref.latest || {}, ref.hive), 24)]));
+  const w24 = refs.length ? deltas.get(refs[0].key) : null;
+  const total24 = refs.length && refs.every((ref) => deltas.get(ref.key) != null)
+    ? refs.reduce((sum, ref) => sum + deltas.get(ref.key), 0)
     : null;
 
   const ins = state.insights;
@@ -329,24 +366,24 @@ function renderOverview(root, state) {
   const sevBadge = el("span", { class: `badge ${sevClass(sev)}` },
     el("span", { class: `dot ${sevClass(sev)}` }), sev ? sev : "OK");
 
+  const hiveTemp = (ref) => (ref.latest ? fmt(ref.latest[`hive_${ref.hive}_temp_c`], 1) : DASH);
+  const hiveHum = (ref) => (ref.latest ? fmt(ref.latest[`hive_${ref.hive}_humidity_percent`], 0) : DASH);
   const cards = [
-    hives.length > 1
-      ? perHiveCard(state, "Weight", hives, "kg",
-          (n) => fmt(m[weightKey(m, n)], 2),
+    refs.length > 1
+      ? perHiveCard(state, "Weight", refs, "kg",
+          (ref) => (ref.latest ? fmt(ref.latest[weightKey(ref.latest, ref.hive)], 2) : DASH),
           anyWeight
             ? `Total ${fmt(totalWeight, 2)} kg${total24 != null ? ` · 24h ${signed(total24, 2, "kg")}` : ""}`
             : "Total of active scales",
-          (n) => (deltas.get(n) != null ? signed(deltas.get(n), 2) : null))
+          (ref) => (deltas.get(ref.key) != null ? signed(deltas.get(ref.key), 2) : null))
       : metricCard("Weight", anyWeight ? fmt(totalWeight, 2) : DASH, "kg",
-          hives.length === 0
-            ? "No hives reported yet"
+          refs.length === 0
+            ? "No hives selected"
             : w24 != null ? `24h ${signed(w24, 2, "kg")}` : "Total of active scales"),
-    perHiveCard(state, "Hive temperature", hives, "°C",
-      (n) => fmt(m[`hive_${n}_temp_c`], 1),
-      isNum(m.ambient_temp_c) ? `Ambient ${fmt(m.ambient_temp_c, 1)} °C` : "Brood zone"),
-    hives.length > 1
-      ? perHiveCard(state, "In-hive humidity", hives, "%",
-          (n) => fmt(m[`hive_${n}_humidity_percent`], 0),
+    perHiveCard(state, "Hive temperature", refs, "°C", hiveTemp,
+      isNum(m.ambient_temp_c) ? `Ambient ${fmt(m.ambient_temp_c, 1)} °C${state.multiDevice ? ` (${state.device?.display_name || state.device?.device_id})` : ""}` : "Brood zone"),
+    refs.length > 1
+      ? perHiveCard(state, "In-hive humidity", refs, "%", hiveHum,
           isNum(m.ambient_humidity_percent) ? `Ambient ${fmt(m.ambient_humidity_percent, 1)} %` : "Brood area")
       : metricCard("Humidity", fmt(m.ambient_humidity_percent, 1), "%",
           isNum(m.hive_1_humidity_percent) ? `In-hive ${fmt(m.hive_1_humidity_percent, 0)} %` : "Ambient"),
@@ -369,16 +406,28 @@ function renderOverview(root, state) {
       el("div", { class: "row" }, el("span", { class: "k" }, "Firmware"), el("span", { class: "v" }, m.firmware_version || DASH)),
       el("div", { class: "row" }, el("span", { class: "k" }, "Boot count"), el("span", { class: "v" }, fmtInt(m.boot_count)))));
 
-  root.append(
-    viewHead("Overview", `${state.device?.display_name || state.device?.device_id} — last seen ${relAge(state.device?.last_seen_at)}`),
+  // Subtitle reflects the whole comparison set, not a single device.
+  const nDev = new Set(refs.map((r) => r.deviceId)).size;
+  const subtitle = refs.length === 0
+    ? "No hives selected — open the Hives menu in the top bar"
+    : state.multiDevice
+      ? `${refs.length} hives across ${nDev} devices`
+      : `${state.device?.display_name || state.device?.device_id} — last seen ${relAge(state.device?.last_seen_at)}`;
+
+  // Filter nulls: deviceContextNote() returns null on a single-device selection,
+  // and raw DOM append() would otherwise stringify it into a "null" text node.
+  root.append(...[
+    viewHead("Overview", subtitle),
+    deviceContextNote(state, "Battery, signal and status"),
     el("div", { class: "grid" }, ...cards),
     el("div", { class: "grid wide", style: "margin-top:1rem" },
       statusCard,
       highestAlertCard(ins),
       chartCard("Weight trend", "Compensated mass over the selected range",
-        hives.map((n, i) =>
-          seriesFrom(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i))),
-        { unit: "kg", yDigits: 1 })));
+        refs.map((ref, i) =>
+          seriesFrom(ref.measurements, weightKey(ref.latest || {}, ref.hive), refLabel(state, ref), paletteColor(i))),
+        { unit: "kg", yDigits: 1 })),
+  ].filter(Boolean));
 }
 
 function highestAlertCard(ins) {
@@ -405,34 +454,41 @@ function tsView(title, desc, state, { cards = [], charts = [] }) {
 }
 
 function renderTemperature(root, state) {
-  const m = state.latest || {};
-  const hives = selectedHives(state);
-  const cards = hives.map((n) =>
-    metricCard(`${hiveLabel(state, n)} temp`, fmt(m[`hive_${n}_temp_c`], 1), "°C",
-      isNum(m[`hive_${n}_humidity_percent`]) ? `Humidity ${fmt(m[`hive_${n}_humidity_percent`], 0)} %` : "In-hive"));
-  cards.push(metricCard("Ambient", fmt(m.ambient_temp_c, 1), "°C", "Outside the hive"));
+  const refs = selectedRefs(state);
+  const m = state.latest || {};   // active device (for the ambient reference)
+  const cards = refs.map((ref) => {
+    const t = ref.latest ? ref.latest[`hive_${ref.hive}_temp_c`] : null;
+    const h = ref.latest ? ref.latest[`hive_${ref.hive}_humidity_percent`] : null;
+    return metricCard(`${refLabel(state, ref)} temp`, fmt(t, 1), "°C",
+      isNum(h) ? `Humidity ${fmt(h, 0)} %` : "In-hive");
+  });
+  cards.push(metricCard("Ambient", fmt(m.ambient_temp_c, 1), "°C",
+    state.multiDevice ? `${state.device?.display_name || state.device?.device_id}` : "Outside the hive"));
 
-  const series = hives.map((n, i) =>
-    seriesFrom(state.measurements, `hive_${n}_temp_c`, `${hiveLabel(state, n)}`, paletteColor(i)));
-  series.push(seriesFrom(state.measurements, "ambient_temp_c", "Ambient", paletteColor(hives.length)));
+  const series = refs.map((ref, i) =>
+    seriesFrom(ref.measurements, `hive_${ref.hive}_temp_c`, refLabel(state, ref), paletteColor(i)));
+  series.push(seriesFrom(state.measurements, "ambient_temp_c",
+    state.multiDevice ? `Ambient · ${state.device?.display_name || state.device?.device_id}` : "Ambient", paletteColor(refs.length)));
 
-  root.append(tsView("Temperature", "Inside and ambient temperature", state,
-    { cards, charts: [chartCard("Temperature", null, series, { unit: "°C", yDigits: 1 })] }));
+  const node = tsView("Temperature", "Inside and ambient temperature", state,
+    { cards, charts: [chartCard("Temperature", null, series, { unit: "°C", yDigits: 1 })] });
+  const note = deviceContextNote(state, "Ambient temperature");
+  if (note) node.insertBefore(note, node.children[1]);
+  root.append(node);
 }
 
 function renderWeight(root, state) {
-  const m = state.latest || {};
-  const hives = selectedHives(state);
-  const cards = hives.map((n) => {
-    const key = weightKey(m, n);
-    const c24 = changeOver(state.measurements, key, 24);
-    return metricCard(`${hiveLabel(state, n)} weight`, fmt(m[key], 2), "kg",
+  const refs = selectedRefs(state);
+  const cards = refs.map((ref) => {
+    const key = weightKey(ref.latest || {}, ref.hive);
+    const c24 = changeOver(ref.measurements, key, 24);
+    return metricCard(`${refLabel(state, ref)} weight`, fmt(ref.latest ? ref.latest[key] : null, 2), "kg",
       c24 != null ? `24h ${signed(c24, 2, "kg")}` : "Compensated");
   });
-  const series = hives.map((n, i) =>
-    seriesFrom(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i)));
-  const dailyMax = hives.map((n, i) =>
-    dailyMaxSeries(state.measurements, weightKey(m, n), hiveLabel(state, n), paletteColor(i)));
+  const series = refs.map((ref, i) =>
+    seriesFrom(ref.measurements, weightKey(ref.latest || {}, ref.hive), refLabel(state, ref), paletteColor(i)));
+  const dailyMax = refs.map((ref, i) =>
+    dailyMaxSeries(ref.measurements, weightKey(ref.latest || {}, ref.hive), refLabel(state, ref), paletteColor(i)));
 
   root.append(tsView("Weight", "Mass changes and harvest trend", state,
     { cards, charts: [
@@ -442,25 +498,31 @@ function renderWeight(root, state) {
 }
 
 function renderEnvironment(root, state) {
-  const m = state.latest || {};
-  const hives = selectedHives(state);
+  const refs = selectedRefs(state);
+  const m = state.latest || {};   // active device — ambient humidity + pressure
   const pressureKeys = ["ble_1_pressure_hpa", "ble_2_pressure_hpa", "hivescale_1_pressure_hpa", "hivescale_2_pressure_hpa"];
   const cards = [
-    metricCard("Ambient humidity", fmt(m.ambient_humidity_percent, 1), "%", "Outside the hive"),
-    perHiveCard(state, "In-hive humidity", hives, "%",
-      (n) => fmt(m[`hive_${n}_humidity_percent`], 1), "Brood area"),
+    metricCard("Ambient humidity", fmt(m.ambient_humidity_percent, 1), "%",
+      state.multiDevice ? `${state.device?.display_name || state.device?.device_id}` : "Outside the hive"),
+    perHiveCard(state, "In-hive humidity", refs, "%",
+      (ref) => fmt(ref.latest ? ref.latest[`hive_${ref.hive}_humidity_percent`] : null, 1), "Brood area"),
     metricCard("Pressure", fmt(latestCoalesce([m], pressureKeys), 0), "hPa", "Barometric"),
   ];
   const charts = [
     chartCard("Humidity", "Ambient and in-hive relative humidity",
-      [seriesFrom(state.measurements, "ambient_humidity_percent", "Ambient", paletteColor(hives.length)),
-       ...hives.map((n, i) =>
-         seriesFrom(state.measurements, `hive_${n}_humidity_percent`, hiveLabel(state, n), paletteColor(i)))],
+      [seriesFrom(state.measurements, "ambient_humidity_percent",
+         state.multiDevice ? `Ambient · ${state.device?.display_name || state.device?.device_id}` : "Ambient", paletteColor(refs.length)),
+       ...refs.map((ref, i) =>
+         seriesFrom(ref.measurements, `hive_${ref.hive}_humidity_percent`, refLabel(state, ref), paletteColor(i)))],
       { unit: "%", yDigits: 0 }),
     chartCard("Pressure", "Barometric pressure around the hive",
-      [seriesCoalesce(state.measurements, pressureKeys, "Pressure", PALETTE[3])], { unit: "hPa", yDigits: 0 }),
+      [seriesCoalesce(state.measurements, pressureKeys,
+        state.multiDevice ? `Pressure · ${state.device?.display_name || state.device?.device_id}` : "Pressure", PALETTE[3])], { unit: "hPa", yDigits: 0 }),
   ];
-  root.append(tsView("Environment", "Humidity and air pressure", state, { cards, charts }));
+  const node = tsView("Environment", "Humidity and air pressure", state, { cards, charts });
+  const note = deviceContextNote(state, "Ambient humidity and pressure");
+  if (note) node.insertBefore(note, node.children[1]);
+  root.append(node);
 }
 
 // Candidate mic keys for hive n, most-specific first. The multi-hive firmware
@@ -477,19 +539,19 @@ function micKeys(n, suffix) {
 }
 
 function renderAudio(root, state) {
-  const m = state.latest || {};
-  const hives = selectedHives(state);
-  const cards = hives.map((n) => {
-    const rms = latestCoalesce([m], micKeys(n, "rms_dbfs"));
-    const peak = latestCoalesce([m], micKeys(n, "peak_dbfs"));
-    return metricCard(`${hiveLabel(state, n)} RMS`, fmt(rms, 1), "dBFS",
+  const m = state.latest || {};   // active device — for the sample-rate card
+  const refs = selectedRefs(state);
+  const cards = refs.map((ref) => {
+    const rms = ref.latest ? latestCoalesce([ref.latest], micKeys(ref.hive, "rms_dbfs")) : null;
+    const peak = ref.latest ? latestCoalesce([ref.latest], micKeys(ref.hive, "peak_dbfs")) : null;
+    return metricCard(`${refLabel(state, ref)} RMS`, fmt(rms, 1), "dBFS",
       isNum(peak) ? `Peak ${fmt(peak, 1)}` : "Sound level");
   });
   cards.push(metricCard("Sample rate", fmtInt(m.mic_sample_rate_hz), "Hz",
     isNum(m.mic_sample_frames) ? `${fmtInt(m.mic_sample_frames)} frames` : "Microphone"));
 
-  const rms = hives.map((n, i) => seriesCoalesce(state.measurements, micKeys(n, "rms_dbfs"), hiveLabel(state, n), PALETTE[i]));
-  const peak = hives.map((n, i) => seriesCoalesce(state.measurements, micKeys(n, "peak_dbfs"), hiveLabel(state, n), PALETTE[i]));
+  const rms = refs.map((ref, i) => seriesCoalesce(ref.measurements, micKeys(ref.hive, "rms_dbfs"), refLabel(state, ref), paletteColor(i)));
+  const peak = refs.map((ref, i) => seriesCoalesce(ref.measurements, micKeys(ref.hive, "peak_dbfs"), refLabel(state, ref), paletteColor(i)));
   const charts = [
     chartCard("Sound level (RMS)", "Per-hive microphone RMS", rms, { unit: "dBFS", yDigits: 0 }),
     chartCard("Peak level", "Per-hive microphone peak", peak, { unit: "dBFS", yDigits: 0 }),
@@ -559,15 +621,15 @@ function bandMinMax(measurements, keysList) {
 }
 
 function renderFrequency(root, state) {
-  const hives = selectedHives(state);
+  const refs = selectedRefs(state);
   const categories = BANDS.map(([, label]) => label);
   const charts = [];
-  hives.forEach((n, i) => {
-    const keysList = BANDS.map(([k]) => micKeys(n, `band_${k}_dbfs`));
-    const snapshots = spectrumSnapshots(state.measurements, keysList);
+  refs.forEach((ref, i) => {
+    const keysList = BANDS.map(([k]) => micKeys(ref.hive, `band_${k}_dbfs`));
+    const snapshots = spectrumSnapshots(ref.measurements, keysList);
     if (snapshots.length) {
-      const bandStats = bandMinMax(state.measurements, keysList);
-      charts.push(spectrumChartCard(`Frequency bands — ${hiveLabel(state, n)}`,
+      const bandStats = bandMinMax(ref.measurements, keysList);
+      charts.push(spectrumChartCard(`Frequency bands — ${refLabel(state, ref)}`,
         "FFT energy by band, like a spectrum analyzer — the bold line is the latest reading, fainter lines are earlier ones",
         categories, snapshots, bandStats, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
     }
@@ -588,13 +650,14 @@ const WIRELESS_BATTERY = [
   { key: (n) => `ble_${n}_battery_percent`, label: "BLE sensor", unit: "%", digits: 0, low: 20 },
 ];
 
-// One line-chart series per hive+sensor that has data, for the given unit.
-function wirelessBatterySeries(state, hives, unit) {
+// One line-chart series per hive+sensor that has data, for the given unit. Reads
+// each ref's own device measurements so wireless batteries compare across devices.
+function wirelessBatterySeries(state, refs, unit) {
   const out = [];
-  for (const n of hives) {
+  for (const ref of refs) {
     for (const src of WIRELESS_BATTERY) {
       if (src.unit !== unit) continue;
-      const s = seriesFrom(state.measurements, src.key(n), `${hiveLabel(state, n)} · ${src.label}`, paletteColor(out.length));
+      const s = seriesFrom(ref.measurements, src.key(ref.hive), `${refLabel(state, ref)} · ${src.label}`, paletteColor(out.length));
       if (s.points.length) out.push(s);
     }
   }
@@ -620,24 +683,27 @@ function renderBattery(root, state) {
 
   const node = el("div", {});
   node.append(viewHead("Battery & power", "Collector battery, solar and wireless-sensor batteries"));
+  const note = deviceContextNote(state, "The collector battery and solar readings below are");
+  if (note) node.append(note);
   node.append(el("div", { class: "grid" }, ...cards));
   node.append(el("div", { class: "grid wide", style: "margin-top:1rem" }, ...charts));
 
   // Wireless (BLE) sensor batteries — each in-hive scale/acoustic/environment
   // sensor runs on its own cell, so surface them apart from the collector pack.
-  const hives = selectedHives(state);
+  // These are per-hive, so they follow the whole comparison selection.
+  const refs = selectedRefs(state);
   const wCards = [];
-  for (const n of hives) {
+  for (const ref of refs) {
     for (const src of WIRELESS_BATTERY) {
-      const v = latestOf(state.measurements, src.key(n));
+      const v = latestOf(ref.measurements, src.key(ref.hive));
       if (!isNum(v)) continue;
-      wCards.push(metricCard(`${hiveLabel(state, n)} · ${src.label}`, fmt(v, src.digits), src.unit,
+      wCards.push(metricCard(`${refLabel(state, ref)} · ${src.label}`, fmt(v, src.digits), src.unit,
         v <= src.low ? "Low battery" : "Wireless sensor"));
     }
   }
   const wCharts = [];
-  const voltSeries = wirelessBatterySeries(state, hives, "V");
-  const pctSeries = wirelessBatterySeries(state, hives, "%");
+  const voltSeries = wirelessBatterySeries(state, refs, "V");
+  const pctSeries = wirelessBatterySeries(state, refs, "%");
   if (voltSeries.length) wCharts.push(chartCard("Wireless sensor battery", "In-hive BLE scale & acoustic sensor voltage", voltSeries, { unit: "V", yDigits: 2 }));
   if (pctSeries.length) wCharts.push(chartCard("Wireless sensor charge", "In-hive BLE sensor state of charge", pctSeries, { unit: "%", yDigits: 0 }));
 
@@ -664,23 +730,26 @@ function renderConnectivity(root, state) {
     chartCard("Signal strength", "RSSI over the selected range",
       [seriesFrom(state.measurements, "rssi_dbm", "RSSI", PALETTE[1])], { unit: "dBm", yDigits: 0 }),
   ];
-  root.append(tsView("Connectivity", "Network and timing health", state, { cards, charts }));
+  const node = tsView("Connectivity", "Network and timing health", state, { cards, charts });
+  const note = deviceContextNote(state, "Connectivity is per device and is");
+  if (note) node.insertBefore(note, node.children[1]);
+  root.append(node);
 }
 
 function renderCounter(root, state) {
-  const m = state.latest || {};
-  const hives = selectedHives(state);
+  const refs = selectedRefs(state);
   const cards = [];
-  for (const n of hives) {
-    cards.push(metricCard(`${hiveLabel(state, n)} in`, fmtInt(m[`bee_counter_${n}_total_in`]), "", "Total entrances"));
-    cards.push(metricCard(`${hiveLabel(state, n)} out`, fmtInt(m[`bee_counter_${n}_total_out`]), "", "Total exits"));
+  for (const ref of refs) {
+    const m = ref.latest || {};
+    cards.push(metricCard(`${refLabel(state, ref)} in`, fmtInt(m[`bee_counter_${ref.hive}_total_in`]), "", "Total entrances"));
+    cards.push(metricCard(`${refLabel(state, ref)} out`, fmtInt(m[`bee_counter_${ref.hive}_total_out`]), "", "Total exits"));
   }
   const charts = [];
-  for (const n of hives) {
-    const inS = seriesFrom(state.measurements, `bee_counter_${n}_interval_in`, `${hiveLabel(state, n)} in`, PALETTE[2]);
-    const outS = seriesFrom(state.measurements, `bee_counter_${n}_interval_out`, `${hiveLabel(state, n)} out`, PALETTE[3]);
+  for (const ref of refs) {
+    const inS = seriesFrom(ref.measurements, `bee_counter_${ref.hive}_interval_in`, `${refLabel(state, ref)} in`, PALETTE[2]);
+    const outS = seriesFrom(ref.measurements, `bee_counter_${ref.hive}_interval_out`, `${refLabel(state, ref)} out`, PALETTE[3]);
     if (inS.points.length || outS.points.length) {
-      charts.push(chartCard(`Traffic — ${hiveLabel(state, n)}`, "Bees in/out per interval", [inS, outS], { yDigits: 0 }));
+      charts.push(chartCard(`Traffic — ${refLabel(state, ref)}`, "Bees in/out per interval", [inS, outS], { yDigits: 0 }));
     }
   }
   if (!charts.length) {
@@ -693,6 +762,8 @@ function renderInsights(root, state) {
   const ins = state.insights;
   const node = el("div", {});
   node.append(viewHead("Insights", "Rule-based colony alerts (14-day lookback)"));
+  const insNote = deviceContextNote(state, "Insights are computed per device and are");
+  if (insNote) node.append(insNote);
   if (!ins) { node.append(el("div", { class: "card" }, "No insight data.")); root.append(node); return; }
 
   // `categories` is a list of category names (both the live-compute and the
@@ -772,6 +843,8 @@ function renderDevice(root, state) {
   const fw = state.firmware || {};
   const node = el("div", {});
   node.append(viewHead("Device & admin", "Configuration, firmware and calibration"));
+  const devNote = deviceContextNote(state, "These settings apply to");
+  if (devNote) node.append(devNote);
 
   // Editable configuration form
   const cfgInputs = {};
