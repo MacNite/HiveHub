@@ -34,8 +34,32 @@ INSIGHT_SEVERITY_RANK = {"info": 1, "watch": 2, "warning": 3, "critical": 4}
 # endpoint tell "reconciled recently, no active alerts" apart from "never
 # reconciled", so a healthy hive is served cheaply from persisted state instead
 # of paying for a live 14-day recompute on every load. See _summary_from_persisted.
+#
+# The in-process dict is only a fast path: the authoritative marker is persisted
+# in dashboard_settings (see _RECONCILED_AT_KEY) so that a server restart — or a
+# sibling worker process — does not forget that the reconciler ran and force the
+# first dashboard load into the heavy live recompute.
 _insights_reconciled_at: dict[str, datetime] = {}
 _insights_reconciled_lock = threading.Lock()
+
+_RECONCILED_AT_KEY = "insights_reconciled_at:{device_id}"
+
+
+def _load_persisted_reconciled_at(device_id: str) -> Optional[datetime]:
+    """Read the durable reconcile timestamp for a device (None when absent)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT value FROM dashboard_settings WHERE key = %s;",
+                (_RECONCILED_AT_KEY.format(device_id=device_id),),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    try:
+        return datetime.fromisoformat(row[0])
+    except ValueError:
+        return None
 
 
 def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> None:
@@ -131,6 +155,18 @@ def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> Non
                     "now": computed_at,
                     "active_keys": active_keys,
                 },
+            )
+            # Durable freshness marker, written in the same transaction as the
+            # alert rows so it can never claim freshness for state that was
+            # rolled back. Read by _summary_from_persisted after restarts.
+            cur.execute(
+                """
+                INSERT INTO dashboard_settings (key, value, updated_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (key) DO UPDATE
+                    SET value = EXCLUDED.value, updated_at = now();
+                """,
+                (_RECONCILED_AT_KEY.format(device_id=device_id), computed_at.isoformat()),
             )
             conn.commit()
     # Mark this device's persisted insight state fresh as of ``computed_at`` so
@@ -501,12 +537,26 @@ def _summary_from_persisted(device_id: str) -> Optional[dict]:
     Returns None when there is no sufficiently fresh persisted state for the
     device, signalling the caller to fall back to a live recompute.
     """
+    now = datetime.now(timezone.utc)
+
+    def _fresh(ts: Optional[datetime]) -> bool:
+        return (
+            ts is not None
+            and (now - ts).total_seconds() <= _INSIGHTS_PERSISTED_MAX_AGE_SECONDS
+        )
+
     with _insights_reconciled_lock:
         reconciled_at = _insights_reconciled_at.get(device_id)
-    if reconciled_at is None:
-        return None
-    age = (datetime.now(timezone.utc) - reconciled_at).total_seconds()
-    if age > _INSIGHTS_PERSISTED_MAX_AGE_SECONDS:
+    if not _fresh(reconciled_at):
+        # The in-process marker is cold (restart, or another worker did the
+        # reconciling) — consult the durable one before falling back to the
+        # expensive live recompute.
+        persisted = _load_persisted_reconciled_at(device_id)
+        if persisted is not None and (reconciled_at is None or persisted > reconciled_at):
+            reconciled_at = persisted
+            with _insights_reconciled_lock:
+                _insights_reconciled_at[device_id] = persisted
+    if not _fresh(reconciled_at):
         return None
     with get_conn() as conn:
         with conn.cursor() as cur:

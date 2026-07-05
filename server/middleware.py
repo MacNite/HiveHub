@@ -3,6 +3,8 @@
 from fastapi import HTTPException, Request
 from slowapi.util import get_remote_address
 
+from config import TRUST_PROXY_HEADERS
+
 
 class MaxBodySizeMiddleware:
     """Reject requests whose body exceeds ``max_body_bytes``.
@@ -76,14 +78,17 @@ class MaxBodySizeMiddleware:
 def _client_ip_key(request: Request) -> str:
     """Rate-limit key: the real client IP, even behind Cloudflare / a proxy.
 
-    Falls back to the socket peer when no proxy headers are present. These
-    headers are only trustworthy when the API sits behind a proxy you control
-    (the documented deployment); avoid exposing the API directly.
+    Proxy headers are only consulted when TRUST_PROXY_HEADERS is on (the
+    default, matching the documented reverse-proxy deployment, where the proxy
+    overwrites them). Turn it off when the API is exposed directly: these
+    headers are client-controlled, so trusting them there lets anyone rotate
+    the value to bypass the limiter or fill another client's bucket.
     """
-    cf = request.headers.get("cf-connecting-ip")
-    if cf:
-        return cf.strip()
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
+    if TRUST_PROXY_HEADERS:
+        cf = request.headers.get("cf-connecting-ip")
+        if cf:
+            return cf.strip()
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[0].strip()
     return get_remote_address(request)

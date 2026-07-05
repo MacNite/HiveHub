@@ -124,9 +124,31 @@ app.include_router(local_dashboard.router)
 # files live in server/dashboard/ and ship in the Docker image (Dockerfile does
 # `COPY . .`). html=True makes /dashboard resolve to index.html.
 DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
+
+
+class DashboardStaticFiles(StaticFiles):
+    """StaticFiles with explicit Cache-Control headers.
+
+    Starlette sends only ETag/Last-Modified, so every dashboard load
+    re-validates all ~9 assets with conditional requests. The HTML shell stays
+    no-cache (a deploy shows up on the next load); the JS/CSS assets get a
+    modest max-age so repeat loads within the hour skip the network entirely,
+    falling back to ETag re-validation once it expires.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code < 400:
+            if path in ("", ".", "index.html") or path.endswith(".html"):
+                response.headers["Cache-Control"] = "no-cache"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
+
+
 if ENABLE_LOCAL_DASHBOARD and DASHBOARD_DIR.is_dir():
     app.mount(
         "/dashboard",
-        StaticFiles(directory=str(DASHBOARD_DIR), html=True),
+        DashboardStaticFiles(directory=str(DASHBOARD_DIR), html=True),
         name="dashboard",
     )

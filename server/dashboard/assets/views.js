@@ -695,16 +695,17 @@ function renderInsights(root, state) {
   node.append(viewHead("Insights", "Rule-based colony alerts (14-day lookback)"));
   if (!ins) { node.append(el("div", { class: "card" }, "No insight data.")); root.append(node); return; }
 
-  const cats = ins.categories || {};
+  // `categories` is a list of category names (both the live-compute and the
+  // persisted summary paths); Object.entries() on it rendered "0 — swarm" rows.
+  const cats = Array.isArray(ins.categories) ? ins.categories : Object.keys(ins.categories || {});
   const summaryCards = [
     metricCard("Active alerts", fmtInt(ins.alert_count), "", `Computed ${relAge(ins.computed_at)}`),
     metricCard("Highest severity", ins.highest_severity || "OK", "", "Most urgent"),
   ];
   node.append(el("div", { class: "grid" }, ...summaryCards));
 
-  const catRows = Object.entries(cats).map(([k, v]) =>
-    [k, typeof v === "object" ? JSON.stringify(v) : String(v)]);
-  if (catRows.length) node.append(el("div", { style: "margin-top:1rem" }, rowsCard("Categories", catRows)));
+  if (cats.length) node.append(el("div", { style: "margin-top:1rem" },
+    rowsCard("Categories", [["Active alert categories", cats.join(", ")]])));
   node.append(el("div", { style: "margin-top:1rem" }, highestAlertCard(ins)));
   node.append(el("div", { style: "margin-top:1rem" }, insightsHistoryCard(state)));
   root.append(node);

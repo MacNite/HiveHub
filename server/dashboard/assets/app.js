@@ -42,6 +42,9 @@ const state = {
 // ── toast ────────────────────────────────────────────────────────────────────
 let toastTimer = null;
 function toast(msg, kind = "") {
+  // Replace any toast still on screen: with a single shared timer, appending a
+  // second toast used to cancel the first one's removal, leaking it forever.
+  for (const old of document.querySelectorAll(".toast")) old.remove();
   // role=alert/status makes screen readers announce the transient message
   const node = el("div", { class: `toast ${kind}`, role: kind === "error" ? "alert" : "status" }, msg);
   document.body.append(node);
@@ -50,8 +53,21 @@ function toast(msg, kind = "") {
 }
 
 // ── data loading ──────────────────────────────────────────────────────────────
-async function loadData() {
+// Monotonic id per loadData call: every await point compares its own id against
+// the newest one, so a slow response from a superseded request (device OR range
+// switch) can never overwrite fresher data. The old guard only covered device
+// switches, letting a stale range response win the race.
+let loadSeq = 0;
+
+async function loadData(opts = {}) {
   if (!state.deviceId || !state.authUser) return;
+  const seq = ++loadSeq;
+  // A "light" refresh (60s timer / range switch) refetches only what changes
+  // with time or range — measurements, latest reading, insights. Config,
+  // channels and firmware status are carried over from the previous load; a
+  // full load runs on first load, device switch and the manual Refresh button.
+  const full = !!opts.full || !state.data;
+  const prev = state.data;
   state.loading = true;
   setStatus("Loading…");
   const { days, limit } = RANGES[state.range];
@@ -62,17 +78,12 @@ async function loadData() {
   // unlike a silent `.catch(() => [])` — we keep the rejection so the chart/data
   // errors surface in the status line and console instead of masquerading as
   // "0 points / no data".
-  const [measurements, latest, config, channels, insights, firmware] = await Promise.allSettled([
-    api.measurements(id, { start, limit }),
-    api.latest(id, 1),
-    api.config(id),
-    api.channels(id),
-    api.insightsSummary(id),
-    api.firmwareStatus(id),
-  ]);
-
-  // ignore the response if the user switched device/range while we were loading
-  if (state.deviceId !== id) return;
+  const measurementsP = api.measurements(id, { start, limit });
+  const latestP = api.latest(id, 1);
+  const insightsP = api.insightsSummary(id);
+  const configP = full ? api.config(id) : Promise.resolve(prev?.config ?? null);
+  const channelsP = full ? api.channels(id) : Promise.resolve(prev?.channels ?? null);
+  const firmwareP = full ? api.firmwareStatus(id) : Promise.resolve(prev?.firmware ?? null);
 
   const val = (r, fallback) => (r.status === "fulfilled" ? r.value : fallback);
   const errOf = (r, label) => {
@@ -82,7 +93,36 @@ async function loadData() {
     return `${label}${status}: ${r.reason?.message || "request failed"}`;
   };
 
+  // Phase 1: paint the charts as soon as the series + latest reading are in,
+  // instead of also waiting on the slower panels (the insights summary can
+  // trigger a full server-side recompute after a cold start).
+  const [measurements, latest] = await Promise.allSettled([measurementsP, latestP]);
+  if (seq !== loadSeq) return; // superseded by a newer load
+
   const chartError = errOf(measurements, "chart data");
+  state.data = {
+    measurements: val(measurements, []) || [],
+    latest: (val(latest, null) && val(latest, [])[0]) || null,
+    config: prev?.config ?? null,
+    channels: prev?.channels ?? null,
+    insights: prev?.insights ?? null,
+    firmware: prev?.firmware ?? null,
+  };
+  state.dataError = chartError;
+  // A failed chart query is the actionable one for empty diagrams; toast it.
+  if (chartError) toast(chartError, "error");
+  setStatus(chartError ? `⚠ ${chartError}` : chartStatus(state.data));
+  // Early paint only when nothing is on screen yet; during a refresh the single
+  // render below avoids rebuilding the view (and its forms) twice.
+  if (!prev) render();
+
+  // Phase 2: the remaining panels (placeholders resolve instantly on a light
+  // refresh, so errOf only ever reports real requests).
+  const [config, channels, insights, firmware] = await Promise.allSettled([
+    configP, channelsP, insightsP, firmwareP,
+  ]);
+  if (seq !== loadSeq) return;
+
   const errors = [
     chartError,
     errOf(latest, "latest reading"),
@@ -93,23 +133,16 @@ async function loadData() {
   ].filter(Boolean);
 
   state.data = {
-    measurements: val(measurements, []) || [],
-    latest: (val(latest, null) && val(latest, [])[0]) || null,
-    config: val(config, null),
-    channels: val(channels, null),
-    insights: val(insights, null),
-    firmware: val(firmware, null),
+    ...state.data,
+    config: val(config, prev?.config ?? null),
+    channels: val(channels, prev?.channels ?? null),
+    insights: val(insights, prev?.insights ?? null),
+    firmware: val(firmware, prev?.firmware ?? null),
   };
-  state.dataError = chartError;
   state.loading = false;
 
-  if (errors.length) {
-    // A failed chart query is the actionable one for empty diagrams; toast it.
-    if (state.dataError) toast(state.dataError, "error");
-    setStatus(`⚠ ${errors.join(" · ")}`);
-  } else {
-    setStatus(chartStatus(state.data));
-  }
+  if (errors.length) setStatus(`⚠ ${errors.join(" · ")}`);
+  else setStatus(chartStatus(state.data));
   render();
 }
 
@@ -250,7 +283,8 @@ function wireEvents() {
     }
     loadData();
   });
-  ui.refreshBtn.addEventListener("click", loadData);
+  // The manual Refresh always refetches everything, including config/firmware.
+  ui.refreshBtn.addEventListener("click", () => loadData({ full: true }));
   if (ui.logoutBtn) {
     ui.logoutBtn.addEventListener("click", async () => {
       try { await auth.logout(); } catch (_) { /* ignore — clear locally anyway */ }
@@ -358,11 +392,13 @@ function renderSetup() {
 }
 
 // ── app start (post-login) ────────────────────────────────────────────────────
-async function startApp() {
+// `devices` may be handed over by /auth/status (which includes the list for an
+// authenticated session, saving one round-trip); otherwise it is fetched here.
+async function startApp(devices) {
   if (ui.topbarControls) ui.topbarControls.hidden = false;
   renderUserArea();
   try {
-    state.devices = await api.listDevices();
+    state.devices = Array.isArray(devices) ? devices : await api.listDevices();
   } catch (err) {
     if (err.status === 401) {
       state.authUser = null;
@@ -395,7 +431,7 @@ async function init() {
   if (status.setup_required) { renderSetup(); return; }
   if (!status.authenticated) { renderLogin(); return; }
   state.authUser = status.user;
-  await startApp();
+  await startApp(status.devices);
 }
 
 init();

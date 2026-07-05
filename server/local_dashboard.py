@@ -124,11 +124,16 @@ def local_auth_status(request: Request):
             if record
             else {"username": payload["username"], "role": payload["role"]}
         )
-    return {
+    result = {
         "setup_required": dashboard_user_count() == 0,
         "authenticated": bool(payload),
         "user": user,
     }
+    if payload:
+        # Ship the device list with the auth check so an already-signed-in
+        # dashboard saves one serial round-trip before it can request data.
+        result["devices"] = _list_devices_payload()
+    return result
 
 
 @router.post("/api/v1/local/auth/setup", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
@@ -224,9 +229,10 @@ def local_delete_dashboard_user(user_id: int, admin: dict = Depends(require_dash
     return {"ok": True}
 
 
-@router.get("/api/v1/local/devices", dependencies=LOCAL_DASHBOARD_DEP)
-def local_list_devices():
-    """List every device on this server with its scale-channel display names."""
+def _list_devices_payload() -> list[dict]:
+    """Every device on this server with its scale-channel display names.
+
+    Shared by GET /devices and the authenticated branch of /auth/status."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -269,6 +275,12 @@ def local_list_devices():
         }
         for r in rows
     ]
+
+
+@router.get("/api/v1/local/devices", dependencies=LOCAL_DASHBOARD_DEP)
+def local_list_devices():
+    """List every device on this server with its scale-channel display names."""
+    return _list_devices_payload()
 
 
 @router.get("/api/v1/local/devices/{device_id}/measurements", dependencies=LOCAL_DASHBOARD_DEP)
