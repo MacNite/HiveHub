@@ -86,7 +86,7 @@ from schemas import (
     MeasurementIn,
     TempCoefficientFitIn,
 )
-from sd_import import parse_sd_measurements
+from sd_import import distinct_source_device_ids, parse_sd_measurements
 
 router = APIRouter()
 
@@ -351,6 +351,7 @@ SD_IMPORT_MAX_FILE_SIZE = int(
 async def local_import_sd_measurements(
     device_id: str,
     file: UploadFile = File(...),
+    force: bool = Form(False),
 ):
     """Import measurements from an SD-card backup pulled off the scale in AP mode.
 
@@ -360,6 +361,14 @@ async def local_import_sd_measurements(
     batch is de-duplicated on ``(device_id, measured_at)`` so re-uploading the
     same file inserts nothing. Mirrors the HivePal SD-upload feature for the
     self-hosted dashboard that ships with HiveHub.
+
+    Because every row is re-pinned to the path ``device_id``, uploading a card
+    while the *wrong* device is selected would silently attach one hive's
+    readings to another. The firmware stamps each backup line with the device
+    that recorded it, so we first refuse (HTTP 409) any file whose embedded
+    ``device_id`` does not match the import target. ``force=true`` overrides the
+    check for the legitimate edge case where a device was re-provisioned under a
+    new id.
     """
     data = await file.read()
     if not data:
@@ -374,6 +383,27 @@ async def local_import_sd_measurements(
         )
 
     records, skipped = parse_sd_measurements(data, file.filename)
+
+    # Refuse a backup that belongs to a different device than the one selected,
+    # so its readings are not silently re-pinned onto (and mis-mapped to) this
+    # device. A well-formed single-card upload carries exactly one embedded id;
+    # rows without one predate the field and never trip the guard.
+    mismatched = [d for d in distinct_source_device_ids(records) if d != device_id]
+    if mismatched and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "device_mismatch",
+                "message": (
+                    f"This SD backup was recorded by {', '.join(mismatched)}, "
+                    f"not {device_id}. Importing it here would attach those "
+                    "readings to the wrong device. Select the matching device, "
+                    "or confirm to import anyway."
+                ),
+                "target_device_id": device_id,
+                "file_device_ids": mismatched,
+            },
+        )
 
     # Validate each record independently so a single corrupt row does not sink the
     # whole upload — invalid rows join the unreadable-line "skipped" tally.
