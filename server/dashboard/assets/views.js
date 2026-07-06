@@ -18,19 +18,19 @@ let cursorT = null;
 // of bands rather than time), shared the same way cursorT is.
 let cursorBand = null;
 
-// Expected send cadence for the active device (ms), with slack: a line segment
-// spanning a longer time gap than this is drawn dashed to flag missing data.
-// Set per render from the device config; falls back to the 600 s device default.
-let gapThresholdMs = null;
+// Expected send cadence for the active device (ms). Charts use this only as a
+// fallback expected spacing for series too short to infer their own cadence;
+// the real gap test in drawLineChart is relative to each series' median point
+// spacing, so it survives server-side down-sampling and SD backfill.
+let sendIntervalMs = null;
 const DEFAULT_SEND_INTERVAL_S = 600;
-const GAP_SLACK = 1.1; // dash once a gap runs >10% over the send interval
 
 // Called by app.js before rendering a view so charts know the active device's
 // send interval (see the "Send interval (s)" field on the device/admin page).
 export function configureCharts(state) {
   const raw = Number(state?.config?.send_interval_seconds);
   const seconds = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SEND_INTERVAL_S;
-  gapThresholdMs = seconds * 1000 * GAP_SLACK;
+  sendIntervalMs = seconds * 1000;
 }
 
 export function clearCharts() { activeCharts = []; }
@@ -148,10 +148,10 @@ function chartCard(title, sub, series, opts = {}) {
   });
   const hint = el("span", { class: "chart-hint" }, "Drag to inspect");
   const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item), series.length ? hint : null);
-  // Dash segments that span a data gap, except on coarse charts (e.g. daily-max)
-  // whose points are intentionally spaced far wider than the send interval.
-  const chartOpts = opts.coarse ? opts : { ...opts, gapThresholdMs };
-  const chart = { canvas, series, opts: chartOpts, legendItems, hint };
+  // Dash segments that span a data gap (see drawLineChart). sendIntervalMs is
+  // only a fallback cadence; the test adapts to each series' own spacing, so
+  // even coarse charts (e.g. daily-max) flag only genuinely missing stretches.
+  const chart = { canvas, series, opts: { ...opts, sendIntervalMs }, legendItems, hint };
   activeCharts.push(chart);
   if (series.length) attachChartCursor(canvas);
   return el("div", { class: "card chart-card" },
@@ -511,7 +511,7 @@ function renderWeight(root, state) {
   root.append(tsView("Weight", "Mass changes and harvest trend", state,
     { cards, charts: [
       chartCard("Weight", null, series, { unit: "kg", yDigits: 1 }),
-      chartCard("Daily max weight", "Highest reading per day over the selected range", dailyMax, { unit: "kg", yDigits: 1, coarse: true }),
+      chartCard("Daily max weight", "Highest reading per day over the selected range", dailyMax, { unit: "kg", yDigits: 1 }),
     ] }));
 }
 

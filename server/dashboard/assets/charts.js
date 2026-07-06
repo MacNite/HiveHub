@@ -2,10 +2,12 @@
 //
 // drawLineChart(canvas, series, opts)
 //   series: [{ label, color, points: [{ t: epochMillis, y: number }] }]
-//   opts:   { unit, yDigits, cursorT, gapThresholdMs }
+//   opts:   { unit, yDigits, cursorT, sendIntervalMs }
 //
-// When opts.gapThresholdMs is set, segments spanning a longer time gap than
-// that are drawn dashed to mark stretches with missing/late data.
+// Segments spanning a data gap — a jump far larger than a series' own typical
+// point spacing — are drawn dashed to mark stretches with missing data.
+// opts.sendIntervalMs only seeds the expected spacing for series too short to
+// infer one; see gapThreshold().
 //
 // Handles retina scaling, auto y-range, light gridlines, time x-axis ticks and
 // an empty state. Colours come from the caller (see PALETTE below).
@@ -47,6 +49,23 @@ function niceTicks(min, max, count = 5) {
   const ticks = [];
   for (let v = start; v <= max + step * 0.001; v += step) ticks.push(v);
   return ticks;
+}
+
+// Threshold (ms) beyond which a segment counts as a data gap. Uses `factor`
+// times the series' median point spacing, so it tracks the actual cadence of
+// the plotted points even after the server down-samples a wide range (where
+// consecutive points are stride*interval apart, not one interval). Series too
+// short for a stable median fall back to the configured send interval; returns
+// null when neither cadence is known, so nothing is dashed.
+function gapThreshold(points, sendIntervalMs, factor) {
+  if (points.length >= 4) {
+    const gaps = [];
+    for (let i = 1; i < points.length; i++) gaps.push(points[i].t - points[i - 1].t);
+    gaps.sort((a, b) => a - b);
+    const median = gaps[gaps.length >> 1];
+    if (median > 0) return median * factor;
+  }
+  return sendIntervalMs != null ? sendIntervalMs * factor : null;
 }
 
 export function drawLineChart(canvas, series, opts = {}) {
@@ -133,17 +152,20 @@ export function drawLineChart(canvas, series, opts = {}) {
     ctx.fillText(new Date(t).toLocaleString(undefined, dtOpts), x, cssH - padB / 2);
   }
 
-  // Series lines. When opts.gapThresholdMs is set, any segment whose two
-  // endpoints are further apart in time than that threshold is drawn dashed —
-  // this flags stretches where the device went quiet (missed uploads / data
-  // gaps) so a straight line doesn't imply readings we never received.
-  // Consecutive same-style segments are batched into a single path so line
-  // joins stay smooth within a run.
-  const gapMs = opts.gapThresholdMs;
+  // Series lines. A segment is drawn dashed when it spans a data gap: a jump
+  // far larger than that series' own typical spacing between points. Judging a
+  // gap against the series' median spacing (rather than a fixed send interval)
+  // keeps this correct after the server down-samples wide ranges and after SD
+  // backfill — a genuinely empty stretch stays an outlier at any resolution,
+  // while a region that is dense again matches its neighbours and stays solid.
+  // Consecutive same-style segments are batched into one path so joins stay
+  // smooth within a run.
+  const gapFactor = 1.5; // dash once a segment runs >1.5x the typical spacing
   ctx.lineWidth = 1.8;
   ctx.lineJoin = "round";
   for (const s of series) {
     if (!s.points.length) continue;
+    const gapMs = gapThreshold(s.points, opts.sendIntervalMs, gapFactor);
     ctx.strokeStyle = s.color;
     let runDashed = null; // dash style of the run currently being accumulated
     for (let i = 1; i < s.points.length; i++) {
