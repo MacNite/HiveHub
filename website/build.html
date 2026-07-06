@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Build your own — HiveHub</title>
-<meta name="description" content="Build your own HiveHub: a guided parts configurator and step-by-step assembly and setup tutorials are coming. For now, jump to the hardware BOM, wiring reference and the firmware config tool." />
+<meta name="description" content="Build your own HiveHub: start with the hardware helper to turn a few questions into a recommended build profile, then jump to the hardware BOM, wiring reference and firmware config tool. Step-by-step assembly and setup tutorials are coming." />
 <meta name="color-scheme" content="light dark" />
 <!-- Set the theme before the stylesheet paints, so there's no light flash. -->
 <script>
@@ -43,28 +43,38 @@
 <a id="top"></a>
 <section class="hero" style="border-top:none">
   <div class="wrap">
-    <span class="badge">🚧 Coming soon — this page is a placeholder</span>
+    <span class="badge">🧭 New — the hardware helper is live</span>
     <h1>Build your own HiveHub.</h1>
     <p class="lead">
       A guided builder is on the way: choose how many hives (up to 18) and which
       sensors you want, and HiveHub will generate the exact parts list, wiring and
-      firmware config — backed by step-by-step assembly and setup tutorials.
+      firmware config — backed by step-by-step assembly and setup tutorials. The
+      first step is ready now — the hardware helper turns a few questions about
+      power, scales and wireless devices into a recommended build profile.
     </p>
     <div class="cta">
-      <a class="btn" href="https://github.com/MacNite/HiveHub#hardware">📦 Current BOM</a>
+      <a class="btn" href="hardware-helper.html">🧭 Open hardware helper</a>
+      <a class="btn ghost" href="https://github.com/MacNite/HiveHub#hardware">📦 Current BOM</a>
       <a class="btn ghost" href="configurator.html">⚙️ Config tool</a>
       <a class="btn ghost" href="index.html#setup">🚀 Setup guide</a>
     </div>
   </div>
 </section>
 
-<section id="planned">
+<section id="helper">
   <div class="wrap">
-    <h2>What's coming here</h2>
-    <p class="sub">This page will grow into a complete "build your own" hub. The
-       plan, roughly in order:</p>
+    <h2>Start with the hardware helper</h2>
+    <p class="sub">The first piece of the guided builder is live. Answer a few
+       questions about power, initial setup, scales and optional wireless in-hive
+       devices, and the helper generates a recommended build profile — board,
+       power plan, scale interface and firmware flags — plus a guide outline and a
+       copyable profile to carry into the config tool.</p>
+    <div class="cta" style="margin:1.1rem 0 1.6rem">
+      <a class="btn" href="hardware-helper.html">🧭 Open the hardware helper</a>
+      <a class="btn ghost" href="configurator.html">⚙️ Continue to config tool</a>
+    </div>
+    <p class="sub">Building on the profile the helper produces, still on the roadmap:</p>
     <div class="grid">
-      <div class="card"><div class="ico">🧮</div><h3>Parts configurator</h3><p>Pick your hive count (up to 18) and sensors and get a tailored bill of materials — quantities, modules and buy links — matched to your build.</p></div>
       <div class="card"><div class="ico">🔧</div><h3>Assembly tutorials</h3><p>Step-by-step guides for the Scale Module and Power Module: module placement, load cells, I2C sensors, wiring and the enclosure.</p></div>
       <div class="card"><div class="ico">⚡</div><h3>Flashing &amp; setup</h3><p>From PlatformIO upload to the on-device provisioning portal, sensor pairing and claiming the device in HivePal.</p></div>
       <div class="card"><div class="ico">🔌</div><h3>Wiring diagrams</h3><p>Per-sensor wiring and pin maps generated to match the exact build you configured — no guessing from a generic table.</p></div>
