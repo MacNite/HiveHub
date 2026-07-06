@@ -130,6 +130,33 @@ def parse_sd_measurements(
 
 
 
+def distinct_source_device_ids(records: Iterable[dict]) -> list[str]:
+    """Return the distinct, non-empty ``device_id`` values stamped into records.
+
+    The firmware writes its own ``device_id`` into every backup line, so a
+    well-formed single-card upload yields exactly one id. The import endpoint
+    uses this to guard against attaching one scale's backup to a different
+    device: if the file's id does not match the device it is being imported
+    into, the readings would otherwise be silently re-pinned onto — and thus
+    mis-mapped to — the wrong device. Ids are returned in first-seen order;
+    rows without a (string) ``device_id`` are ignored so an older backup that
+    predates the field never triggers a false mismatch.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        raw = record.get("device_id")
+        if not isinstance(raw, str):
+            continue
+        did = raw.strip()
+        if did and did not in seen:
+            seen.add(did)
+            out.append(did)
+    return out
+
+
 def split_new_and_duplicate(
     keys: Iterable[Hashable],
     existing_keys: set,

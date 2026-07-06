@@ -1062,30 +1062,53 @@ function renderDevice(root, state) {
       "Re-uploading the same file is safe — existing readings are skipped automatically."),
     el("div", { class: "form-actions" }, sdBtn),
     sdResult);
+  // Post the picked file; force=true re-tries past the device-mismatch guard.
+  function runSdImport(force) {
+    const fd = new FormData();
+    fd.append("file", sdFileInput.files[0]);
+    if (force) fd.append("force", "true");
+    return state.actions.importSdData(fd);
+  }
+  function renderSdResult(res) {
+    const dupes = res.duplicates
+      ? `, ${res.duplicates} duplicate${res.duplicates === 1 ? "" : "s"} skipped`
+      : "";
+    const unreadable = res.skipped
+      ? ` · ${res.skipped} unreadable line${res.skipped === 1 ? "" : "s"} skipped`
+      : "";
+    sdResult.hidden = false;
+    sdResult.textContent =
+      `Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${dupes}. ` +
+      `Parsed ${res.parsed} record${res.parsed === 1 ? "" : "s"}${unreadable}.`;
+    state.toast(`Imported ${res.inserted} new readings`, "success");
+    sdForm.reset();
+    sdPicked.hidden = true;
+    state.reload();
+  }
   sdForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!sdFileInput.files[0]) return;
-    const fd = new FormData();
-    fd.append("file", sdFileInput.files[0]);
     sdBtn.disabled = true;
     const restore = sdBtn.textContent;
     sdBtn.textContent = "Importing…";
     try {
-      const res = await state.actions.importSdData(fd);
-      const dupes = res.duplicates
-        ? `, ${res.duplicates} duplicate${res.duplicates === 1 ? "" : "s"} skipped`
-        : "";
-      const unreadable = res.skipped
-        ? ` · ${res.skipped} unreadable line${res.skipped === 1 ? "" : "s"} skipped`
-        : "";
-      sdResult.hidden = false;
-      sdResult.textContent =
-        `Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${dupes}. ` +
-        `Parsed ${res.parsed} record${res.parsed === 1 ? "" : "s"}${unreadable}.`;
-      state.toast(`Imported ${res.inserted} new readings`, "success");
-      sdForm.reset();
-      sdPicked.hidden = true;
-      state.reload();
+      let res;
+      try {
+        res = await runSdImport(false);
+      } catch (err) {
+        // The backup belongs to a different device than the one selected.
+        // Confirm before re-pinning its readings onto this device.
+        if (err.status === 409 && err.detail && err.detail.code === "device_mismatch") {
+          if (!window.confirm(`${err.detail.message}\n\nImport into this device anyway?`)) {
+            state.toast("SD import cancelled — the file belongs to another device", "error");
+            return;
+          }
+          res = await runSdImport(true);
+        } else {
+          throw err;
+        }
+      }
+      renderSdResult(res);
     }
     catch (err) { state.toast(err.message, "error"); }
     finally { sdBtn.disabled = false; sdBtn.textContent = restore; }

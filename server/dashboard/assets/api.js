@@ -14,10 +14,15 @@ async function req(path, opts = {}) {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail || detail;
+      if (body && body.detail != null) detail = body.detail;
     } catch (_) { /* non-JSON error body */ }
-    const err = new Error(detail);
+    // FastAPI's detail is usually a string, but structured errors (e.g. the SD
+    // import device-mismatch guard) send an object. Surface a readable message
+    // either way, and keep the full payload on err.detail for callers to act on.
+    const message = typeof detail === "string" ? detail : (detail.message || res.statusText);
+    const err = new Error(message);
     err.status = res.status;
+    err.detail = detail;
     throw err;
   }
   // 204 / empty body tolerated

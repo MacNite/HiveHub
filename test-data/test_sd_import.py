@@ -13,7 +13,11 @@ import io
 import tarfile
 from datetime import datetime, timedelta, timezone
 
-from sd_import import parse_sd_measurements, split_new_and_duplicate
+from sd_import import (
+    distinct_source_device_ids,
+    parse_sd_measurements,
+    split_new_and_duplicate,
+)
 
 
 NOW = datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc)
@@ -119,6 +123,49 @@ check("tar is sniffed even without a .tar name", len(res.records) == 3)
 # 9. Empty input yields no records and no crash.
 res = parse_sd_measurements(b"", "measurements.ndjson")
 check("empty file yields no records", res.records == [] and res.skipped == 0)
+
+
+# ── Device-mismatch guard (distinct_source_device_ids) ──────────────────────
+# The firmware stamps every backup line with the device that recorded it, so the
+# import endpoint can refuse a card uploaded against the wrong device before its
+# readings are silently re-pinned onto (and mis-mapped to) that device.
+
+# 10. A single-card backup reports exactly its one source device.
+recs = [
+    {"device_id": "hive-a", "timestamp": "2024-06-15T12:00:00Z"},
+    {"device_id": "hive-a", "timestamp": "2024-06-15T12:15:00Z"},
+]
+check("single-device backup yields one id", distinct_source_device_ids(recs) == ["hive-a"])
+
+# 11. Ids are de-duplicated and returned in first-seen order.
+recs = [
+    {"device_id": "hive-b"},
+    {"device_id": "hive-a"},
+    {"device_id": "hive-b"},
+]
+check("distinct ids keep first-seen order", distinct_source_device_ids(recs) == ["hive-b", "hive-a"])
+
+# 12. Rows without a (string) device_id are ignored — an older backup that
+#     predates the field must not trip the guard (empty list == no mismatch).
+recs = [
+    {"timestamp": "2024-06-15T12:00:00Z"},
+    {"device_id": ""},
+    {"device_id": "   "},
+    {"device_id": 123},
+]
+check("id-less rows never trip the guard", distinct_source_device_ids(recs) == [])
+
+# 13. The endpoint's mismatch test: a foreign card is caught, the matching one
+#     passes cleanly.
+recs = [{"device_id": "hive-a"}, {"device_id": "hive-a"}]
+check(
+    "foreign card is flagged for the target device",
+    [d for d in distinct_source_device_ids(recs) if d != "hive-b"] == ["hive-a"],
+)
+check(
+    "matching card raises no mismatch",
+    [d for d in distinct_source_device_ids(recs) if d != "hive-a"] == [],
+)
 
 
 if _failures:
