@@ -288,7 +288,7 @@ function buildState() {
     reload: loadData,
     actions: {
       uploadFirmware: (fd) => api.uploadFirmware(activeId, fd),
-      importSdData: (fd) => api.importSdData(activeId, fd),
+      importSdData: (fd, deviceId) => api.importSdData(deviceId || activeId, fd),
       approveFirmware: () => api.approveFirmware(activeId),
       startCalibration: (p) => api.startCalibration(activeId, p),
       stopCalibration: () => api.stopCalibration(activeId),

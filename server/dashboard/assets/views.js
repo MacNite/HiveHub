@@ -1062,12 +1062,11 @@ function renderDevice(root, state) {
       "Re-uploading the same file is safe — existing readings are skipped automatically."),
     el("div", { class: "form-actions" }, sdBtn),
     sdResult);
-  // Post the picked file; force=true re-tries past the device-mismatch guard.
-  function runSdImport(force) {
+  // Post the picked file to a specific device (defaults to the selected one).
+  function runSdImport(deviceId) {
     const fd = new FormData();
     fd.append("file", sdFileInput.files[0]);
-    if (force) fd.append("force", "true");
-    return state.actions.importSdData(fd);
+    return state.actions.importSdData(fd, deviceId);
   }
   function renderSdResult(res) {
     const dupes = res.duplicates
@@ -1076,11 +1075,12 @@ function renderDevice(root, state) {
     const unreadable = res.skipped
       ? ` · ${res.skipped} unreadable line${res.skipped === 1 ? "" : "s"} skipped`
       : "";
+    const into = res.device_id ? ` into device “${res.device_id}”` : "";
     sdResult.hidden = false;
     sdResult.textContent =
-      `Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${dupes}. ` +
+      `Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${into}${dupes}. ` +
       `Parsed ${res.parsed} record${res.parsed === 1 ? "" : "s"}${unreadable}.`;
-    state.toast(`Imported ${res.inserted} new readings`, "success");
+    state.toast(`Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${into}`, "success");
     sdForm.reset();
     sdPicked.hidden = true;
     state.reload();
@@ -1094,16 +1094,34 @@ function renderDevice(root, state) {
     try {
       let res;
       try {
-        res = await runSdImport(false);
+        res = await runSdImport();               // upload to the selected device
       } catch (err) {
-        // The backup belongs to a different device than the one selected.
-        // Confirm before re-pinning its readings onto this device.
+        // The card was recorded by a different device than the one selected.
+        // Offer to send the readings to their true source device instead of
+        // mis-attaching them here.
         if (err.status === 409 && err.detail && err.detail.code === "device_mismatch") {
-          if (!window.confirm(`${err.detail.message}\n\nImport into this device anyway?`)) {
-            state.toast("SD import cancelled — the file belongs to another device", "error");
+          const sources = err.detail.file_device_ids || [];
+          const target = err.detail.target_device_id;
+          if (sources.length !== 1) {
+            // A single file holding several devices' data can't be auto-routed.
+            state.toast(err.detail.message || err.message, "error");
             return;
           }
-          res = await runSdImport(true);
+          const source = sources[0];
+          const ok = window.confirm(
+            `This SD-card data is from device “${source}”, but you are uploading ` +
+            `it to device “${target}”.\n\n` +
+            `Upload the data to its source device “${source}” instead?\n\n` +
+            `OK — import into “${source}”      Cancel — stop`
+          );
+          if (!ok) { state.toast("SD import cancelled", "error"); return; }
+          sdBtn.textContent = "Importing…";
+          try {
+            res = await runSdImport(source);       // re-post to the correct device
+          } catch (err2) {
+            state.toast(`Could not import into “${source}”: ${err2.message}`, "error");
+            return;
+          }
         } else {
           throw err;
         }
