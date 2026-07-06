@@ -18,6 +18,21 @@ let cursorT = null;
 // of bands rather than time), shared the same way cursorT is.
 let cursorBand = null;
 
+// Expected send cadence for the active device (ms), with slack: a line segment
+// spanning a longer time gap than this is drawn dashed to flag missing data.
+// Set per render from the device config; falls back to the 600 s device default.
+let gapThresholdMs = null;
+const DEFAULT_SEND_INTERVAL_S = 600;
+const GAP_SLACK = 1.1; // dash once a gap runs >10% over the send interval
+
+// Called by app.js before rendering a view so charts know the active device's
+// send interval (see the "Send interval (s)" field on the device/admin page).
+export function configureCharts(state) {
+  const raw = Number(state?.config?.send_interval_seconds);
+  const seconds = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SEND_INTERVAL_S;
+  gapThresholdMs = seconds * 1000 * GAP_SLACK;
+}
+
 export function clearCharts() { activeCharts = []; }
 export function drawCharts() {
   for (const c of activeCharts) {
@@ -133,7 +148,10 @@ function chartCard(title, sub, series, opts = {}) {
   });
   const hint = el("span", { class: "chart-hint" }, "Drag to inspect");
   const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item), series.length ? hint : null);
-  const chart = { canvas, series, opts, legendItems, hint };
+  // Dash segments that span a data gap, except on coarse charts (e.g. daily-max)
+  // whose points are intentionally spaced far wider than the send interval.
+  const chartOpts = opts.coarse ? opts : { ...opts, gapThresholdMs };
+  const chart = { canvas, series, opts: chartOpts, legendItems, hint };
   activeCharts.push(chart);
   if (series.length) attachChartCursor(canvas);
   return el("div", { class: "card chart-card" },
@@ -493,7 +511,7 @@ function renderWeight(root, state) {
   root.append(tsView("Weight", "Mass changes and harvest trend", state,
     { cards, charts: [
       chartCard("Weight", null, series, { unit: "kg", yDigits: 1 }),
-      chartCard("Daily max weight", "Highest reading per day over the selected range", dailyMax, { unit: "kg", yDigits: 1 }),
+      chartCard("Daily max weight", "Highest reading per day over the selected range", dailyMax, { unit: "kg", yDigits: 1, coarse: true }),
     ] }));
 }
 

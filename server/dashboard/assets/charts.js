@@ -2,7 +2,10 @@
 //
 // drawLineChart(canvas, series, opts)
 //   series: [{ label, color, points: [{ t: epochMillis, y: number }] }]
-//   opts:   { unit, yDigits, cursorT }
+//   opts:   { unit, yDigits, cursorT, gapThresholdMs }
+//
+// When opts.gapThresholdMs is set, segments spanning a longer time gap than
+// that are drawn dashed to mark stretches with missing/late data.
 //
 // Handles retina scaling, auto y-range, light gridlines, time x-axis ticks and
 // an empty state. Colours come from the caller (see PALETTE below).
@@ -130,18 +133,33 @@ export function drawLineChart(canvas, series, opts = {}) {
     ctx.fillText(new Date(t).toLocaleString(undefined, dtOpts), x, cssH - padB / 2);
   }
 
-  // Series lines
+  // Series lines. When opts.gapThresholdMs is set, any segment whose two
+  // endpoints are further apart in time than that threshold is drawn dashed —
+  // this flags stretches where the device went quiet (missed uploads / data
+  // gaps) so a straight line doesn't imply readings we never received.
+  // Consecutive same-style segments are batched into a single path so line
+  // joins stay smooth within a run.
+  const gapMs = opts.gapThresholdMs;
   ctx.lineWidth = 1.8;
   ctx.lineJoin = "round";
   for (const s of series) {
     if (!s.points.length) continue;
     ctx.strokeStyle = s.color;
-    ctx.beginPath();
-    s.points.forEach((p, i) => {
-      const x = xOf(p.t), y = yOf(p.y);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
+    let runDashed = null; // dash style of the run currently being accumulated
+    for (let i = 1; i < s.points.length; i++) {
+      const p0 = s.points[i - 1], p1 = s.points[i];
+      const dashed = gapMs != null && (p1.t - p0.t) > gapMs;
+      if (dashed !== runDashed) {
+        if (runDashed !== null) ctx.stroke(); // finish the previous run
+        ctx.setLineDash(dashed ? [3, 4] : []);
+        ctx.beginPath();
+        ctx.moveTo(xOf(p0.t), yOf(p0.y));
+        runDashed = dashed;
+      }
+      ctx.lineTo(xOf(p1.t), yOf(p1.y));
+    }
+    if (runDashed !== null) ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   // Interactive cursor: dashed vertical guide + a dot on each series at its
