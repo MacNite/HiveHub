@@ -634,7 +634,19 @@ void scanPairedSensorsMulti(const std::vector<String>& macs,
   for (size_t s = 0; s < g_slot.size(); s++) copyToSnapshot(g_slot[s], out[s]);
 #endif
 
-  NimBLEDevice::deinit(true);  // free the controller before the WiFi upload
+  // deinit(false), NOT deinit(true), on the ESP32-C6. deinit() stops and frees
+  // the BT controller (so the WiFi upload can have the radio) regardless of the
+  // argument; the flag only controls whether the C++ singletons are also
+  // deleted. On the C6/C5/C2/H2, nimble_port_deinit() zeroes the porting-layer
+  // dispatch table (npl_funcs) — and NimBLE-Arduino 2.3.x's ~NimBLEScan() then
+  // deinits its new scan-response timer through npl_funcs->p_ble_npl_callout_deinit,
+  // dereferencing the now-null table (Load access fault, MTVAL 0x6c). deinit()
+  // deletes the scan singleton AFTER tearing the port down, so deinit(true)
+  // panics on this chip the moment a scan has run. deinit(false) skips that
+  // delete: the singleton is reused by the next getScan() (NimBLE's intended
+  // pattern; its callout survives a port re-init) and is reclaimed at deep
+  // sleep anyway. The controller is still fully freed for WiFi.
+  NimBLEDevice::deinit(false);
   g_slot.clear();
 }
 
@@ -660,7 +672,7 @@ std::vector<Discovered> discover(uint32_t seconds) {
   ScanCallbacks cb;
   NimBLEScan* scan = startScan(cb, seconds);
   scan->clearResults();
-  NimBLEDevice::deinit(true);
+  NimBLEDevice::deinit(false);  // see scanPairedSensorsMulti: deinit(true) panics on the C6 after a scan
 
   g_discover = nullptr;
   return found;
@@ -813,7 +825,7 @@ void otaCleanup() {
     s_otaClient = nullptr;
   }
   s_otaCtrl = s_otaData = s_otaStatus = nullptr;
-  NimBLEDevice::deinit(true);
+  NimBLEDevice::deinit(false);  // see scanPairedSensorsMulti: deinit(true) panics on the C6 after a scan
 }
 
 bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
@@ -843,7 +855,7 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
   if (!found) {
     Serial.printf("[HI-OTA] device %s not found in scan\n", m.c_str());
     s_otaLastError = "HiveInside not found in scan (asleep or out of range?)";
-    NimBLEDevice::deinit(true);
+    NimBLEDevice::deinit(false);  // see scanPairedSensorsMulti: deinit(true) panics on the C6 after a scan
     return false;
   }
 

@@ -470,7 +470,11 @@ void bleRunCycle(const String& mac0, const String& mac1,
     NimBLEDevice::init("");
     if (mac0.length()) (void)readTrafficSlot(mac0, slot1);
     if (mac1.length()) (void)readTrafficSlot(mac1, slot2);
-    NimBLEDevice::deinit(true);
+    // deinit(false), not (true): on the ESP32-C6 deinit(true) panics in
+    // ~NimBLEScan() once a scan has run this boot, because the scan singleton is
+    // deleted after nimble_port_deinit() zeroes npl_funcs. See the detailed note
+    // in ble_sensor.cpp (scanPairedSensorsMulti). Controller is still freed.
+    NimBLEDevice::deinit(false);
 }
 
 #endif  // ENABLE_WIRELESS_BEECOUNTER

@@ -225,7 +225,12 @@ void runCycle(CycleResult& out) {
     }
   }
 
-  NimBLEDevice::deinit(true);
+  // deinit(false), not (true): on the ESP32-C6 deinit(true) panics in
+  // ~NimBLEScan() once a scan has run this boot (the measurement path always
+  // scans first), because it deletes the scan singleton after nimble_port_deinit()
+  // has already zeroed npl_funcs. See the detailed note in ble_sensor.cpp
+  // (scanPairedSensorsMulti). The controller is still fully freed either way.
+  NimBLEDevice::deinit(false);
 }
 
 void writeToJson(JsonDocument& doc, const CycleResult& r) {
