@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hardware helper — HiveHub</title>
+<meta name="description" content="Prototype questionnaire for choosing a HiveHub power, scale and BLE sensor setup, then generating a recommended hardware profile." />
+<meta name="color-scheme" content="light dark" />
+<!-- Set the theme before the stylesheet paints, so there's no light flash. -->
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem("hivehub-theme");
+      if (t !== "dark" && t !== "light") {
+        t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) { /* localStorage blocked — fall back to the light default */ }
+  })();
+</script>
+<link rel="stylesheet" href="assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%9D%3C/text%3E%3C/svg%3E" />
+<style>
+  .helper-hero { padding-bottom: 1.5rem; }
+  .helper-hero .lead { max-width: 70ch; }
+  .helper-layout { display: grid; grid-template-columns: 1fr; gap: 1.5rem; align-items: start; }
+  @media (min-width: 1040px) { .helper-layout { grid-template-columns: minmax(0, 1.08fr) minmax(360px, .92fr); } }
+  .choice-grid { display: grid; gap: .75rem; }
+  .choice {
+    display: grid; grid-template-columns: 24px 1fr; gap: .75rem; align-items: start;
+    border: 1px solid var(--line); border-radius: 12px; padding: .85rem .95rem;
+    background: var(--field-bg); cursor: pointer;
+  }
+  .choice:hover { border-color: var(--honey); }
+  .choice input { margin-top: .25rem; accent-color: var(--honey); }
+  .choice strong { display: block; color: var(--ink); }
+  .choice span { display: block; color: var(--ink-soft); font-size: .88rem; }
+  .choice.is-selected { border-color: var(--honey); box-shadow: inset 0 0 0 1px var(--honey); }
+  .inline-count { display: grid; grid-template-columns: 1fr 116px; gap: .7rem; align-items: end; margin-top: .7rem; }
+  @media (max-width: 600px) { .inline-count { grid-template-columns: 1fr; } }
+  .ble-device { border: 1px solid var(--line); border-radius: 12px; padding: .85rem .95rem; background: var(--field-bg); margin: .7rem 0; }
+  .ble-device .top { display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: .8rem; align-items: center; }
+  .ble-device label.toggle { margin: 0; }
+  .ble-device input[type="number"] { text-align: right; }
+  .ble-device .device-link { font-size: .82rem; margin-top: .35rem; display: inline-block; }
+  .meter { height: 10px; background: var(--comb); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; margin-top: .55rem; }
+  .meter span { display: block; height: 100%; width: 0; background: var(--honey); transition: width .15s ease; }
+  .meter.over span { background: var(--danger); }
+  .profile-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.1rem 1.2rem; }
+  .profile-card h2 { margin: 0 0 .35rem; font-size: 1.25rem; }
+  .profile-card h3 { margin: 1rem 0 .35rem; font-size: 1rem; }
+  .profile-kv { display: grid; gap: .55rem; margin: .9rem 0; }
+  .profile-kv div { display: grid; grid-template-columns: 130px 1fr; gap: .8rem; border-bottom: 1px dashed var(--line); padding-bottom: .45rem; }
+  .profile-kv dt { color: var(--ink-soft); font-size: .85rem; }
+  .profile-kv dd { margin: 0; font-weight: 700; }
+  .pill-row { display: flex; flex-wrap: wrap; gap: .45rem; margin: .7rem 0; }
+  .pill { display: inline-flex; align-items: center; border: 1px solid var(--line); background: var(--comb); color: var(--ink); border-radius: 999px; padding: .22rem .6rem; font-size: .8rem; font-weight: 700; }
+  .helper-flow { display: grid; gap: .65rem; margin: .9rem 0 1rem; }
+  @media (min-width: 700px) { .helper-flow { grid-template-columns: repeat(5, 1fr); } }
+  .flow-step { position: relative; border: 1px solid var(--line); background: var(--field-bg); border-radius: 12px; padding: .75rem; min-height: 86px; }
+  .flow-step b { display: block; font-size: .86rem; }
+  .flow-step span { color: var(--ink-soft); font-size: .78rem; display: block; margin-top: .2rem; }
+  @media (min-width: 700px) {
+    .flow-step:not(:last-child)::after { content: "→"; position: absolute; right: -.62rem; top: 50%; transform: translateY(-50%); color: var(--honey-dark); font-weight: 900; }
+  }
+  .recommendations { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--ink-soft); }
+  .recommendations li { margin: .28rem 0; }
+  .invalid { color: var(--danger); font-weight: 700; }
+  .helper-output { position: sticky; top: 76px; }
+  .helper-output pre { max-height: 360px; }
+</style>
+</head>
+<body>
+
+<header class="site-nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="logo">🐝</span> HiveHub</a>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="index.html#setup">Setup</a>
+      <a href="build.html">Build your own</a>
+      <a href="configurator.html">Config tool</a>
+      <a href="https://github.com/MacNite/HiveHub">GitHub</a>
+      <button data-theme-toggle class="btn small ghost theme-toggle" type="button" aria-label="Toggle dark mode"></button>
+    </nav>
+  </div>
+</header>
+
+<section class="hero helper-hero" style="border-top:none">
+  <div class="wrap">
+    <span class="badge">Prototype test page</span>
+    <h1>Choose the right HiveHub hardware setup.</h1>
+    <p class="lead">
+      Answer a few questions about power, scales and wireless in-hive devices. The helper produces a
+      first build profile, visual setup flow and guide outline that can later become a full wiring and deployment guide.
+    </p>
+    <div class="cta">
+      <a class="btn" href="#helper">Start questionnaire</a>
+      <a class="btn ghost" href="configurator.html">Open config tool</a>
+    </div>
+  </div>
+</section>
+
+<section id="helper" style="padding-top:1rem">
+  <div class="wrap">
+    <div class="helper-layout">
+      <form id="hardware-helper" autocomplete="off">
+        <fieldset>
+          <legend>1. How can you power the HiveHub?</legend>
+          <div class="choice-grid" data-choice-group="power">
+            <label class="choice">
+              <input type="radio" name="power" value="available" checked />
+              <span><strong>I have power available at my apiary</strong><span>Grid power, PoE, shed power or another stable local supply.</span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="power" value="offgrid" />
+              <span><strong>I do not have power available at my apiary</strong><span>Use a battery plus solar panel and add power telemetry.</span></span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>2. How do you want to set up your initial HiveHub?</legend>
+          <p class="muted" style="font-size:.9rem;margin:.2rem 0 .8rem">Further expansion is possible later.</p>
+          <div class="choice-grid" data-choice-group="setup">
+            <label class="choice">
+              <input type="radio" name="setup" value="simple" checked />
+              <span><strong>Simple scale system with 1–2 scales</strong><span>Optional in-hive BLE sensors can be added.</span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="setup" value="multi" />
+              <span><strong>Scale system with up to 16 scales</strong><span>Designed for a larger shared HiveHub installation with optional BLE sensors.</span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="setup" value="bridge" />
+              <span><strong>System without wired scales</strong><span>For sending data from BLE / beehivemonitoring devices to HiveHub.</span></span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset id="scale-fieldset">
+          <legend>3. Do you already have scales or do you want to build your own?</legend>
+          <div class="choice-grid" data-choice-group="scaleSource">
+            <label class="choice">
+              <input type="radio" name="scaleSource" value="build" checked />
+              <span><strong>I want to build my own scales</strong><span>Use load cells with HX711 or a scalable load-cell frontend.</span></span>
+            </label>
+            <div id="build-scale-count" class="inline-count" style="padding-left:2.4rem">
+              <div class="muted" style="font-size:.88rem">How many physical scale platforms do you want to build now?</div>
+              <div class="field" style="margin:0">
+                <label for="scaleCount" class="hint">Scale count</label>
+                <input id="scaleCount" type="number" min="1" max="2" value="2" />
+              </div>
+            </div>
+
+            <label class="choice">
+              <input type="radio" name="scaleSource" value="wired-existing" />
+              <span><strong>I already have hive scales I want to wire directly to HiveHub</strong><span>The generated guide will focus on interface checks, wiring and calibration.</span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="scaleSource" value="ble-existing" />
+              <span><strong>I already have BLE hive scales</strong><span>Use BLE/GATT pairing instead of wired load-cell channels.</span></span>
+            </label>
+          </div>
+          <div id="scale-note" class="note info" style="display:none"></div>
+        </fieldset>
+
+        <fieldset>
+          <legend>4. Optional in-hive sensors or BLE scales</legend>
+          <p class="muted" style="font-size:.9rem;margin:.2rem 0 .7rem">
+            Select the device types and amounts you want to pair. The current test page limits this section to
+            <strong>16 BLE/GATT devices total</strong>.
+          </p>
+
+          <div class="ble-device" data-device="hiveinside">
+            <div class="top">
+              <label class="toggle">
+                <input type="checkbox" data-device-toggle />
+                <span><span class="t-title">HiveInside</span><span class="t-desc">Wireless in-hive sensor.</span></span>
+              </label>
+              <input type="number" min="0" max="16" value="0" data-device-count disabled aria-label="HiveInside amount" />
+            </div>
+            <a class="device-link" href="https://github.com/MacNite/HiveInside">Open HiveInside on GitHub →</a>
+          </div>
+
+          <div class="ble-device" data-device="hiveheart">
+            <div class="top">
+              <label class="toggle">
+                <input type="checkbox" data-device-toggle />
+                <span><span class="t-title">Beehivemonitoring.com HiveHeart</span><span class="t-desc">BLE/GATT in-hive stock heart sensor.</span></span>
+              </label>
+              <input type="number" min="0" max="16" value="0" data-device-count disabled aria-label="HiveHeart amount" />
+            </div>
+            <a class="device-link" href="https://beehivemonitoring.com/product/stockherz-3-0/">Open HiveHeart product page →</a>
+          </div>
+
+          <div class="ble-device" data-device="hivescale">
+            <div class="top">
+              <label class="toggle">
+                <input type="checkbox" data-device-toggle />
+                <span><span class="t-title">Beehivemonitoring.com HiveScale</span><span class="t-desc">BLE/GATT wireless hive scale.</span></span>
+              </label>
+              <input type="number" min="0" max="16" value="0" data-device-count disabled aria-label="HiveScale amount" />
+            </div>
+            <a class="device-link" href="https://beehivemonitoring.com/product/bienenstockwaage-xs/">Open HiveScale product page →</a>
+          </div>
+
+          <div class="ble-device" data-device="holyiot">
+            <div class="top">
+              <label class="toggle">
+                <input type="checkbox" data-device-toggle />
+                <span><span class="t-title">HolyIOT25015</span><span class="t-desc">BLE beacon for temperature, humidity, pressure and acceleration data.</span></span>
+              </label>
+              <input type="number" min="0" max="16" value="0" data-device-count disabled aria-label="HolyIOT25015 amount" />
+            </div>
+          </div>
+
+          <div class="note info" id="ble-limit-note" aria-live="polite">
+            Selected BLE/GATT devices: <strong id="ble-total">0</strong> / 16
+            <div class="meter" id="ble-meter" role="progressbar" aria-valuemin="0" aria-valuemax="16" aria-valuenow="0"><span></span></div>
+          </div>
+        </fieldset>
+
+        <div class="row" style="margin-bottom:1rem">
+          <button type="button" class="btn ghost" id="reset-helper">Reset</button>
+          <a class="btn ghost" href="configurator.html">Continue to config tool</a>
+        </div>
+      </form>
+
+      <aside class="helper-output">
+        <div class="profile-card">
+          <div class="bar" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+            <h2 id="profile-title" style="flex:1">Recommended profile</h2>
+            <button type="button" class="btn ghost small" id="copy-profile">Copy profile</button>
+          </div>
+          <p class="muted" id="profile-subtitle" style="margin:.2rem 0 .8rem"></p>
+
+          <div class="helper-flow" id="setup-flow" aria-label="Generated setup flow"></div>
+
+          <dl class="profile-kv" id="profile-kv"></dl>
+          <div class="pill-row" id="profile-pills"></div>
+
+          <h3>Recommended next guide sections</h3>
+          <ul class="recommendations" id="guide-list"></ul>
+
+          <h3>Build profile preview</h3>
+          <pre id="profile-preview" class="mono"></pre>
+
+          <div class="note info" style="margin-top:.8rem">
+            This page is only a first questionnaire prototype. The next step would be turning the generated profile into exact wiring tables, firmware flags and deployment commands.
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
+    <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
+    <span><a href="index.html">Home</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/MacNite/HiveHub">GitHub</a></span>
+  </div>
+</footer>
+
+<div class="toast" id="toast"></div>
+<script src="assets/hardware-helper.js"></script>
+<script src="assets/theme.js"></script>
+</body>
+</html>
