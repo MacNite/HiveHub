@@ -7,22 +7,22 @@
   var DEVICE_META = {
     hiveinside: {
       label: "HiveInside",
-      feature: "ENABLE_BLE_SCAN + ENABLE_BEEHIVE_GATT",
+      features: ["ENABLE_BLE_SCAN", "ENABLE_BEEHIVE_GATT"],
       guide: "Pair HiveInside devices and decide whether their data overrides wired in-hive sensors."
     },
     hiveheart: {
       label: "Beehivemonitoring.com HiveHeart",
-      feature: "ENABLE_BLE_SCAN + ENABLE_BEEHIVE_GATT",
+      features: ["ENABLE_BLE_SCAN", "ENABLE_BEEHIVE_GATT"],
       guide: "Pair HiveHeart devices and map each sensor to a hive."
     },
     hivescale: {
       label: "Beehivemonitoring.com HiveScale",
-      feature: "ENABLE_BLE_SCAN + ENABLE_BEEHIVE_GATT",
+      features: ["ENABLE_BLE_SCAN", "ENABLE_BEEHIVE_GATT"],
       guide: "Pair wireless HiveScale devices and map each scale to a hive."
     },
     holyiot: {
       label: "HolyIOT25015",
-      feature: "ENABLE_BLE_SCAN",
+      features: ["ENABLE_BLE_SCAN"],
       guide: "Pair HolyIOT25015 beacons and configure beacon scan timing."
     }
   };
@@ -68,6 +68,7 @@
   var copyButton = document.getElementById("copy-profile");
   var resetButton = document.getElementById("reset-helper");
   var toast = document.getElementById("toast");
+  var bleMeterBar = bleMeter ? bleMeter.querySelector("span") : null;
 
   function checkedValue(name) {
     var el = form.querySelector("input[name='" + name + "']:checked");
@@ -99,6 +100,29 @@
     }
   }
 
+  // Enable/disable, clamp and range the interactive controls. This is the only
+  // place that writes back to inputs, and it runs on structural changes (radio /
+  // checkbox / reset) — never on every keystroke — so number fields stay
+  // editable while the user is typing.
+  function normalizeControls() {
+    var setup = checkedValue("setup") || "simple";
+    var scaleMax = (SETUP_META[setup] || SETUP_META.simple).defaultScaleMax;
+    scaleCount.max = String(Math.max(1, scaleMax || 1));
+    scaleCount.value = setup === "bridge" ? "0" : String(clampNumber(scaleCount.value, 1, scaleMax || 1));
+
+    var rows = form.querySelectorAll(".ble-device");
+    for (var i = 0; i < rows.length; i++) {
+      var toggle = rows[i].querySelector("[data-device-toggle]");
+      var count = rows[i].querySelector("[data-device-count]");
+      if (!count) continue;
+      var enabled = !!toggle && toggle.checked;
+      count.disabled = !enabled;
+      if (!enabled) count.value = "0";
+      else count.value = String(Math.max(1, clampNumber(count.value, 0, MAX_BLE_DEVICES)));
+    }
+  }
+
+  // Read-only: reports the currently selected BLE devices without mutating them.
   function collectBleDevices() {
     var rows = form.querySelectorAll(".ble-device");
     var devices = [];
@@ -110,13 +134,6 @@
       var toggle = row.querySelector("[data-device-toggle]");
       var count = row.querySelector("[data-device-count]");
       var enabled = !!toggle && toggle.checked;
-
-      if (count) {
-        count.disabled = !enabled;
-        if (!enabled) count.value = "0";
-        if (enabled && parseInt(count.value, 10) <= 0) count.value = "1";
-        count.value = String(clampNumber(count.value, 0, MAX_BLE_DEVICES));
-      }
 
       var amount = enabled && count ? clampNumber(count.value, 0, MAX_BLE_DEVICES) : 0;
       if (amount > 0 && DEVICE_META[key]) {
@@ -150,11 +167,6 @@
     var scaleSource = checkedValue("scaleSource") || "build";
     var setupMeta = SETUP_META[setup] || SETUP_META.simple;
     var scaleMax = setupMeta.defaultScaleMax;
-
-    scaleCount.max = String(Math.max(1, scaleMax || 1));
-    if (setup === "simple") scaleCount.value = String(clampNumber(scaleCount.value, 1, 2));
-    if (setup === "multi") scaleCount.value = String(clampNumber(scaleCount.value, 1, 16));
-    if (setup === "bridge") scaleCount.value = "0";
 
     var ownScaleCount = setup === "bridge" || scaleSource !== "build" ? 0 : clampNumber(scaleCount.value, 1, scaleMax || 1);
     var ble = collectBleDevices();
@@ -208,7 +220,7 @@
     for (var i = 0; i < ble.devices.length; i++) {
       var meta = DEVICE_META[ble.devices[i].key];
       if (!meta) continue;
-      features.push(meta.feature);
+      for (var f = 0; f < meta.features.length; f++) features.push(meta.features[f]);
       recommendations.push(meta.guide);
     }
 
@@ -260,9 +272,10 @@
   function renderBleLimit(profile) {
     bleTotal.textContent = String(profile.bleTotal);
     var percent = Math.min(100, Math.round((profile.bleTotal / MAX_BLE_DEVICES) * 100));
-    var bar = bleMeter.querySelector("span");
-    if (bar) bar.style.width = percent + "%";
+    if (bleMeterBar) bleMeterBar.style.width = percent + "%";
     bleMeter.classList.toggle("over", profile.bleTotal > MAX_BLE_DEVICES);
+    bleMeter.setAttribute("aria-valuenow", String(profile.bleTotal));
+    bleMeter.setAttribute("aria-valuetext", profile.bleTotal + " of " + MAX_BLE_DEVICES + " BLE/GATT devices selected");
     bleLimitNote.className = profile.bleTotal > MAX_BLE_DEVICES ? "note warn" : "note info";
   }
 
@@ -375,15 +388,21 @@
     renderProfile(profile);
   }
 
-  form.addEventListener("change", function (event) {
-    if (event.target.matches("[data-device-toggle]")) {
-      var count = event.target.closest(".ble-device").querySelector("[data-device-count]");
-      if (count && event.target.checked && parseInt(count.value, 10) === 0) count.value = "1";
-    }
+  // Structural changes (radio / checkbox toggles, committed number edits) may
+  // enable, disable or re-range controls, so normalize before re-rendering.
+  form.addEventListener("change", function () {
+    normalizeControls();
     render();
   });
 
-  form.addEventListener("input", render);
+  // Live typing in number fields: re-render the preview without rewriting the
+  // field value (that would fight the user mid-edit). Radios and checkboxes are
+  // handled by the change listener above.
+  form.addEventListener("input", function (event) {
+    var t = event.target;
+    if (t && (t.type === "radio" || t.type === "checkbox")) return;
+    render();
+  });
 
   if (copyButton) {
     copyButton.addEventListener("click", function () {
@@ -403,16 +422,12 @@
   if (resetButton) {
     resetButton.addEventListener("click", function () {
       form.reset();
-      var counts = form.querySelectorAll("[data-device-count]");
-      for (var i = 0; i < counts.length; i++) {
-        counts[i].value = "0";
-        counts[i].disabled = true;
-      }
-      scaleCount.value = "2";
+      normalizeControls();
       render();
       showToast("Questionnaire reset");
     });
   }
 
+  normalizeControls();
   render();
 })();
