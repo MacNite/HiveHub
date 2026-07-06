@@ -344,6 +344,28 @@ export function valueAt(points, t) {
   return (t - before.t) <= (after.t - t) ? before : after;
 }
 
+// Build a daily-max {label,color,points} series: one point per calendar day
+// holding that day's highest value for `key`, timestamped at the reading that
+// produced it. Used for coarse trend charts (e.g. a month of weight collapsed
+// to ~30 points) where sub-daily noise isn't useful.
+export function dailyMaxSeries(measurements, key, label, color) {
+  const byDay = new Map(); // local date string -> { t, y }
+  for (const m of measurements) {
+    if (m == null) continue;
+    const raw = m[key];
+    if (raw == null || raw === "") continue;
+    const y = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(y)) continue;
+    const t = new Date(m.measured_at).getTime();
+    if (Number.isNaN(t)) continue;
+    const dayKey = new Date(t).toDateString();
+    const cur = byDay.get(dayKey);
+    if (!cur || y > cur.y) byDay.set(dayKey, { t, y });
+  }
+  const points = [...byDay.values()].sort((a, b) => a.t - b.t);
+  return { label, color, points };
+}
+
 // Build a {label,color,points} series from measurements (newest-first) for a key.
 export function seriesFrom(measurements, key, label, color) {
   const points = [];
