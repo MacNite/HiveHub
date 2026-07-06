@@ -4,7 +4,7 @@
 import { api } from "./api.js";
 import { auth } from "./auth.js";
 import { el } from "./format.js";
-import { GROUPS, clearCharts, drawCharts, availableHives, hiveLabel } from "./views.js";
+import { GROUPS, clearCharts, drawCharts, configureCharts, availableHives, hiveLabel } from "./views.js";
 import { PALETTE } from "./charts.js";
 
 const RANGES = {
@@ -450,6 +450,7 @@ function render() {
     container.append(el("div", { class: "empty-state" }, "Loading…"));
   } else {
     const vstate = buildState();
+    configureCharts(vstate);
     try {
       group.render(container, vstate);
     } catch (err) {
