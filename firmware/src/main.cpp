@@ -22,6 +22,16 @@ void runUploadCycle() {
   debugLine();
   Serial.println("[CYCLE] Starting measurement/upload cycle");
 
+  // Bring the network up before assembling the payload so rssi_dbm is sampled
+  // while Wi-Fi is associated. Otherwise createMeasurementJson() reads
+  // WiFi.RSSI() before connectWifi() has run (it only runs later inside
+  // uploadLine()), so the ternary in sensors.cpp falls back to 0. On timer
+  // deep-sleep wakes with a valid RTC, initializeTime() skips its NTP sync and
+  // never connects either, which is why boards with a healthy RTC (e.g. the
+  // ESP32-C6 scale modules) reported rssi_dbm = 0 on every cycle. Wi-Fi has to
+  // come up for the upload regardless, so connecting here costs no extra power.
+  connectNetwork();
+
   String json = createMeasurementJson();
 
   if (sdOk) {
