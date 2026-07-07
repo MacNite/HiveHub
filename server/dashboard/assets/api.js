@@ -33,6 +33,24 @@ async function req(path, opts = {}) {
 export const api = {
   listDevices: () => req("/devices"),
 
+  // Show / hide a device in the hive picker (admin). hidden=true retires it from
+  // the top-bar picker without touching its stored data.
+  setDeviceVisibility: (deviceId, hidden) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/visibility`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hidden: !!hidden }),
+    }),
+
+  // Delete a device's measurements in a time range (admin). Gated server-side by
+  // the device's claim code — payload carries { start_at, end_at, claim_code }.
+  deleteMeasurements: (deviceId, payload) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/measurements/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    }),
+
   measurements: (deviceId, { start, end, limit } = {}) => {
     const q = new URLSearchParams();
     if (start) q.set("start_at", start);

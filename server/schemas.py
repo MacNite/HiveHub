@@ -469,6 +469,28 @@ class ShareDeviceIn(BaseModel):
     role: Literal["admin", "viewer"] = "viewer"
 
 
+class DeviceVisibilityUpdateIn(BaseModel):
+    """Show or hide a device in the local dashboard's hive picker.
+
+    Hiding a retired device drops it from the top-bar picker without touching
+    its stored data; it can be shown again at any time.
+    """
+    hidden: bool
+
+
+class MeasurementDeleteIn(BaseModel):
+    """Delete a device's measurements within a time range.
+
+    Used to prune the useless boot-time spikes devices emit before they know
+    their calibration. Gated by the device's claim code as a second factor on
+    top of the admin session: the caller must supply the claim code the device
+    was provisioned with, matched against the stored hash.
+    """
+    start_at: datetime
+    end_at: datetime
+    claim_code: str = Field(..., min_length=4, max_length=128)
+
+
 class DeviceChannelsUpdateIn(BaseModel):
     # Legacy two-channel fields, kept so the HivePal app endpoints keep working.
     scale_1_display_name: Optional[str] = None

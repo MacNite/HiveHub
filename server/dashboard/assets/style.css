@@ -267,6 +267,13 @@ select {
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .grid.wide { grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); }
 
+/* Device & admin page: three independent columns, each a vertical stack of
+   cards, so related panels group by column (config/calibration/account ·
+   names/tempcomp/users · firmware/data/devices). Collapses to one column on
+   narrow screens (see the 800px media query). */
+.admin-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+.admin-col { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+
 .card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: 1rem 1.1rem;
@@ -370,6 +377,8 @@ select {
   .topbar-controls { margin-left: 0; width: 100%; }
   /* .grid.wide's 420px minimum would overflow narrow phones — stack instead */
   .grid.wide { grid-template-columns: 1fr; }
+  /* The 3-column admin layout stacks into a single column on phones/tablets */
+  .admin-cols { grid-template-columns: 1fr; }
 }
 
 /* Visible keyboard-focus ring (controls otherwise only signal state on hover) */

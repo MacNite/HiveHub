@@ -1206,18 +1206,116 @@ function renderDevice(root, state) {
   const fitCard = el("div", { class: "card" }, el("h2", {}, "Temperature compensation"),
     el("p", { class: "note" }, "Regress raw weight against temperature to derive a load-cell coefficient."), fitForm);
 
-  // Dashboard account cards: change-your-password for everyone, plus user
-  // management for admins.
-  const accountCards = [accountCard(state)];
-  if (state.authUser?.role === "admin") accountCards.push(usersCard(state));
+  // Three-column layout (see .admin-cols): each column is an independent
+  // vertical stack, grouping related panels. Admin-only cards (user management,
+  // device visibility, reading deletion) are appended only for admins — the
+  // matching server endpoints reject non-admins anyway.
+  const isAdmin = state.authUser?.role === "admin";
 
-  node.append(
-    el("div", { class: "grid wide" }, configCard, channelsCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, fwPanel, uploadCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, sdCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, ...accountCards));
+  const col1 = [configCard, calCard, accountCard(state)];
+  const col2 = [channelsCard, fitCard];
+  if (isAdmin) col2.push(usersCard(state));
+  const col3 = [fwPanel, uploadCard, sdCard];
+  if (isAdmin) col3.push(visibleDevicesCard(state), deleteMeasurementsCard(state));
+
+  node.append(el("div", { class: "admin-cols" },
+    el("div", { class: "admin-col" }, ...col1),
+    el("div", { class: "admin-col" }, ...col2),
+    el("div", { class: "admin-col" }, ...col3)));
   root.append(node);
+}
+
+// "Visible devices" (admin only): retire a decommissioned device from the
+// top-bar hive picker without deleting its history, or bring one back. Toggling
+// a checkbox persists the flag and repaints the picker (see app.js
+// setDeviceVisibility, wired through state.actions.setDeviceVisibility).
+function visibleDevicesCard(state) {
+  const listEl = el("div", { class: "rows" });
+  const devices = state.devices || [];
+  if (!devices.length) {
+    listEl.append(el("p", { class: "muted-text" }, "No devices on this server."));
+  } else {
+    for (const d of devices) {
+      const label = d.display_name ? `${d.display_name} · ${d.device_id}` : d.device_id;
+      const cb = el("input", { type: "checkbox" });
+      cb.checked = !d.hidden;
+      cb.addEventListener("change", async () => {
+        const hide = !cb.checked;
+        cb.disabled = true;
+        try {
+          await state.actions.setDeviceVisibility(d.device_id, hide);
+          state.toast(hide ? `${label} hidden from picker` : `${label} shown in picker`, "success");
+          // setDeviceVisibility repaints the whole view, so this node is replaced.
+        } catch (err) {
+          cb.checked = !hide;   // revert on failure
+          cb.disabled = false;
+          state.toast(err.message, "error");
+        }
+      });
+      listEl.append(el("label", { class: "row" },
+        el("span", { class: "k" }, label,
+          d.hidden ? el("span", { class: "badge muted", style: "margin-left:.5rem" }, "Hidden") : null),
+        el("span", { class: "v" }, cb)));
+    }
+  }
+  return el("div", { class: "card" }, el("h2", {}, "Visible devices"),
+    el("p", { class: "note" },
+      "Uncheck a retired device to remove it from the hive picker at the top of the page. " +
+      "Its readings are kept and it can be shown again at any time."),
+    listEl);
+}
+
+// "Delete readings" (admin only): remove a time range of measurements for the
+// active device. Devices connect and upload on boot before they know their
+// calibration, producing large spikes that swamp the charts; this prunes them.
+// Destructive, so the server also requires the device's claim code (see
+// local_delete_measurements) — a second factor on top of the admin session.
+function deleteMeasurementsCard(state) {
+  const dev = state.device;
+  const deviceLabel = dev ? (dev.display_name || dev.device_id) : "—";
+  const startInput = el("input", { type: "datetime-local" });
+  const endInput = el("input", { type: "datetime-local" });
+  const codeInput = el("input", { type: "text", autocomplete: "off", placeholder: "e.g. ABCD-1234" });
+  const out = el("p", { class: "note", hidden: true });
+  const btn = el("button", { class: "btn danger", type: "submit" }, "Delete readings");
+  const form = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "From"), startInput),
+    el("div", { class: "form-row" }, el("label", {}, "To"), endInput),
+    el("div", { class: "form-row" }, el("label", {}, "Device claim code"), codeInput),
+    el("div", { class: "form-actions" }, btn),
+    out);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!dev) { state.toast("No device selected", "error"); return; }
+    if (!startInput.value || !endInput.value) { state.toast("Choose a start and end time", "error"); return; }
+    const start = new Date(startInput.value), end = new Date(endInput.value);
+    if (end < start) { state.toast("End time must be at or after the start time", "error"); return; }
+    if (!codeInput.value.trim()) { state.toast("Enter the device's claim code to confirm", "error"); return; }
+    if (!window.confirm(
+      `Permanently delete all readings for “${deviceLabel}” between\n` +
+      `${start.toLocaleString()} and ${end.toLocaleString()}?\n\nThis cannot be undone.`)) return;
+    btn.disabled = true;
+    try {
+      const res = await state.actions.deleteMeasurements(dev.device_id, {
+        start_at: start.toISOString(),
+        end_at: end.toISOString(),
+        claim_code: codeInput.value.trim(),
+      });
+      const n = res?.deleted ?? 0;
+      out.hidden = false;
+      out.textContent = `Deleted ${n} reading${n === 1 ? "" : "s"} for “${deviceLabel}”.`;
+      state.toast(`Deleted ${n} reading${n === 1 ? "" : "s"}`, "success");
+      codeInput.value = "";
+      state.reload();
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { btn.disabled = false; }
+  });
+  return el("div", { class: "card" }, el("h2", {}, "Delete readings"),
+    el("p", { class: "note" },
+      `Remove a range of readings for “${deviceLabel}” — useful for clearing the ` +
+      "spikes a device sends on boot, before it knows its calibration. " +
+      "Enter the device's claim code to authorise the deletion."),
+    form);
 }
 
 // ── dashboard account cards ──────────────────────────────────────────────────
