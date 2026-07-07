@@ -267,6 +267,33 @@ select {
 .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .grid.wide { grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); }
 
+/* Device & admin page: three independent columns, each a vertical stack of
+   cards, so related panels group by column. Collapses to one column on narrow
+   screens (see the 800px media query). */
+.admin-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; align-items: start; }
+.admin-col { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+
+/* Full-width collapsible admin sections (Configuration, Admin) that fold away
+   below the five always-visible panels. Built on native <details>/<summary>. */
+.collapsible-panel { margin-top: 1rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+.collapsible-panel > summary { cursor: pointer; list-style: none; padding: .85rem 1.1rem; font-size: 1rem; font-weight: 800; display: flex; align-items: center; gap: .55rem; }
+.collapsible-panel > summary::-webkit-details-marker { display: none; }
+.collapsible-panel > summary::before { content: "\25B8"; color: var(--ink-soft); transition: transform .15s ease; }
+.collapsible-panel[open] > summary::before { transform: rotate(90deg); }
+.collapsible-body { padding: 0 1.1rem 1.1rem; }
+/* Cards nested inside a collapsible's admin grid keep their own frame. */
+.collapsible-body .admin-cols { align-items: start; }
+
+/* Configuration form laid across the full-width Configuration panel: two blocks
+   (General · Scale calibration & compensation) that wrap to one column when narrow. */
+.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: .4rem 1.75rem; align-items: start; }
+.config-block h3 { margin: .1rem 0 .55rem; font-size: .9rem; }
+/* The per-scale field group is a transparent wrapper so its rows flow inside the
+   block; toggling [hidden] on it swaps which scale is shown. */
+.scale-fields { display: contents; }
+.fit-row { display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap; }
+.fit-row .form-row { margin-bottom: 0; flex: 1 1 8rem; }
+
 .card {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--shadow); padding: 1rem 1.1rem;
@@ -370,6 +397,8 @@ select {
   .topbar-controls { margin-left: 0; width: 100%; }
   /* .grid.wide's 420px minimum would overflow narrow phones — stack instead */
   .grid.wide { grid-template-columns: 1fr; }
+  /* The 3-column admin layout stacks into a single column on phones/tablets */
+  .admin-cols { grid-template-columns: 1fr; }
 }
 
 /* Visible keyboard-focus ring (controls otherwise only signal state on hover) */

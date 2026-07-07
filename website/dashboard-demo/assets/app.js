@@ -40,9 +40,11 @@ const ui = {
   status: document.getElementById("device-status"),
 };
 
-// The demo has no auth API, so a fixed read-only session stands in for the real
-// dashboard's logged-in user (drives the Device & admin "Your account" panel).
-const DEMO_USER = { username: "demo", role: "viewer", email: null };
+// The demo has no auth API, so a fixed session stands in for the real dashboard's
+// logged-in user (drives the Device & admin "Your account" panel). It uses the
+// admin role so the demo showcases the full Admin panel (users, visible devices,
+// delete readings); the write actions themselves are stubbed in api.js.
+const DEMO_USER = { username: "demo", role: "admin", email: null };
 
 const state = {
   devices: [],
@@ -102,10 +104,14 @@ function hiveWeight(row, n) {
 function deviceState(id) {
   return { latest: state.deviceLatest[id] || null, channels: id === state.activeDeviceId ? state.data?.channels : null, device: deviceMeta(id) };
 }
-// Default to the first device with all its hives selected — reproducing the old
-// "device 1 · All hives" landing state.
+// Devices offered in the hive picker: everything except the ones an admin has
+// retired (hidden). Hidden devices stay in state.devices so the admin "Visible
+// devices" panel can still list and un-hide them.
+function pickerDevices() { return state.devices.filter((d) => !d.hidden); }
+// Default to the first visible device with all its hives selected — reproducing
+// the old "device 1 · All hives" landing state.
 function resetSelectionToFirstDevice() {
-  const d = state.devices[0];
+  const d = pickerDevices()[0];
   state.selection = [];
   if (!d) { state.activeDeviceId = null; return; }
   state.activeDeviceId = d.device_id;
@@ -114,8 +120,27 @@ function resetSelectionToFirstDevice() {
 // Keep the active device valid: it must be a device that's currently selected.
 function normalizeActiveDevice() {
   const ids = selectionDeviceIds();
-  if (!ids.length) { if (!state.activeDeviceId && state.devices[0]) state.activeDeviceId = state.devices[0].device_id; return; }
+  const fallback = pickerDevices()[0];
+  if (!ids.length) { if (!state.activeDeviceId && fallback) state.activeDeviceId = fallback.device_id; return; }
   if (!ids.includes(state.activeDeviceId)) state.activeDeviceId = ids[0];
+}
+
+// Apply a device visibility toggle from the admin panel: persist it, mirror it
+// into local state, drop a newly-hidden device from the comparison selection,
+// and repaint the picker + current view.
+async function setDeviceVisibility(deviceId, hidden) {
+  await api.setDeviceVisibility(deviceId, hidden);
+  const d = deviceMeta(deviceId);
+  if (d) d.hidden = hidden;
+  if (hidden) {
+    state.selection = state.selection.filter((s) => s.deviceId !== deviceId);
+    if (!state.selection.length) resetSelectionToFirstDevice();
+  }
+  normalizeActiveDevice();
+  renderPicker();
+  renderSelectionStrip();
+  renderActiveDeviceField();
+  render();
 }
 
 // ── toast ────────────────────────────────────────────────────────────────────
@@ -296,6 +321,10 @@ function buildState() {
       updateConfig: (p) => api.updateConfig(activeId, p),
       updateChannels: (p) => api.updateChannels(activeId, p),
       insightsHistory: (opts) => api.insightsHistory(activeId, opts),
+      // Device visibility (admin): retire/restore a device in the hive picker.
+      setDeviceVisibility: (deviceId, hidden) => setDeviceVisibility(deviceId, hidden),
+      // Delete a device's readings in a time range, authed by its claim code.
+      deleteMeasurements: (deviceId, p) => api.deleteMeasurements(deviceId, p),
       // Account management is auth-backed in the real dashboard; disabled here.
       listUsers: () => api.listUsers(),
       createUser: (u, p, r, email) => api.createUser(u, p, r, email),
@@ -339,7 +368,7 @@ function onSelectionChanged() {
 function renderPicker() {
   const q = ui.hiveSearch.value.trim().toLowerCase();
   const groups = [];
-  for (const dev of state.devices) {
+  for (const dev of pickerDevices()) {
     const dstate = deviceState(dev.device_id);
     const allHives = availableHives(dstate);
     const hives = allHives.filter((n) => {

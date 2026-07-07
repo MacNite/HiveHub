@@ -861,6 +861,15 @@ function insightsHistoryCard(state) {
 }
 
 // ── DEVICE / ADMIN ───────────────────────────────────────────────────────────
+// A full-width, native <details> collapsible section used to fold the
+// Configuration and Admin panels away at the bottom of the page. `open` sets the
+// default expanded state; children become the body.
+function collapsible(title, open, ...children) {
+  return el("details", { class: "collapsible-panel", open: open ? true : null },
+    el("summary", { class: "collapsible-summary" }, title),
+    el("div", { class: "collapsible-body" }, ...children));
+}
+
 function renderDevice(root, state) {
   const cfg = state.config || {};
   const fw = state.firmware || {};
@@ -869,39 +878,101 @@ function renderDevice(root, state) {
   const devNote = deviceContextNote(state, "These settings apply to");
   if (devNote) node.append(devNote);
 
-  // Editable configuration form
+  // ── Configuration form ──────────────────────────────────────────────────
+  // General settings + per-scale calibration and temperature compensation (the
+  // old standalone "Temperature compensation" panel is folded in here), plus a
+  // Fit tool that writes its result into the compensation fields for review.
   const cfgInputs = {};
-  const numRow = (label, key, isInt) => {
+  const numInput = (key, isInt) => {
     const input = el("input", {
       type: "number", step: isInt ? "1" : "any",
       value: cfg[key] != null ? String(cfg[key]) : "",
     });
     cfgInputs[key] = { input, int: !!isInt };
-    return el("div", { class: "form-row" }, el("label", {}, label), input);
+    return input;
   };
+  const fieldRow = (label, control) => el("div", { class: "form-row" }, el("label", {}, label), control);
+
+  // Scales the device exposes. Per-scale calibration and temp-comp are backed by
+  // dedicated columns for scales 1–2, so the selector is built from the hives the
+  // device reports, capped to those two (fallback [1, 2] for a silent device).
+  const reported = availableHives(state).filter((n) => n <= 2);
+  const scales = reported.length ? reported : [1, 2];
+  const scaleTag = (n) => {
+    const label = hiveLabel(state, n);
+    return label && label !== `Hive ${n}` ? ` · ${label}` : "";
+  };
+
+  // One offset/factor/tempco group per scale; the Scale selector shows one group
+  // at a time so the section reads as a per-scale editor rather than a flat list.
+  const scaleGroups = new Map();
+  for (const n of scales) {
+    scaleGroups.set(n, el("div", { class: "scale-fields" },
+      fieldRow("Offset", numInput(`scale${n}_offset`, true)),
+      fieldRow("Factor", numInput(`scale${n}_factor`)),
+      fieldRow("Tempco coefficient (kg/°C)", numInput(`scale${n}_tempco_kg_per_c`))));
+  }
+  const scaleSelect = el("select", { class: "full" },
+    ...scales.map((n) => el("option", { value: String(n) }, `Scale ${n}${scaleTag(n)}`)));
+  const showScale = () => {
+    const sel = Number(scaleSelect.value);
+    for (const [n, g] of scaleGroups) g.hidden = n !== sel;
+  };
+  scaleSelect.addEventListener("change", showScale);
+
   const tcEnabled = el("input", { type: "checkbox" });
   tcEnabled.checked = !!cfg.tempco_enabled;
   const tcSource = el("select", { class: "full" },
     ...["ambient", "hive_1", "hive_2"].map((v) =>
       el("option", { value: v, selected: cfg.tempco_source === v ? true : null }, v)));
-  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
 
+  // Fit tool, scoped to the selected scale: it regresses stored weight against
+  // temperature and writes the coefficient + reference temp straight into the
+  // fields above (apply:false) so they can be reviewed before Save.
+  const lookbackInput = el("input", { type: "number", value: "14", min: "1", max: "90" });
+  const fitBtn = el("button", { class: "btn ghost", type: "button" }, "Fit coefficient from data");
+  const fitOut = el("p", { class: "note" });
+  fitBtn.addEventListener("click", async () => {
+    const n = Number(scaleSelect.value);
+    fitBtn.disabled = true; fitOut.textContent = "Fitting…";
+    try {
+      const r = await state.actions.fitTempComp({ scale: n, lookback_days: Number(lookbackInput.value) || 14, apply: false });
+      if (!r || !r.ok) { fitOut.textContent = `Fit failed: ${(r && r.reason) || "insufficient data"}`; return; }
+      const coeff = cfgInputs[`scale${n}_tempco_kg_per_c`];
+      if (coeff) coeff.input.value = String(r.coeff_kg_per_c);
+      if (cfgInputs.tempco_ref_temp_c) cfgInputs.tempco_ref_temp_c.input.value = String(r.ref_temp_c);
+      tcEnabled.checked = true;
+      if (r.temp_source) tcSource.value = r.temp_source;
+      scaleSelect.value = String(n); showScale();
+      fitOut.textContent = `Filled Scale ${n}: coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(r.ref_temp_c, 1)} °C, R² ${fmt(r.r_squared, 3)} — review and Save.`;
+    } catch (err) { fitOut.textContent = ""; state.toast(err.message, "error"); }
+    finally { fitBtn.disabled = false; }
+  });
+
+  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
+  const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
   const cfgForm = el("form", {},
-    el("div", { class: "rows" },
-      el("div", { class: "row" }, el("span", { class: "k" }, "Device ID"), el("span", { class: "v" }, state.device?.device_id || DASH)),
-      el("div", { class: "row" }, el("span", { class: "k" }, "Config version"), el("span", { class: "v" }, cfg.config_version ?? DASH))),
-    numRow("Send interval (s)", "send_interval_seconds", true),
-    numRow("Scale 1 offset", "scale1_offset", true),
-    numRow("Scale 1 factor", "scale1_factor"),
-    numRow("Scale 2 offset", "scale2_offset", true),
-    numRow("Scale 2 factor", "scale2_factor"),
-    el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
-    el("div", { class: "form-row" }, el("label", {}, "Tempco source"), tcSource),
-    numRow("Tempco ref temp (°C)", "tempco_ref_temp_c"),
-    numRow("Scale 1 tempco (kg/°C)", "scale1_tempco_kg_per_c"),
-    numRow("Scale 2 tempco (kg/°C)", "scale2_tempco_kg_per_c"),
+    el("div", { class: "config-grid" },
+      el("div", { class: "config-block" },
+        el("h3", {}, "General"),
+        el("div", { class: "rows" },
+          metaRow("Device ID", state.device?.device_id || DASH),
+          metaRow("Config version", cfg.config_version ?? DASH)),
+        fieldRow("Send interval (s)", numInput("send_interval_seconds", true))),
+      el("div", { class: "config-block" },
+        el("h3", {}, "Scale calibration & compensation"),
+        fieldRow("Scale", scaleSelect),
+        ...scaleGroups.values(),
+        el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
+        fieldRow("Tempco source", tcSource),
+        fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c")),
+        el("div", { class: "fit-row" },
+          fieldRow("Fit lookback (days)", lookbackInput),
+          el("div", { class: "form-actions" }, fitBtn)),
+        fitOut)),
     el("p", { class: "note" }, "Saving bumps the config version; the device applies it on its next check-in."),
     el("div", { class: "form-actions" }, cfgSaveBtn));
+  showScale();
 
   cfgForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -920,7 +991,6 @@ function renderDevice(root, state) {
     try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload(); }
     catch (err) { state.toast(err.message, "error"); cfgSaveBtn.disabled = false; }
   });
-  const configCard = el("div", { class: "card" }, el("h2", {}, "Configuration"), cfgForm);
 
   // Hive (scale-channel) names — one input per hive the device reports (up to 18).
   const chData = state.channels || {};
@@ -1080,30 +1150,71 @@ function renderDevice(root, state) {
       "Re-uploading the same file is safe — existing readings are skipped automatically."),
     el("div", { class: "form-actions" }, sdBtn),
     sdResult);
+  // Post the picked file to a specific device (defaults to the selected one).
+  function runSdImport(deviceId) {
+    const fd = new FormData();
+    fd.append("file", sdFileInput.files[0]);
+    return state.actions.importSdData(fd, deviceId);
+  }
+  function renderSdResult(res) {
+    const dupes = res.duplicates
+      ? `, ${res.duplicates} duplicate${res.duplicates === 1 ? "" : "s"} skipped`
+      : "";
+    const unreadable = res.skipped
+      ? ` · ${res.skipped} unreadable line${res.skipped === 1 ? "" : "s"} skipped`
+      : "";
+    const into = res.device_id ? ` into device “${res.device_id}”` : "";
+    sdResult.hidden = false;
+    sdResult.textContent =
+      `Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${into}${dupes}. ` +
+      `Parsed ${res.parsed} record${res.parsed === 1 ? "" : "s"}${unreadable}.`;
+    state.toast(`Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${into}`, "success");
+    sdForm.reset();
+    sdPicked.hidden = true;
+    state.reload();
+  }
   sdForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!sdFileInput.files[0]) return;
-    const fd = new FormData();
-    fd.append("file", sdFileInput.files[0]);
     sdBtn.disabled = true;
     const restore = sdBtn.textContent;
     sdBtn.textContent = "Importing…";
     try {
-      const res = await state.actions.importSdData(fd);
-      const dupes = res.duplicates
-        ? `, ${res.duplicates} duplicate${res.duplicates === 1 ? "" : "s"} skipped`
-        : "";
-      const unreadable = res.skipped
-        ? ` · ${res.skipped} unreadable line${res.skipped === 1 ? "" : "s"} skipped`
-        : "";
-      sdResult.hidden = false;
-      sdResult.textContent =
-        `Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${dupes}. ` +
-        `Parsed ${res.parsed} record${res.parsed === 1 ? "" : "s"}${unreadable}.`;
-      state.toast(`Imported ${res.inserted} new readings`, "success");
-      sdForm.reset();
-      sdPicked.hidden = true;
-      state.reload();
+      let res;
+      try {
+        res = await runSdImport();               // upload to the selected device
+      } catch (err) {
+        // The card was recorded by a different device than the one selected.
+        // Offer to send the readings to their true source device instead of
+        // mis-attaching them here.
+        if (err.status === 409 && err.detail && err.detail.code === "device_mismatch") {
+          const sources = err.detail.file_device_ids || [];
+          const target = err.detail.target_device_id;
+          if (sources.length !== 1) {
+            // A single file holding several devices' data can't be auto-routed.
+            state.toast(err.detail.message || err.message, "error");
+            return;
+          }
+          const source = sources[0];
+          const ok = window.confirm(
+            `This SD-card data is from device “${source}”, but you are uploading ` +
+            `it to device “${target}”.\n\n` +
+            `Upload the data to its source device “${source}” instead?\n\n` +
+            `OK — import into “${source}”      Cancel — stop`
+          );
+          if (!ok) { state.toast("SD import cancelled", "error"); return; }
+          sdBtn.textContent = "Importing…";
+          try {
+            res = await runSdImport(source);       // re-post to the correct device
+          } catch (err2) {
+            state.toast(`Could not import into “${source}”: ${err2.message}`, "error");
+            return;
+          }
+        } else {
+          throw err;
+        }
+      }
+      renderSdResult(res);
     }
     catch (err) { state.toast(err.message, "error"); }
     finally { sdBtn.disabled = false; sdBtn.textContent = restore; }
@@ -1135,48 +1246,121 @@ function renderDevice(root, state) {
     el("p", { class: "note" }, "Calibration mode samples the load cell more frequently so you can place known weights and fit a temperature coefficient."),
     el("div", { class: "form-actions" }, startBtn, stopBtn));
 
-  // Temp-compensation fit
-  const scaleSel = el("select", { class: "full" }, el("option", { value: "1" }, "Scale 1"), el("option", { value: "2" }, "Scale 2"));
-  const lookbackInput = el("input", { type: "number", value: "14", min: "1", max: "90" });
-  const applyChk = el("input", { type: "checkbox" });
-  const fitBtn = el("button", { class: "btn", type: "submit" }, "Fit coefficient");
-  const fitOut = el("p", { class: "note" });
-  const fitForm = el("form", {},
-    el("div", { class: "form-row" }, el("label", {}, "Scale"), scaleSel),
-    el("div", { class: "form-row" }, el("label", {}, "Lookback (days)"), lookbackInput),
-    el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Apply to device config "), applyChk)),
-    el("div", { class: "form-actions" }, fitBtn), fitOut);
-  fitForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    fitBtn.disabled = true; fitOut.textContent = "Fitting…";
-    try {
-      const r = await state.actions.fitTempComp({
-        scale: Number(scaleSel.value),
-        lookback_days: Number(lookbackInput.value) || 14,
-        apply: applyChk.checked,
-      });
-      fitOut.textContent = r.ok
-        ? `coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(r.ref_temp_c, 1)} °C, R² ${fmt(r.r_squared, 3)}${r.applied ? " — applied" : ""}`
-        : `Fit failed: ${r.reason || "insufficient data"}`;
-      if (r.applied) state.reload();
-    } catch (err) { fitOut.textContent = ""; state.toast(err.message, "error"); }
-    finally { fitBtn.disabled = false; }
-  });
-  const fitCard = el("div", { class: "card" }, el("h2", {}, "Temperature compensation"),
-    el("p", { class: "note" }, "Regress raw weight against temperature to derive a load-cell coefficient."), fitForm);
+  // ── Layout ────────────────────────────────────────────────────────────────
+  // Top: five always-visible panels in the requested column positions
+  // (Calibration · Hive names · Firmware / Upload firmware / Import SD card
+  // data). Each panel sizes to its own content rather than stretching.
+  // Below: a full-width collapsible "Configuration" (general + per-scale
+  // calibration/compensation + fit), and at the very bottom a full-width
+  // collapsible "Admin" grouping the account and admin-only management panels.
+  const isAdmin = state.authUser?.role === "admin";
 
-  // Dashboard account cards: change-your-password for everyone, plus user
-  // management for admins.
-  const accountCards = [accountCard(state)];
-  if (state.authUser?.role === "admin") accountCards.push(usersCard(state));
+  const topGrid = el("div", { class: "admin-cols" },
+    el("div", { class: "admin-col" }, calCard),
+    el("div", { class: "admin-col" }, channelsCard),
+    el("div", { class: "admin-col" }, fwPanel, uploadCard, sdCard));
+
+  const adminCards = [accountCard(state)];
+  if (isAdmin) adminCards.push(usersCard(state), visibleDevicesCard(state), deleteMeasurementsCard(state));
 
   node.append(
-    el("div", { class: "grid wide" }, configCard, channelsCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, fwPanel, uploadCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, calCard, fitCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, sdCard),
-    el("div", { class: "grid wide", style: "margin-top:1rem" }, ...accountCards));
+    topGrid,
+    collapsible("Configuration", true, cfgForm),
+    collapsible("Admin", false, el("div", { class: "admin-cols" }, ...adminCards)));
   root.append(node);
+}
+
+// "Visible devices" (admin only): retire a decommissioned device from the
+// top-bar hive picker without deleting its history, or bring one back. Toggling
+// a checkbox persists the flag and repaints the picker (see app.js
+// setDeviceVisibility, wired through state.actions.setDeviceVisibility).
+function visibleDevicesCard(state) {
+  const listEl = el("div", { class: "rows" });
+  const devices = state.devices || [];
+  if (!devices.length) {
+    listEl.append(el("p", { class: "muted-text" }, "No devices on this server."));
+  } else {
+    for (const d of devices) {
+      const label = d.display_name ? `${d.display_name} · ${d.device_id}` : d.device_id;
+      const cb = el("input", { type: "checkbox" });
+      cb.checked = !d.hidden;
+      cb.addEventListener("change", async () => {
+        const hide = !cb.checked;
+        cb.disabled = true;
+        try {
+          await state.actions.setDeviceVisibility(d.device_id, hide);
+          state.toast(hide ? `${label} hidden from picker` : `${label} shown in picker`, "success");
+          // setDeviceVisibility repaints the whole view, so this node is replaced.
+        } catch (err) {
+          cb.checked = !hide;   // revert on failure
+          cb.disabled = false;
+          state.toast(err.message, "error");
+        }
+      });
+      listEl.append(el("label", { class: "row" },
+        el("span", { class: "k" }, label,
+          d.hidden ? el("span", { class: "badge muted", style: "margin-left:.5rem" }, "Hidden") : null),
+        el("span", { class: "v" }, cb)));
+    }
+  }
+  return el("div", { class: "card" }, el("h2", {}, "Visible devices"),
+    el("p", { class: "note" },
+      "Uncheck a retired device to remove it from the hive picker at the top of the page. " +
+      "Its readings are kept and it can be shown again at any time."),
+    listEl);
+}
+
+// "Delete readings" (admin only): remove a time range of measurements for the
+// active device. Devices connect and upload on boot before they know their
+// calibration, producing large spikes that swamp the charts; this prunes them.
+// Destructive, so the server also requires the device's claim code (see
+// local_delete_measurements) — a second factor on top of the admin session.
+function deleteMeasurementsCard(state) {
+  const dev = state.device;
+  const deviceLabel = dev ? (dev.display_name || dev.device_id) : "—";
+  const startInput = el("input", { type: "datetime-local" });
+  const endInput = el("input", { type: "datetime-local" });
+  const codeInput = el("input", { type: "text", autocomplete: "off", placeholder: "e.g. ABCD-1234" });
+  const out = el("p", { class: "note", hidden: true });
+  const btn = el("button", { class: "btn danger", type: "submit" }, "Delete readings");
+  const form = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "From"), startInput),
+    el("div", { class: "form-row" }, el("label", {}, "To"), endInput),
+    el("div", { class: "form-row" }, el("label", {}, "Device claim code"), codeInput),
+    el("div", { class: "form-actions" }, btn),
+    out);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!dev) { state.toast("No device selected", "error"); return; }
+    if (!startInput.value || !endInput.value) { state.toast("Choose a start and end time", "error"); return; }
+    const start = new Date(startInput.value), end = new Date(endInput.value);
+    if (end < start) { state.toast("End time must be at or after the start time", "error"); return; }
+    if (!codeInput.value.trim()) { state.toast("Enter the device's claim code to confirm", "error"); return; }
+    if (!window.confirm(
+      `Permanently delete all readings for “${deviceLabel}” between\n` +
+      `${start.toLocaleString()} and ${end.toLocaleString()}?\n\nThis cannot be undone.`)) return;
+    btn.disabled = true;
+    try {
+      const res = await state.actions.deleteMeasurements(dev.device_id, {
+        start_at: start.toISOString(),
+        end_at: end.toISOString(),
+        claim_code: codeInput.value.trim(),
+      });
+      const n = res?.deleted ?? 0;
+      out.hidden = false;
+      out.textContent = `Deleted ${n} reading${n === 1 ? "" : "s"} for “${deviceLabel}”.`;
+      state.toast(`Deleted ${n} reading${n === 1 ? "" : "s"}`, "success");
+      codeInput.value = "";
+      state.reload();
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { btn.disabled = false; }
+  });
+  return el("div", { class: "card" }, el("h2", {}, "Delete readings"),
+    el("p", { class: "note" },
+      `Remove a range of readings for “${deviceLabel}” — useful for clearing the ` +
+      "spikes a device sends on boot, before it knows its calibration. " +
+      "Enter the device's claim code to authorise the deletion."),
+    form);
 }
 
 // ── dashboard account cards ──────────────────────────────────────────────────

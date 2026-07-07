@@ -15,14 +15,24 @@ const DEVICES = [
     claimed_at: "2026-03-01T08:00:00Z",
     last_firmware_version: "0.20.1",
     channels: { scale_1: "North hive", scale_2: "South hive" },
-    twoHives: true, solar: true,
+    twoHives: true, solar: true, hidden: false,
   },
   {
     device_id: "demo-rooftop-02", display_name: "Rooftop 02",
     claimed_at: "2026-04-15T08:00:00Z",
     last_firmware_version: "0.20.1",
     channels: { scale_1: "Rooftop hive", scale_2: null },
-    twoHives: false, solar: false,
+    twoHives: false, solar: false, hidden: false,
+  },
+  {
+    // A retired device, hidden from the hive picker by default — showcases the
+    // admin "Visible devices" toggle. Toggling it in the demo actually works
+    // (setDeviceVisibility below mutates this in memory).
+    device_id: "demo-orchard-03", display_name: "Orchard 03 (retired)",
+    claimed_at: "2025-06-01T08:00:00Z",
+    last_firmware_version: "0.19.0",
+    channels: { scale_1: "Orchard hive", scale_2: null },
+    twoHives: false, solar: false, hidden: true,
   },
 ];
 
@@ -201,6 +211,20 @@ export const api = {
     approved_version: null, update_available: true, pending_approval: true,
   }),
 
+  // Hiding a device works in the demo (mutates the in-memory list) so the
+  // "Visible devices" toggle can be tried out; the picker updates live.
+  setDeviceVisibility: (deviceId, hidden) => {
+    const dev = DEVICES.find((d) => d.device_id === deviceId);
+    if (dev) dev.hidden = !!hidden;
+    return wrap({ device_id: deviceId, hidden: !!hidden });
+  },
+
+  // Sample account list so the admin "Dashboard users" panel renders with data.
+  listUsers: () => wrap([
+    { id: 1, username: "demo", role: "admin", email: "demo@example.com" },
+    { id: 2, username: "viewer", role: "viewer", email: null },
+  ]),
+
   // write actions are disabled in the demo
   uploadFirmware: demoErr,
   importSdData: demoErr,
@@ -210,8 +234,8 @@ export const api = {
   fitTempCompensation: demoErr,
   updateConfig: demoErr,
   updateChannels: demoErr,
+  deleteMeasurements: demoErr,
   // account management is auth-backed in the real dashboard; disabled here
-  listUsers: demoErr,
   createUser: demoErr,
   deleteUser: demoErr,
   changePassword: demoErr,
