@@ -861,6 +861,15 @@ function insightsHistoryCard(state) {
 }
 
 // ── DEVICE / ADMIN ───────────────────────────────────────────────────────────
+// A full-width, native <details> collapsible section used to fold the
+// Configuration and Admin panels away at the bottom of the page. `open` sets the
+// default expanded state; children become the body.
+function collapsible(title, open, ...children) {
+  return el("details", { class: "collapsible-panel", open: open ? true : null },
+    el("summary", { class: "collapsible-summary" }, title),
+    el("div", { class: "collapsible-body" }, ...children));
+}
+
 function renderDevice(root, state) {
   const cfg = state.config || {};
   const fw = state.firmware || {};
@@ -869,39 +878,101 @@ function renderDevice(root, state) {
   const devNote = deviceContextNote(state, "These settings apply to");
   if (devNote) node.append(devNote);
 
-  // Editable configuration form
+  // ── Configuration form ──────────────────────────────────────────────────
+  // General settings + per-scale calibration and temperature compensation (the
+  // old standalone "Temperature compensation" panel is folded in here), plus a
+  // Fit tool that writes its result into the compensation fields for review.
   const cfgInputs = {};
-  const numRow = (label, key, isInt) => {
+  const numInput = (key, isInt) => {
     const input = el("input", {
       type: "number", step: isInt ? "1" : "any",
       value: cfg[key] != null ? String(cfg[key]) : "",
     });
     cfgInputs[key] = { input, int: !!isInt };
-    return el("div", { class: "form-row" }, el("label", {}, label), input);
+    return input;
   };
+  const fieldRow = (label, control) => el("div", { class: "form-row" }, el("label", {}, label), control);
+
+  // Scales the device exposes. Per-scale calibration and temp-comp are backed by
+  // dedicated columns for scales 1–2, so the selector is built from the hives the
+  // device reports, capped to those two (fallback [1, 2] for a silent device).
+  const reported = availableHives(state).filter((n) => n <= 2);
+  const scales = reported.length ? reported : [1, 2];
+  const scaleTag = (n) => {
+    const label = hiveLabel(state, n);
+    return label && label !== `Hive ${n}` ? ` · ${label}` : "";
+  };
+
+  // One offset/factor/tempco group per scale; the Scale selector shows one group
+  // at a time so the section reads as a per-scale editor rather than a flat list.
+  const scaleGroups = new Map();
+  for (const n of scales) {
+    scaleGroups.set(n, el("div", { class: "scale-fields" },
+      fieldRow("Offset", numInput(`scale${n}_offset`, true)),
+      fieldRow("Factor", numInput(`scale${n}_factor`)),
+      fieldRow("Tempco coefficient (kg/°C)", numInput(`scale${n}_tempco_kg_per_c`))));
+  }
+  const scaleSelect = el("select", { class: "full" },
+    ...scales.map((n) => el("option", { value: String(n) }, `Scale ${n}${scaleTag(n)}`)));
+  const showScale = () => {
+    const sel = Number(scaleSelect.value);
+    for (const [n, g] of scaleGroups) g.hidden = n !== sel;
+  };
+  scaleSelect.addEventListener("change", showScale);
+
   const tcEnabled = el("input", { type: "checkbox" });
   tcEnabled.checked = !!cfg.tempco_enabled;
   const tcSource = el("select", { class: "full" },
     ...["ambient", "hive_1", "hive_2"].map((v) =>
       el("option", { value: v, selected: cfg.tempco_source === v ? true : null }, v)));
-  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
 
+  // Fit tool, scoped to the selected scale: it regresses stored weight against
+  // temperature and writes the coefficient + reference temp straight into the
+  // fields above (apply:false) so they can be reviewed before Save.
+  const lookbackInput = el("input", { type: "number", value: "14", min: "1", max: "90" });
+  const fitBtn = el("button", { class: "btn ghost", type: "button" }, "Fit coefficient from data");
+  const fitOut = el("p", { class: "note" });
+  fitBtn.addEventListener("click", async () => {
+    const n = Number(scaleSelect.value);
+    fitBtn.disabled = true; fitOut.textContent = "Fitting…";
+    try {
+      const r = await state.actions.fitTempComp({ scale: n, lookback_days: Number(lookbackInput.value) || 14, apply: false });
+      if (!r || !r.ok) { fitOut.textContent = `Fit failed: ${(r && r.reason) || "insufficient data"}`; return; }
+      const coeff = cfgInputs[`scale${n}_tempco_kg_per_c`];
+      if (coeff) coeff.input.value = String(r.coeff_kg_per_c);
+      if (cfgInputs.tempco_ref_temp_c) cfgInputs.tempco_ref_temp_c.input.value = String(r.ref_temp_c);
+      tcEnabled.checked = true;
+      if (r.temp_source) tcSource.value = r.temp_source;
+      scaleSelect.value = String(n); showScale();
+      fitOut.textContent = `Filled Scale ${n}: coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(r.ref_temp_c, 1)} °C, R² ${fmt(r.r_squared, 3)} — review and Save.`;
+    } catch (err) { fitOut.textContent = ""; state.toast(err.message, "error"); }
+    finally { fitBtn.disabled = false; }
+  });
+
+  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
+  const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
   const cfgForm = el("form", {},
-    el("div", { class: "rows" },
-      el("div", { class: "row" }, el("span", { class: "k" }, "Device ID"), el("span", { class: "v" }, state.device?.device_id || DASH)),
-      el("div", { class: "row" }, el("span", { class: "k" }, "Config version"), el("span", { class: "v" }, cfg.config_version ?? DASH))),
-    numRow("Send interval (s)", "send_interval_seconds", true),
-    numRow("Scale 1 offset", "scale1_offset", true),
-    numRow("Scale 1 factor", "scale1_factor"),
-    numRow("Scale 2 offset", "scale2_offset", true),
-    numRow("Scale 2 factor", "scale2_factor"),
-    el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
-    el("div", { class: "form-row" }, el("label", {}, "Tempco source"), tcSource),
-    numRow("Tempco ref temp (°C)", "tempco_ref_temp_c"),
-    numRow("Scale 1 tempco (kg/°C)", "scale1_tempco_kg_per_c"),
-    numRow("Scale 2 tempco (kg/°C)", "scale2_tempco_kg_per_c"),
+    el("div", { class: "config-grid" },
+      el("div", { class: "config-block" },
+        el("h3", {}, "General"),
+        el("div", { class: "rows" },
+          metaRow("Device ID", state.device?.device_id || DASH),
+          metaRow("Config version", cfg.config_version ?? DASH)),
+        fieldRow("Send interval (s)", numInput("send_interval_seconds", true))),
+      el("div", { class: "config-block" },
+        el("h3", {}, "Scale calibration & compensation"),
+        fieldRow("Scale", scaleSelect),
+        ...scaleGroups.values(),
+        el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
+        fieldRow("Tempco source", tcSource),
+        fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c")),
+        el("div", { class: "fit-row" },
+          fieldRow("Fit lookback (days)", lookbackInput),
+          el("div", { class: "form-actions" }, fitBtn)),
+        fitOut)),
     el("p", { class: "note" }, "Saving bumps the config version; the device applies it on its next check-in."),
     el("div", { class: "form-actions" }, cfgSaveBtn));
+  showScale();
 
   cfgForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -920,7 +991,6 @@ function renderDevice(root, state) {
     try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload(); }
     catch (err) { state.toast(err.message, "error"); cfgSaveBtn.disabled = false; }
   });
-  const configCard = el("div", { class: "card" }, el("h2", {}, "Configuration"), cfgForm);
 
   // Hive (scale-channel) names — one input per hive the device reports (up to 18).
   const chData = state.channels || {};
@@ -1176,52 +1246,27 @@ function renderDevice(root, state) {
     el("p", { class: "note" }, "Calibration mode samples the load cell more frequently so you can place known weights and fit a temperature coefficient."),
     el("div", { class: "form-actions" }, startBtn, stopBtn));
 
-  // Temp-compensation fit
-  const scaleSel = el("select", { class: "full" }, el("option", { value: "1" }, "Scale 1"), el("option", { value: "2" }, "Scale 2"));
-  const lookbackInput = el("input", { type: "number", value: "14", min: "1", max: "90" });
-  const applyChk = el("input", { type: "checkbox" });
-  const fitBtn = el("button", { class: "btn", type: "submit" }, "Fit coefficient");
-  const fitOut = el("p", { class: "note" });
-  const fitForm = el("form", {},
-    el("div", { class: "form-row" }, el("label", {}, "Scale"), scaleSel),
-    el("div", { class: "form-row" }, el("label", {}, "Lookback (days)"), lookbackInput),
-    el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Apply to device config "), applyChk)),
-    el("div", { class: "form-actions" }, fitBtn), fitOut);
-  fitForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    fitBtn.disabled = true; fitOut.textContent = "Fitting…";
-    try {
-      const r = await state.actions.fitTempComp({
-        scale: Number(scaleSel.value),
-        lookback_days: Number(lookbackInput.value) || 14,
-        apply: applyChk.checked,
-      });
-      fitOut.textContent = r.ok
-        ? `coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(r.ref_temp_c, 1)} °C, R² ${fmt(r.r_squared, 3)}${r.applied ? " — applied" : ""}`
-        : `Fit failed: ${r.reason || "insufficient data"}`;
-      if (r.applied) state.reload();
-    } catch (err) { fitOut.textContent = ""; state.toast(err.message, "error"); }
-    finally { fitBtn.disabled = false; }
-  });
-  const fitCard = el("div", { class: "card" }, el("h2", {}, "Temperature compensation"),
-    el("p", { class: "note" }, "Regress raw weight against temperature to derive a load-cell coefficient."), fitForm);
-
-  // Three-column layout (see .admin-cols): each column is an independent
-  // vertical stack, grouping related panels. Admin-only cards (user management,
-  // device visibility, reading deletion) are appended only for admins — the
-  // matching server endpoints reject non-admins anyway.
+  // ── Layout ────────────────────────────────────────────────────────────────
+  // Top: five always-visible panels in the requested column positions
+  // (Calibration · Hive names · Firmware / Upload firmware / Import SD card
+  // data). Each panel sizes to its own content rather than stretching.
+  // Below: a full-width collapsible "Configuration" (general + per-scale
+  // calibration/compensation + fit), and at the very bottom a full-width
+  // collapsible "Admin" grouping the account and admin-only management panels.
   const isAdmin = state.authUser?.role === "admin";
 
-  const col1 = [configCard, calCard, accountCard(state)];
-  const col2 = [channelsCard, fitCard];
-  if (isAdmin) col2.push(usersCard(state));
-  const col3 = [fwPanel, uploadCard, sdCard];
-  if (isAdmin) col3.push(visibleDevicesCard(state), deleteMeasurementsCard(state));
+  const topGrid = el("div", { class: "admin-cols" },
+    el("div", { class: "admin-col" }, calCard),
+    el("div", { class: "admin-col" }, channelsCard),
+    el("div", { class: "admin-col" }, fwPanel, uploadCard, sdCard));
 
-  node.append(el("div", { class: "admin-cols" },
-    el("div", { class: "admin-col" }, ...col1),
-    el("div", { class: "admin-col" }, ...col2),
-    el("div", { class: "admin-col" }, ...col3)));
+  const adminCards = [accountCard(state)];
+  if (isAdmin) adminCards.push(usersCard(state), visibleDevicesCard(state), deleteMeasurementsCard(state));
+
+  node.append(
+    topGrid,
+    collapsible("Configuration", true, cfgForm),
+    collapsible("Admin", false, el("div", { class: "admin-cols" }, ...adminCards)));
   root.append(node);
 }
 
