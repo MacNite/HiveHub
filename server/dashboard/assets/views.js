@@ -1247,18 +1247,18 @@ function renderDevice(root, state) {
     el("div", { class: "form-actions" }, startBtn, stopBtn));
 
   // ── Layout ────────────────────────────────────────────────────────────────
-  // Top: five always-visible panels in the requested column positions
-  // (Calibration · Hive names · Firmware / Upload firmware / Import SD card
-  // data). Each panel sizes to its own content rather than stretching.
+  // Top: five always-visible panels balanced across the three columns so none is
+  // left empty — Calibration + Firmware · Hive names + Import SD card data ·
+  // Upload firmware. Each panel sizes to its own content rather than stretching.
   // Below: a full-width collapsible "Configuration" (general + per-scale
   // calibration/compensation + fit), and at the very bottom a full-width
   // collapsible "Admin" grouping the account and admin-only management panels.
   const isAdmin = state.authUser?.role === "admin";
 
   const topGrid = el("div", { class: "admin-cols" },
-    el("div", { class: "admin-col" }, calCard),
-    el("div", { class: "admin-col" }, channelsCard),
-    el("div", { class: "admin-col" }, fwPanel, uploadCard, sdCard));
+    el("div", { class: "admin-col" }, calCard, fwPanel),
+    el("div", { class: "admin-col" }, channelsCard, sdCard),
+    el("div", { class: "admin-col" }, uploadCard));
 
   const adminCards = [accountCard(state)];
   if (isAdmin) adminCards.push(usersCard(state), visibleDevicesCard(state), deleteMeasurementsCard(state));
