@@ -37,7 +37,7 @@ from auth import (
 )
 from commands import create_command
 from config import DASHBOARD_SESSION_COOKIE
-from db import get_conn
+from db import get_conn, hash_claim_code
 from devices import (
     apply_device_channels,
     fetch_device_channels,
@@ -82,7 +82,9 @@ from schemas import (
     DeviceChannelsUpdateIn,
     DeviceCommandIn,
     DeviceConfigUpdate,
+    DeviceVisibilityUpdateIn,
     MEASUREMENT_IMPORT_MAX,
+    MeasurementDeleteIn,
     MeasurementIn,
     TempCoefficientFitIn,
 )
@@ -238,7 +240,7 @@ def _list_devices_payload() -> list[dict]:
             cur.execute(
                 """
                 SELECT device_id, display_name, claimed_at, last_seen_at,
-                       last_firmware_version
+                       last_firmware_version, hidden
                 FROM devices
                 ORDER BY last_seen_at DESC NULLS LAST;
                 """
@@ -261,6 +263,7 @@ def _list_devices_payload() -> list[dict]:
             "claimed_at": r[2],
             "last_seen_at": r[3],
             "last_firmware_version": r[4],
+            "hidden": bool(r[5]),
             "channels": {
                 "scale_1": channels.get(r[0], {}).get(1),
                 "scale_2": channels.get(r[0], {}).get(2),
@@ -281,6 +284,26 @@ def _list_devices_payload() -> list[dict]:
 def local_list_devices():
     """List every device on this server with its scale-channel display names."""
     return _list_devices_payload()
+
+
+@router.patch("/api/v1/local/devices/{device_id}/visibility", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
+def local_set_device_visibility(device_id: str, body: DeviceVisibilityUpdateIn):
+    """Show or hide a device in the dashboard's hive picker (admin only).
+
+    Hiding a retired device removes it from the top-bar picker without deleting
+    any of its stored readings; unhiding brings it back. The device keeps
+    ingesting and stays reachable through every other API path.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE devices SET hidden = %s WHERE device_id = %s;",
+                (body.hidden, device_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Device not found")
+            conn.commit()
+    return {"device_id": device_id, "hidden": body.hidden}
 
 
 @router.get("/api/v1/local/devices/{device_id}/measurements", dependencies=LOCAL_DASHBOARD_DEP)
@@ -445,6 +468,57 @@ async def local_import_sd_measurements(
         "inserted": inserted,
         "duplicates": duplicates,
     }
+
+
+@router.post(
+    "/api/v1/local/devices/{device_id}/measurements/delete",
+    dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+)
+def local_delete_measurements(device_id: str, body: MeasurementDeleteIn):
+    """Delete a device's measurements within a time range (admin only).
+
+    Meant for pruning the useless spikes a device emits on boot before it knows
+    its calibration, which otherwise dominate the charts. Destructive and
+    irreversible, so it is gated by the device's claim code as a second factor:
+    the caller must supply the claim code the device was provisioned with,
+    matched against the stored hash. Deleting the parent measurement rows also
+    removes their per-hive readings via the ON DELETE CASCADE foreign key.
+    """
+    if body.end_at < body.start_at:
+        raise HTTPException(status_code=400, detail="end_at must be at or after start_at")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT claim_code_hash FROM devices WHERE device_id = %s;",
+                (device_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Device not found")
+            stored_hash = row[0]
+            if not stored_hash:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "This device has no claim code on record, so a deletion "
+                        "cannot be authenticated."
+                    ),
+                )
+            if hash_claim_code(body.claim_code) != stored_hash:
+                raise HTTPException(status_code=403, detail="Claim code does not match this device")
+
+            cur.execute(
+                """
+                DELETE FROM measurements
+                WHERE device_id = %s AND measured_at >= %s AND measured_at <= %s;
+                """,
+                (device_id, body.start_at, body.end_at),
+            )
+            deleted = cur.rowcount
+            conn.commit()
+
+    return {"status": "ok", "device_id": device_id, "deleted": deleted}
 
 
 @router.get("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_DEP)

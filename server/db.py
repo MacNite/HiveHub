@@ -325,6 +325,13 @@ def init_db():
                 -- approving a version that only exists for the other architecture.
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_board TEXT;
 
+                -- Retired / decommissioned devices can be hidden from the local
+                -- dashboard's hive picker without deleting their history. The
+                -- admin "Visible devices" panel toggles this flag; a hidden
+                -- device still ingests data and stays fully addressable in the
+                -- API — it is only dropped from the top-bar hive picker.
+                ALTER TABLE devices ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT false;
+
                 CREATE INDEX IF NOT EXISTS idx_measurements_device_time
                     ON measurements (device_id, measured_at DESC);
 
