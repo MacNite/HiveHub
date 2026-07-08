@@ -5,6 +5,18 @@
 import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, fmtDateTime, DASH } from "./format.js";
 import { drawLineChart, drawSpectrumChart, seriesFrom, dailyMaxSeries, valueAt, PALETTE, withAlpha } from "./charts.js";
 
+// Pull the firmware version out of a build artifact's filename so the upload
+// form can pre-fill the Version field. rename_firmware.py names artifacts
+// "<prefix>_<board>_<version>.bin" (e.g. hivehub_esp32_0.21.0.bin,
+// hivehub_esp32-c6_0.9.2.bin), so the version is the trailing dotted token.
+// Requiring a dot means the board tokens (esp32 / c6) are never mistaken for a
+// version; returns "" when no version-looking token is present.
+function versionFromFilename(name) {
+  const base = (name || "").replace(/\.[^.]*$/, "");
+  const m = base.match(/(\d+\.\d+(?:\.\d+)*(?:[-_][0-9A-Za-z.]+)?)$/);
+  return m ? m[1] : "";
+}
+
 // ── chart manager: views register charts; app.js redraws them after mount ────
 let activeCharts = [];
 
@@ -1074,6 +1086,14 @@ function renderDevice(root, state) {
   // the valid values, shown only for that target.
   const fileInput = el("input", { type: "file", accept: ".bin", required: true });
   const versionInput = el("input", { type: "text", placeholder: "e.g. 0.21.0", required: true });
+  // Selecting/dropping a board-stamped .bin pre-fills the version from its
+  // filename (hivehub_esp32_0.21.0.bin → 0.21.0), so the operator rarely has to
+  // retype it. Only fills when we detect a version — an unrecognized name leaves
+  // whatever was typed intact rather than clearing it.
+  fileInput.addEventListener("change", () => {
+    const detected = versionFromFilename(fileInput.files[0] && fileInput.files[0].name);
+    if (detected) versionInput.value = detected;
+  });
   const targetSelect = el("select", { class: "full" },
     el("option", { value: "hivescale" }, "Main unit (HiveHub / HiveScale)"),
     el("option", { value: "hiveinside" }, "HiveInside"),
