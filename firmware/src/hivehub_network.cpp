@@ -204,6 +204,50 @@ bool httpPostJson(const String& url, const String& json, String* response) {
   return false;
 }
 
+bool httpPatchJson(const String& url, const String& json, String* response) {
+  if (!connectWifi()) {
+    Serial.println("[HTTP PATCH] No WiFi");
+    return false;
+  }
+
+  Serial.println("[HTTP PATCH]");
+  Serial.print("[HTTP PATCH] URL: ");
+  Serial.println(url);
+  Serial.print("[HTTP PATCH] Payload: ");
+  Serial.println(json);
+
+  WiFiClientSecure client;
+  applyTlsConfig(client);
+  HTTPClient http;
+
+  if (!http.begin(client, url)) {
+    Serial.println("[HTTP PATCH] http.begin failed");
+    return false;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  addAuthHeader(http);
+
+  int code = http.sendRequest("PATCH", (uint8_t*)json.c_str(), json.length());
+  String body = http.getString();
+
+  Serial.printf("[HTTP PATCH] Status: %d\n", code);
+  Serial.print("[HTTP PATCH] Response: ");
+  Serial.println(body);
+
+  if (response) *response = body;
+
+  http.end();
+
+  if (code >= 200 && code < 300) {
+    Serial.println("[HTTP PATCH] SUCCESS");
+    return true;
+  }
+
+  Serial.println("[HTTP PATCH] FAILED");
+  return false;
+}
+
 bool uploadLine(const String& line) {
   String response;
   bool ok = httpPostJson(apiUrl("/api/v1/measurements"), line, &response);
@@ -418,6 +462,67 @@ void fetchRemoteConfig() {
   Serial.printf("[CONFIG] Remote config applied (version %lu, calibration %s)\n",
                 (unsigned long)remoteVersion,
                 applyCalibration ? "applied" : "unchanged");
+}
+
+void reportScaleCalibration() {
+  // Collect the calibration the server is able to store. The device_configs row
+  // holds only scale1/scale2 offset+factor, which map to hive index 1/2 scale[0]
+  // — the exact reverse of the bridge in fetchRemoteConfig(). Hives 3–18 have no
+  // server-side calibration column, so they are intentionally not reported here.
+  // Only emit a scaleN_* pair when that hive actually carries a valid scale, so a
+  // device that uses (say) only hive 2 does not clobber the server's scale1 with
+  // a default.
+  JsonDocument body;
+  int reported = 0;
+  auto addHive = [&](uint8_t hiveIndex, const char* offKey, const char* facKey) {
+    for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+      if (hivecfg::gHives[h].index != hiveIndex) continue;
+      if (hivecfg::gHives[h].scaleCount == 0) return;
+      const hivecfg::ScaleChannel& ch = hivecfg::gHives[h].scales[0];
+      if (!ch.valid()) return;
+      body[offKey] = ch.offset;
+      body[facKey] = ch.factor;
+      reported++;
+      return;
+    }
+  };
+  addHive(1, "scale1_offset", "scale1_factor");
+  addHive(2, "scale2_offset", "scale2_factor");
+
+  if (reported == 0) {
+    Serial.println("[CONFIG] No local scale calibration to report; clearing pending flag");
+    clearScaleCalibrationReport();
+    return;
+  }
+
+  String payload;
+  serializeJson(body, payload);
+
+  String url = apiUrl(String("/api/v1/devices/") + deviceId + "/config");
+  String response;
+  if (!httpPatchJson(url, payload, &response)) {
+    // Keep the pending flag set so the report is retried on the next cycle.
+    Serial.println("[CONFIG] Failed to report scale calibration; will retry next cycle");
+    return;
+  }
+
+  // The PATCH incremented config_version and the response echoes the new config.
+  // Record that version as the one we've applied so the fetchRemoteConfig() right
+  // after this sees "unchanged" and does not bridge these very values back into
+  // the registry (harmless, but it keeps cfg_applied honest and skips a needless
+  // NVS write).
+  JsonDocument doc;
+  if (!deserializeJson(doc, response) && !doc["config_version"].isNull()) {
+    uint32_t newVersion = doc["config_version"] | 0;
+    if (newVersion != 0) {
+      prefs.begin("hivescale", false);
+      prefs.putUInt("cfg_applied", newVersion);
+      prefs.end();
+    }
+  }
+
+  clearScaleCalibrationReport();
+  Serial.println("[CONFIG] Scale calibration reported to server");
 }
 
 String absoluteUrl(String maybeRelativeUrl) {

@@ -62,6 +62,13 @@ void runUploadCycle() {
     uploadCachedLines();
   }
 
+  // A tare/span done offline on the provisioning portal only lives on the device
+  // (the AP has no internet, so the server never learned it). Now that WiFi is up
+  // again after the reboot, push it to the backend BEFORE fetching remote config,
+  // so the server holds the real calibration instead of its defaults. Runs only
+  // when a report is pending and clears the flag on success.
+  if (scaleCalibrationReportPending()) reportScaleCalibration();
+
   fetchRemoteConfig();
   checkCommands();
 

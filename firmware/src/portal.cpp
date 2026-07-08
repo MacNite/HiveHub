@@ -577,6 +577,11 @@ static void handleCalibrateSet() {
     return;
   }
   hivecfg::saveHiveConfig();
+  // Remember the calibration must be pushed to the server on the next cycle with
+  // WiFi (the provisioning AP is offline). The device reboots out of the portal
+  // via the setup page's "Save and reboot" or a power cycle; either way the flag
+  // survives in NVS and reportScaleCalibration() sends it once online.
+  markScaleCalibrationDirty();
   float kg = calKg(raw, ch->offset, ch->factor);
   String js = "{\"ok\":true,\"raw\":" + String(raw) + ",\"off\":" + String(ch->offset) +
               ",\"fac\":" + String(ch->factor, 2) +
@@ -919,6 +924,10 @@ void handleSetupSave() {
 
   // Persist the hive registry parsed above (opens/closes its own NVS handle).
   hivecfg::saveHiveConfig();
+
+  // Report the (possibly portal-calibrated) scale calibration to the server once
+  // the device is back online after the reboot below — the offline AP could not.
+  markScaleCalibrationDirty();
 
   setupServer.send(200, "text/html", "<html><body><h1>Saved</h1><p>Device will reboot now.</p></body></html>");
   delay(1000);

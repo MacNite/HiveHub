@@ -214,6 +214,25 @@ void saveScaleConfig() {
   prefs.end();
 }
 
+void markScaleCalibrationDirty() {
+  prefs.begin("hivescale", false);
+  prefs.putBool("cal_dirty", true);
+  prefs.end();
+}
+
+bool scaleCalibrationReportPending() {
+  prefs.begin("hivescale", true);
+  bool pending = prefs.getBool("cal_dirty", false);
+  prefs.end();
+  return pending;
+}
+
+void clearScaleCalibrationReport() {
+  prefs.begin("hivescale", false);
+  prefs.remove("cal_dirty");
+  prefs.end();
+}
+
 int getWifiCount() {
   prefs.begin("hivescale", true);
   uint32_t count = prefs.getUInt("wifi_count", 0);
