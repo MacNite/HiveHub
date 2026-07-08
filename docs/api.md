@@ -353,6 +353,13 @@ informational for the device (which keeps sending raw weights); the correction i
 applied in the backend on read. See
 [temperature-compensation.md](temperature-compensation.md).
 
+Since firmware 0.23.5 the device applies the `scale*_offset`/`scale*_factor`
+fields to its hive registry **only when `config_version` differs from the last
+version it applied** (stored in NVS). A calibration done locally on the
+provisioning portal's `/calibrate` page therefore survives config fetches; to
+override it from the backend, change the values here (any `PATCH` bumps
+`config_version`, which makes the device adopt them on its next cycle).
+
 ### `PATCH /api/v1/devices/{device_id}/config`
 
 Updates one or more config fields and increments `config_version`.
