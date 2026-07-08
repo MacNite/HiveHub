@@ -413,12 +413,20 @@ Update available:
   "update": true,
   "update_available": true,
   "version": "0.9.3",
-  "url": "https://your-domain.example.com/firmware/hivescale-0.9.3.bin"
+  "url": "https://your-domain.example.com/firmware/hivescale-0.9.3.bin",
+  "size": 1276928,
+  "crc32": 2843490522
 }
 ```
 
 > The response carries both `update` and `update_available` with the same value:
 > the ESP32 reads `update`, while older clients read `update_available`.
+>
+> `size` (bytes) and `crc32` (unsigned CRC-32 of the image file) let the device
+> flash safely even when the download arrives without a `Content-Length` header
+> — a reverse proxy/CDN (e.g. Cloudflare) may deliver the binary with
+> `Transfer-Encoding: chunked` — and verify the received image before rebooting.
+> `0` means unknown; firmware ≤ 0.23.5 ignores both fields.
 
 ### `POST /api/v1/firmware/releases`
 

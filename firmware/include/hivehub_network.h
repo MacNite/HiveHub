@@ -26,7 +26,13 @@ bool uploadCachedLines();
 
 // ---- Config / OTA / commands ---------------------------------------------
 void fetchRemoteConfig();
-bool performFirmwareUpdate(const String& firmwareUrl);
+// Download and flash a HiveHub self-update image. `expectedSize`/`expectedCrc32`
+// come from the backend's OTA check response: the size substitutes for a missing
+// Content-Length header (a proxy/CDN may deliver the image chunked) and the CRC
+// verifies the received bytes before the OTA partition is committed. Either may
+// be 0 when the backend predates them; the corresponding check is then skipped.
+bool performFirmwareUpdate(const String& firmwareUrl, int expectedSize = 0,
+                           uint32_t expectedCrc32 = 0);
 bool updateBeeCounter(uint8_t address, const String& firmwareUrl, uint32_t expectedCrc32 = 0);
 // Stream a HiveInside firmware image from `firmwareUrl` to the paired HiveInside
 // sensor at `mac` over BLE GATT. The image is never fully buffered; bytes are
