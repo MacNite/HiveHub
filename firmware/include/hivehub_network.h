@@ -30,10 +30,10 @@ void fetchRemoteConfig();
 // Push the device's local scale calibration up to the backend with a
 // PATCH /config, so a tare/span done offline on the provisioning portal is
 // reflected server-side (the server otherwise only ever holds its defaults for a
-// portal-calibrated device). The legacy scale1/2 columns are the only per-scale
-// calibration the server stores, so only hives 1–2 (scale[0]) are reported — the
-// same mapping fetchRemoteConfig() bridges in reverse. The PATCH bumps the
-// server config_version; the returned version is recorded as last-applied so the
+// portal-calibrated device). Hives 1–2 go in the legacy scale1/2 offset+factor
+// fields; hives 3–18 go in the hive_scales[] array — the same two shapes
+// fetchRemoteConfig() bridges in reverse. The PATCH bumps the server
+// config_version; the returned version is recorded as last-applied so the
 // following fetchRemoteConfig() sees "unchanged" and does not bridge these same
 // values straight back. Called from the upload cycle only when a report is
 // pending (scaleCalibrationReportPending()); the pending flag is cleared on a

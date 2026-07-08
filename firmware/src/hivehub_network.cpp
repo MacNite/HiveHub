@@ -465,16 +465,16 @@ void fetchRemoteConfig() {
 }
 
 void reportScaleCalibration() {
-  // Collect the calibration the server is able to store. The device_configs row
-  // holds only scale1/scale2 offset+factor, which map to hive index 1/2 scale[0]
-  // — the exact reverse of the bridge in fetchRemoteConfig(). Hives 3–18 have no
-  // server-side calibration column, so they are intentionally not reported here.
-  // Only emit a scaleN_* pair when that hive actually carries a valid scale, so a
-  // device that uses (say) only hive 2 does not clobber the server's scale1 with
-  // a default.
+  // Report the device's calibration to the server so a tare/span done offline on
+  // the portal is reflected server-side. Two storage shapes, matching the reverse
+  // bridge in fetchRemoteConfig():
+  //   - hives 1–2  -> the legacy scale1/2 offset+factor columns;
+  //   - hives 3–18 -> the hive_scales[] array (server keeps these per hive).
+  // Only a hive that actually carries a valid scale is reported, so a device that
+  // uses (say) only hive 2 never clobbers another slot with a default.
   JsonDocument body;
   int reported = 0;
-  auto addHive = [&](uint8_t hiveIndex, const char* offKey, const char* facKey) {
+  auto addLegacy = [&](uint8_t hiveIndex, const char* offKey, const char* facKey) {
     for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
       if (hivecfg::gHives[h].index != hiveIndex) continue;
       if (hivecfg::gHives[h].scaleCount == 0) return;
@@ -486,8 +486,24 @@ void reportScaleCalibration() {
       return;
     }
   };
-  addHive(1, "scale1_offset", "scale1_factor");
-  addHive(2, "scale2_offset", "scale2_factor");
+  addLegacy(1, "scale1_offset", "scale1_factor");
+  addLegacy(2, "scale2_offset", "scale2_factor");
+
+  JsonArray hiveScales = body["hive_scales"].to<JsonArray>();
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    if (hive.index < 3) continue;   // 1–2 are covered by the legacy fields above
+    if (hive.scaleCount == 0) continue;
+    const hivecfg::ScaleChannel& ch = hive.scales[0];
+    if (!ch.valid()) continue;
+    JsonObject o = hiveScales.add<JsonObject>();
+    o["index"] = hive.index;
+    o["scale"] = 0;              // one scale per hive today (MAX_SCALES_PER_HIVE)
+    o["offset"] = ch.offset;
+    o["factor"] = ch.factor;
+    reported++;
+  }
+  if (hiveScales.size() == 0) body.remove("hive_scales");
 
   if (reported == 0) {
     Serial.println("[CONFIG] No local scale calibration to report; clearing pending flag");
