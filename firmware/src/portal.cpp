@@ -838,6 +838,25 @@ void handleSetupSave() {
     String hivesJson = setupServer.arg("hives_json");
     JsonDocument hd;
     if (hivesJson.length() && !deserializeJson(hd, hivesJson)) {
+      // The submitted blobs carry the offset/factor captured when the setup page
+      // was RENDERED, so a tare/span done on /calibrate while the page stayed
+      // open would be reverted by this save. The page has no UI to edit those
+      // values, so the live registry is always at least as fresh: snapshot its
+      // calibration per physical channel (the load cell owns the calibration,
+      // not the hive number) and carry it over the page's copy below.
+      hivecfg::ScaleChannel liveCal[MAX_SCALES];
+      uint8_t liveCalCount = 0;
+      for (uint8_t h = 0; h < hivecfg::gHiveCount; h++)
+        for (uint8_t s = 0; s < hivecfg::gHives[h].scaleCount; s++) {
+          const hivecfg::ScaleChannel& c = hivecfg::gHives[h].scales[s];
+          if (c.valid() && liveCalCount < MAX_SCALES) liveCal[liveCalCount++] = c;
+        }
+      auto sameChannel = [](const hivecfg::ScaleChannel& a, const hivecfg::ScaleChannel& b) {
+        if (a.backend != b.backend) return false;
+        if (a.backend == hivecfg::ScaleBackend::HX711) return a.hxIndex == b.hxIndex;
+        return a.muxChannel == b.muxChannel && a.adcChannel == b.adcChannel && a.i2cAddr == b.i2cAddr;
+      };
+
       uint8_t count = 0;
       for (JsonObject o : hd.as<JsonArray>()) {
         if (count >= MAX_HIVES) break;
@@ -847,7 +866,16 @@ void handleSetupSave() {
         String one;
         serializeJson(o, one);
         hivecfg::Hive hive;
-        if (hivecfg::hiveFromJson(one, hive)) hivecfg::gHives[count++] = hive;
+        if (hivecfg::hiveFromJson(one, hive)) {
+          for (uint8_t s = 0; s < hive.scaleCount; s++)
+            for (uint8_t k = 0; k < liveCalCount; k++)
+              if (sameChannel(hive.scales[s], liveCal[k])) {
+                hive.scales[s].offset = liveCal[k].offset;
+                hive.scales[s].factor = liveCal[k].factor;
+                break;
+              }
+          hivecfg::gHives[count++] = hive;
+        }
       }
       hivecfg::gHiveCount = count;
     }

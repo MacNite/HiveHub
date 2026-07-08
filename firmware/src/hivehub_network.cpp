@@ -329,50 +329,72 @@ void fetchRemoteConfig() {
   }
 
   sendIntervalMs = (unsigned long)(doc["send_interval_seconds"] | 600) * 1000UL;
-  scale1Offset = doc["scale1_offset"] | scale1Offset;
-  scale1Factor = doc["scale1_factor"] | scale1Factor;
-  scale2Offset = doc["scale2_offset"] | scale2Offset;
-  scale2Factor = doc["scale2_factor"] | scale2Factor;
 
   // Bridge calibration into the hive registry (the authoritative source for the
-  // read path). The legacy scale1/2 fields map to hives 1–2 scale[0]; an optional
-  // per-hive array calibrates the rest:
+  // read path) ONLY when the server config actually changed since it was last
+  // applied. /config always returns scale1/2 offset+factor (DB defaults
+  // 0 / -7050), and the server never learns a calibration done locally on the
+  // portal's /calibrate page — so applying these fields unconditionally every
+  // cycle silently reverts a portal tare/span one cycle later. config_version
+  // increments on every server-side config edit (dashboard PATCH or command
+  // result) and is therefore the change signal:
+  //   - same version as last applied  -> nothing changed server-side; keep the
+  //     local (possibly portal-calibrated) values;
+  //   - different version             -> a deliberate server-side edit; apply it;
+  //   - no version ever applied (fresh device, first boot after upgrade, or
+  //     after a factory reset) -> record the version but do NOT bridge: the
+  //     server only holds defaults for a device it has never calibrated, while
+  //     the device may already carry a portal calibration.
+  // The legacy scale1/2 fields map to hives 1–2 scale[0]; an optional per-hive
+  // array calibrates the rest:
   //   "hive_scales": [ { "index": 5, "scale": 0, "offset": 123, "factor": -7100 }, … ]
-  // Only persist when a value actually changed — fetchRemoteConfig runs every
-  // cycle, and re-writing up to 18 NVS blobs each time would wear the flash.
-  bool regChanged = false;
-  auto applyToHive = [&regChanged](uint8_t hiveIndex, uint8_t scaleIdx, long off, float fac) {
-    for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
-      if (hivecfg::gHives[h].index != hiveIndex) continue;
-      if (scaleIdx < hivecfg::gHives[h].scaleCount) {
-        auto& ch = hivecfg::gHives[h].scales[scaleIdx];
-        if (ch.offset != off || ch.factor != fac) {
-          ch.offset = off; ch.factor = fac; regChanged = true;
+  uint32_t remoteVersion = doc["config_version"] | 0;
+  prefs.begin("hivescale", true);
+  uint32_t appliedVersion = prefs.getUInt("cfg_applied", 0);
+  prefs.end();
+  bool versionChanged = remoteVersion != 0 && remoteVersion != appliedVersion;
+  bool applyCalibration = versionChanged && appliedVersion != 0;
+
+  if (applyCalibration) {
+    scale1Offset = doc["scale1_offset"] | scale1Offset;
+    scale1Factor = doc["scale1_factor"] | scale1Factor;
+    scale2Offset = doc["scale2_offset"] | scale2Offset;
+    scale2Factor = doc["scale2_factor"] | scale2Factor;
+
+    bool regChanged = false;
+    auto applyToHive = [&regChanged](uint8_t hiveIndex, uint8_t scaleIdx, long off, float fac) {
+      for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+        if (hivecfg::gHives[h].index != hiveIndex) continue;
+        if (scaleIdx < hivecfg::gHives[h].scaleCount) {
+          auto& ch = hivecfg::gHives[h].scales[scaleIdx];
+          if (ch.offset != off || ch.factor != fac) {
+            ch.offset = off; ch.factor = fac; regChanged = true;
+          }
+        }
+        return;
+      }
+    };
+    applyToHive(1, 0, scale1Offset, scale1Factor);
+    applyToHive(2, 0, scale2Offset, scale2Factor);
+    for (JsonObject o : doc["hive_scales"].as<JsonArray>()) {
+      uint8_t idx = (uint8_t)(o["index"] | 0);
+      uint8_t sc  = (uint8_t)(o["scale"] | 0);
+      if (idx < 1) continue;
+      for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+        if (hivecfg::gHives[h].index != idx || sc >= hivecfg::gHives[h].scaleCount) continue;
+        auto& ch = hivecfg::gHives[h].scales[sc];
+        if (!o["offset"].isNull()) {
+          long v = (long)(o["offset"] | 0L);
+          if (ch.offset != v) { ch.offset = v; regChanged = true; }
+        }
+        if (!o["factor"].isNull()) {
+          float v = (float)(o["factor"] | -7050.0);
+          if (ch.factor != v) { ch.factor = v; regChanged = true; }
         }
       }
-      return;
     }
-  };
-  applyToHive(1, 0, scale1Offset, scale1Factor);
-  applyToHive(2, 0, scale2Offset, scale2Factor);
-  for (JsonObject o : doc["hive_scales"].as<JsonArray>()) {
-    uint8_t idx = (uint8_t)(o["index"] | 0);
-    uint8_t sc  = (uint8_t)(o["scale"] | 0);
-    if (idx < 1) continue;
-    for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
-      if (hivecfg::gHives[h].index != idx || sc >= hivecfg::gHives[h].scaleCount) continue;
-      auto& ch = hivecfg::gHives[h].scales[sc];
-      if (!o["offset"].isNull()) {
-        long v = (long)(o["offset"] | 0L);
-        if (ch.offset != v) { ch.offset = v; regChanged = true; }
-      }
-      if (!o["factor"].isNull()) {
-        float v = (float)(o["factor"] | -7050.0);
-        if (ch.factor != v) { ch.factor = v; regChanged = true; }
-      }
-    }
+    if (regChanged) hivecfg::saveHiveConfig();
   }
-  if (regChanged) hivecfg::saveHiveConfig();
 
   if (doc["claim_code"].is<const char*>()) {
     String remoteClaimCode = doc["claim_code"].as<String>();
@@ -384,8 +406,18 @@ void fetchRemoteConfig() {
     }
   }
 
-  saveScaleConfig();
-  Serial.println("[CONFIG] Remote config applied");
+  // Persist interval + legacy scale keys, and remember which server version was
+  // applied, only when the version moved — fetchRemoteConfig runs every cycle,
+  // and rewriting NVS each time would wear the flash for no reason.
+  if (versionChanged) {
+    saveScaleConfig();
+    prefs.begin("hivescale", false);
+    prefs.putUInt("cfg_applied", remoteVersion);
+    prefs.end();
+  }
+  Serial.printf("[CONFIG] Remote config applied (version %lu, calibration %s)\n",
+                (unsigned long)remoteVersion,
+                applyCalibration ? "applied" : "unchanged");
 }
 
 String absoluteUrl(String maybeRelativeUrl) {
