@@ -21,6 +21,7 @@ production-faithful backend, run ``server/`` against PostgreSQL and use
 from __future__ import annotations
 
 import os
+import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Literal
 
@@ -401,8 +402,13 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"), target: str = 
         approved = STORE["devices"].get(device_id, {}).get("approved_firmware_version")
         if approved != latest["version"]:
             return {"update": False, "update_available": False}
+    # size/crc32 mirror the real backend (used by the device when the download
+    # has no Content-Length header, and to verify the image before flashing).
+    # The mock serves a fixed placeholder body, so both are constants.
+    mock_body = b"HIVESCALE-MOCK-FIRMWARE\n"
     return {"update": True, "update_available": True, "version": latest["version"],
-            "url": f"/firmware/{latest['filename']}"}
+            "url": f"/firmware/{latest['filename']}",
+            "size": len(mock_body), "crc32": zlib.crc32(mock_body) & 0xFFFFFFFF}
 
 
 @app.post("/api/v1/firmware/releases", dependencies=[Depends(require_api_key)])

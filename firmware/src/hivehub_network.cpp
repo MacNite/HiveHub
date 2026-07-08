@@ -442,23 +442,91 @@ static uint16_t expectedImageChipId() {
 #endif
 }
 
-// Read the first `len` bytes of a stream into `buf`, tolerating the chunked
-// arrival of an HTTP body. Returns the number of bytes actually read.
-static size_t readStreamExact(WiFiClient* stream, uint8_t* buf, size_t len, uint32_t timeoutMs) {
-  size_t got = 0;
-  uint32_t start = millis();
-  while (got < len && (millis() - start) < timeoutMs) {
-    if (stream->available()) {
-      int n = stream->readBytes(buf + got, len - got);
-      if (n > 0) { got += (size_t)n; start = millis(); }
-    } else {
-      delay(5);
-    }
+// Rolling CRC-32 (IEEE 802.3, reflected 0xEDB88320 — the same algorithm as the
+// backend's zlib.crc32 and beecnt::crc32_buf). Start with crc=0 and feed each
+// chunk the previous call's return value; the final value is the file CRC.
+static uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len) {
+  crc = ~crc;
+  for (size_t i = 0; i < len; i++) {
+    crc ^= data[i];
+    for (uint8_t b = 0; b < 8; b++)
+      crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88320u : (crc >> 1);
   }
-  return got;
+  return ~crc;
 }
 
-bool performFirmwareUpdate(const String& firmwareUrl) {
+// Adapts Update to the Stream interface HTTPClient::writeToStream() wants.
+// writeToStream is used instead of reading the raw socket because it is the
+// only HTTPClient download path that de-frames a Transfer-Encoding: chunked
+// body (a proxy/CDN in front of the backend may re-frame the response that
+// way); reading the raw stream would interleave chunk-size lines into the
+// image. The sink also holds back the first esp_image header for the
+// architecture guard and keeps a rolling CRC-32 of everything it forwards, so
+// the caller can verify the download before committing the OTA partition.
+// Returning 0 from write() makes writeToStream abort the transfer.
+class OtaUpdateSink : public Stream {
+ public:
+  explicit OtaUpdateSink(uint16_t expectedChipId) : _expectedChip(expectedChipId) {}
+
+  size_t write(const uint8_t* data, size_t len) override {
+    if (_failed) return 0;
+    size_t consumed = 0;
+    while (_headerFill < sizeof(_header) && consumed < len)
+      ((uint8_t*)&_header)[_headerFill++] = data[consumed++];
+    if (_headerFill == sizeof(_header) && !_headerChecked) {
+      _headerChecked = true;
+      if (_header.magic != ESP_IMAGE_HEADER_MAGIC) {
+        Serial.printf("[OTA] Bad image magic 0x%02X (expected 0x%02X); aborting\n",
+                      _header.magic, ESP_IMAGE_HEADER_MAGIC);
+        _failed = true;
+        return 0;
+      }
+      if (_expectedChip != ESP_CHIP_ID_INVALID && _header.chip_id != _expectedChip) {
+        Serial.printf("[OTA] Wrong chip: image chip_id=0x%04X, this device=0x%04X (%s) — refusing to flash\n",
+                      (unsigned)_header.chip_id, (unsigned)_expectedChip, HIVEHUB_BOARD_LABEL);
+        _failed = true;
+        return 0;
+      }
+      if (Update.write((uint8_t*)&_header, sizeof(_header)) != sizeof(_header)) {
+        _failed = true;
+        return 0;
+      }
+      _crc = crc32Update(_crc, (const uint8_t*)&_header, sizeof(_header));
+      _written += sizeof(_header);
+    }
+    if (consumed < len) {
+      size_t n = Update.write(const_cast<uint8_t*>(data) + consumed, len - consumed);
+      _crc = crc32Update(_crc, data + consumed, n);
+      _written += n;
+      consumed += n;
+      if (consumed != len) _failed = true;
+    }
+    return consumed;
+  }
+  size_t write(uint8_t b) override { return write(&b, 1); }
+
+  // Stream demands a read side; the sink is write-only.
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+
+  bool failed() const { return _failed; }
+  size_t written() const { return _written; }
+  uint32_t crc32() const { return _crc; }
+
+ private:
+  esp_image_header_t _header{};
+  size_t _headerFill = 0;
+  bool _headerChecked = false;
+  bool _failed = false;
+  size_t _written = 0;
+  uint32_t _crc = 0;
+  uint16_t _expectedChip;
+};
+
+bool performFirmwareUpdate(const String& firmwareUrl, int expectedSize,
+                           uint32_t expectedCrc32) {
   if (!connectWifi()) return false;
 
   String url = absoluteUrl(firmwareUrl);
@@ -482,76 +550,79 @@ bool performFirmwareUpdate(const String& firmwareUrl) {
     return false;
   }
 
+  // A reverse proxy/CDN in front of the backend (e.g. Cloudflare) may deliver
+  // the image with Transfer-Encoding: chunked, i.e. without a Content-Length
+  // header — getSize() is then -1 even though the download itself is fine.
+  // Fall back to the size the backend reported in the OTA check response; when
+  // even that is unknown (older backend) proceed with UPDATE_SIZE_UNKNOWN, but
+  // only if a CRC is available to prove the download arrived complete.
   int contentLength = http.getSize();
-  if (contentLength <= 0) {
-    Serial.println("[OTA] Invalid content length");
+  int totalSize = contentLength > 0 ? contentLength : expectedSize;
+  if (totalSize <= 0 && expectedCrc32 == 0) {
+    // Without a length OR a checksum a truncated download is indistinguishable
+    // from a complete one — refuse rather than flash blind.
+    Serial.printf("[OTA] Invalid content length %d and no expected size/CRC from backend; aborting\n",
+                  contentLength);
     http.end();
     return false;
   }
-
-  WiFiClient* stream = http.getStreamPtr();
-
-  // Architecture guard: peek the esp-image header and confirm the image was built
-  // for THIS SoC before touching the OTA partition. Cross-architecture images
-  // (e.g. an ESP32-C6/RISC-V build reaching a 30-pin ESP32/Xtensa) would not boot;
-  // catching it here means a mislabeled or misrouted release never starts a write
-  // and the device keeps its current firmware. The server's per-board OTA matching
-  // is the primary defence; this is the on-device backstop.
-  esp_image_header_t imgHeader;
-  if ((int)sizeof(imgHeader) > contentLength) {
+  if (totalSize > 0 && totalSize < (int)sizeof(esp_image_header_t)) {
     Serial.println("[OTA] Image smaller than its header; aborting");
     http.end();
     return false;
   }
-  if (readStreamExact(stream, (uint8_t*)&imgHeader, sizeof(imgHeader), 8000UL) != sizeof(imgHeader)) {
-    Serial.println("[OTA] Timed out reading image header; aborting");
-    http.end();
-    return false;
-  }
-  if (imgHeader.magic != ESP_IMAGE_HEADER_MAGIC) {
-    Serial.printf("[OTA] Bad image magic 0x%02X (expected 0x%02X); aborting\n",
-                  imgHeader.magic, ESP_IMAGE_HEADER_MAGIC);
-    http.end();
-    return false;
-  }
-  uint16_t expectedChip = expectedImageChipId();
-  if (expectedChip != ESP_CHIP_ID_INVALID && imgHeader.chip_id != expectedChip) {
-    Serial.printf("[OTA] Wrong chip: image chip_id=0x%04X, this device=0x%04X (%s) — refusing to flash\n",
-                  (unsigned)imgHeader.chip_id, (unsigned)expectedChip, HIVEHUB_BOARD_LABEL);
-    http.end();
-    return false;
-  }
 
-  if (!Update.begin(contentLength)) {
+  if (!Update.begin(totalSize > 0 ? (size_t)totalSize : UPDATE_SIZE_UNKNOWN)) {
     Serial.printf("[OTA] Update.begin failed. Error %d\n", Update.getError());
     http.end();
     return false;
   }
 
-  // Re-feed the header bytes we already consumed, then stream the remainder.
-  size_t written = Update.write((uint8_t*)&imgHeader, sizeof(imgHeader));
-  if (written == sizeof(imgHeader)) {
-    written += Update.writeStream(*stream);
-  }
-
-  if (written != (size_t)contentLength) {
-    Serial.printf("[OTA] Written only %u/%d bytes\n", (unsigned)written, contentLength);
-  }
-
-  bool ok = Update.end();
-  if (!ok) {
-    Serial.printf("[OTA] Update.end failed. Error %d\n", Update.getError());
-    http.end();
-    return false;
-  }
-
-  if (!Update.isFinished()) {
-    Serial.println("[OTA] Update not finished");
-    http.end();
-    return false;
-  }
-
+  // The sink enforces the architecture guard (esp-image magic + chip_id) on the
+  // leading header bytes before anything reaches the OTA partition — a
+  // cross-architecture image (e.g. an ESP32-C6/RISC-V build reaching a 30-pin
+  // ESP32/Xtensa) would not boot, so a mislabeled or misrouted release never
+  // starts a write. The server's per-board OTA matching is the primary defence;
+  // this is the on-device backstop.
+  OtaUpdateSink sink(expectedImageChipId());
+  int streamed = http.writeToStream(&sink);
   http.end();
+
+  if (streamed < 0 && !sink.failed()) {
+    Serial.printf("[OTA] Download failed: %s\n", HTTPClient::errorToString(streamed).c_str());
+  }
+  if (streamed < 0 || sink.failed()) {
+    Update.abort();
+    return false;
+  }
+
+  if (totalSize > 0 && sink.written() != (size_t)totalSize) {
+    Serial.printf("[OTA] Written only %u/%d bytes; aborting\n",
+                  (unsigned)sink.written(), totalSize);
+    Update.abort();
+    return false;
+  }
+  if (sink.written() < sizeof(esp_image_header_t)) {
+    Serial.printf("[OTA] Image truncated at %u bytes; aborting\n", (unsigned)sink.written());
+    Update.abort();
+    return false;
+  }
+  if (expectedCrc32 != 0 && sink.crc32() != expectedCrc32) {
+    Serial.printf("[OTA] CRC mismatch: got 0x%08X expected 0x%08X; aborting\n",
+                  (unsigned)sink.crc32(), (unsigned)expectedCrc32);
+    Update.abort();
+    return false;
+  }
+
+  // With UPDATE_SIZE_UNKNOWN the updater can never observe "finished" on its
+  // own, so pass evenIfRemaining=true; the size/CRC checks above already vouch
+  // for the image being complete, and end() still runs esp_image validation
+  // before the boot partition is switched.
+  if (!Update.end(true)) {
+    Serial.printf("[OTA] Update.end failed. Error %d\n", Update.getError());
+    return false;
+  }
+
   Serial.println("[OTA] Update successful, rebooting");
   delay(1000);
   ESP.restart();
@@ -790,6 +861,12 @@ void checkForOtaUpdate() {
 
   String version = doc["version"] | "unknown";
   String fwUrl = doc["url"] | "";
+  // Image size + CRC-32, sent by newer backends. The size stands in for a
+  // missing Content-Length header (proxy/CDN chunking) and the CRC lets the
+  // download be verified before flashing; both default to 0 (= unknown) when
+  // the backend predates them.
+  int fwSize = doc["size"] | 0;
+  uint32_t fwCrc = doc["crc32"] | 0U;
 
   if (fwUrl.length() == 0) {
     Serial.println("[OTA] Update response missing url");
@@ -797,7 +874,7 @@ void checkForOtaUpdate() {
   }
 
   Serial.printf("[OTA] Update available: %s\n", version.c_str());
-  performFirmwareUpdate(fwUrl);
+  performFirmwareUpdate(fwUrl, fwSize, fwCrc);
 }
 
 void postCommandResult(int commandId, bool success, const String& message) {

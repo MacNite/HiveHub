@@ -206,11 +206,22 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
     if target == "hivescale" and get_approved_firmware_version(device_id) != latest_version:
         return no_update
     url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
+    # Ship the image size and CRC-32 alongside the URL. The ESP32 needs the size
+    # when the download arrives without a Content-Length header — a reverse
+    # proxy/CDN in front of the API (e.g. Cloudflare) may re-frame the response
+    # as Transfer-Encoding: chunked — and uses the CRC to verify the received
+    # image before committing it to the OTA partition. Both are best-effort:
+    # older firmware ignores the extra keys, and a missing file/CRC degrades to
+    # the previous behaviour on the device (size/CRC checks skipped).
+    path = FIRMWARE_DIR / filename
+    size = path.stat().st_size if path.is_file() else 0
     return {
         "update": True,
         "update_available": True,
         "version": latest_version,
         "url": url,
+        "size": size,
+        "crc32": r[2] or 0,
     }
 
 
