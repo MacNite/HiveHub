@@ -204,6 +204,50 @@ bool httpPostJson(const String& url, const String& json, String* response) {
   return false;
 }
 
+bool httpPatchJson(const String& url, const String& json, String* response) {
+  if (!connectWifi()) {
+    Serial.println("[HTTP PATCH] No WiFi");
+    return false;
+  }
+
+  Serial.println("[HTTP PATCH]");
+  Serial.print("[HTTP PATCH] URL: ");
+  Serial.println(url);
+  Serial.print("[HTTP PATCH] Payload: ");
+  Serial.println(json);
+
+  WiFiClientSecure client;
+  applyTlsConfig(client);
+  HTTPClient http;
+
+  if (!http.begin(client, url)) {
+    Serial.println("[HTTP PATCH] http.begin failed");
+    return false;
+  }
+
+  http.addHeader("Content-Type", "application/json");
+  addAuthHeader(http);
+
+  int code = http.sendRequest("PATCH", (uint8_t*)json.c_str(), json.length());
+  String body = http.getString();
+
+  Serial.printf("[HTTP PATCH] Status: %d\n", code);
+  Serial.print("[HTTP PATCH] Response: ");
+  Serial.println(body);
+
+  if (response) *response = body;
+
+  http.end();
+
+  if (code >= 200 && code < 300) {
+    Serial.println("[HTTP PATCH] SUCCESS");
+    return true;
+  }
+
+  Serial.println("[HTTP PATCH] FAILED");
+  return false;
+}
+
 bool uploadLine(const String& line) {
   String response;
   bool ok = httpPostJson(apiUrl("/api/v1/measurements"), line, &response);
@@ -418,6 +462,83 @@ void fetchRemoteConfig() {
   Serial.printf("[CONFIG] Remote config applied (version %lu, calibration %s)\n",
                 (unsigned long)remoteVersion,
                 applyCalibration ? "applied" : "unchanged");
+}
+
+void reportScaleCalibration() {
+  // Report the device's calibration to the server so a tare/span done offline on
+  // the portal is reflected server-side. Two storage shapes, matching the reverse
+  // bridge in fetchRemoteConfig():
+  //   - hives 1–2  -> the legacy scale1/2 offset+factor columns;
+  //   - hives 3–18 -> the hive_scales[] array (server keeps these per hive).
+  // Only a hive that actually carries a valid scale is reported, so a device that
+  // uses (say) only hive 2 never clobbers another slot with a default.
+  JsonDocument body;
+  int reported = 0;
+  auto addLegacy = [&](uint8_t hiveIndex, const char* offKey, const char* facKey) {
+    for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+      if (hivecfg::gHives[h].index != hiveIndex) continue;
+      if (hivecfg::gHives[h].scaleCount == 0) return;
+      const hivecfg::ScaleChannel& ch = hivecfg::gHives[h].scales[0];
+      if (!ch.valid()) return;
+      body[offKey] = ch.offset;
+      body[facKey] = ch.factor;
+      reported++;
+      return;
+    }
+  };
+  addLegacy(1, "scale1_offset", "scale1_factor");
+  addLegacy(2, "scale2_offset", "scale2_factor");
+
+  JsonArray hiveScales = body["hive_scales"].to<JsonArray>();
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    if (hive.index < 3) continue;   // 1–2 are covered by the legacy fields above
+    if (hive.scaleCount == 0) continue;
+    const hivecfg::ScaleChannel& ch = hive.scales[0];
+    if (!ch.valid()) continue;
+    JsonObject o = hiveScales.add<JsonObject>();
+    o["index"] = hive.index;
+    o["scale"] = 0;              // one scale per hive today (MAX_SCALES_PER_HIVE)
+    o["offset"] = ch.offset;
+    o["factor"] = ch.factor;
+    reported++;
+  }
+  if (hiveScales.size() == 0) body.remove("hive_scales");
+
+  if (reported == 0) {
+    Serial.println("[CONFIG] No local scale calibration to report; clearing pending flag");
+    clearScaleCalibrationReport();
+    return;
+  }
+
+  String payload;
+  serializeJson(body, payload);
+
+  String url = apiUrl(String("/api/v1/devices/") + deviceId + "/config");
+  String response;
+  if (!httpPatchJson(url, payload, &response)) {
+    // Keep the pending flag set so the report is retried on the next cycle.
+    Serial.println("[CONFIG] Failed to report scale calibration; will retry next cycle");
+    return;
+  }
+
+  // The PATCH incremented config_version and the response echoes the new config.
+  // Record that version as the one we've applied so the fetchRemoteConfig() right
+  // after this sees "unchanged" and does not bridge these very values back into
+  // the registry (harmless, but it keeps cfg_applied honest and skips a needless
+  // NVS write).
+  JsonDocument doc;
+  if (!deserializeJson(doc, response) && !doc["config_version"].isNull()) {
+    uint32_t newVersion = doc["config_version"] | 0;
+    if (newVersion != 0) {
+      prefs.begin("hivescale", false);
+      prefs.putUInt("cfg_applied", newVersion);
+      prefs.end();
+    }
+  }
+
+  clearScaleCalibrationReport();
+  Serial.println("[CONFIG] Scale calibration reported to server");
 }
 
 String absoluteUrl(String maybeRelativeUrl) {

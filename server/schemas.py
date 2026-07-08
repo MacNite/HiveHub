@@ -359,6 +359,23 @@ class MeasurementImportIn(BaseModel):
     )
 
 
+# Per-hive scale calibration for hives 3..MAX_HIVES (hives 1–2 use the legacy
+# scale1/2 columns on device_configs). The firmware bridges these into its hive
+# registry over remote config and reports them back after a portal calibration.
+class HiveScaleCalibration(BaseModel):
+    index: int = Field(..., ge=1, le=MAX_HIVES)
+    scale: int = Field(0, ge=0)
+    offset: int = 0
+    factor: float = -7050.0
+
+
+class HiveScaleCalibrationIn(BaseModel):
+    index: int = Field(..., ge=1, le=MAX_HIVES)
+    scale: int = Field(0, ge=0)
+    offset: Optional[int] = None
+    factor: Optional[float] = None
+
+
 class DeviceConfig(BaseModel):
     device_id: str
     send_interval_seconds: int = 600
@@ -366,6 +383,8 @@ class DeviceConfig(BaseModel):
     scale1_factor: float = -7050.0
     scale2_offset: int = 0
     scale2_factor: float = -7050.0
+    # Calibration for hives 3..MAX_HIVES (hives 1–2 are the scale1/2 fields above).
+    hive_scales: list[HiveScaleCalibration] = []
     config_version: int = 1
     # ── Load-cell temperature compensation (applied in the backend on read) ───
     # See server/tempcomp.py. Coefficients are kg/°C; the correction is
@@ -384,6 +403,9 @@ class DeviceConfigUpdate(BaseModel):
     scale1_factor: Optional[float] = None
     scale2_offset: Optional[int] = None
     scale2_factor: Optional[float] = None
+    # Upsert calibration for hives 3..MAX_HIVES; each entry updates one hive's
+    # stored offset/factor (omitted fields keep their current value).
+    hive_scales: Optional[list[HiveScaleCalibrationIn]] = None
     tempco_enabled: Optional[bool] = None
     tempco_source: Optional[Literal["ambient", "hive_1", "hive_2"]] = None
     tempco_ref_temp_c: Optional[float] = None

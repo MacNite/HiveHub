@@ -360,6 +360,30 @@ provisioning portal's `/calibrate` page therefore survives config fetches; to
 override it from the backend, change the values here (any `PATCH` bumps
 `config_version`, which makes the device adopt them on its next cycle).
 
+Since firmware 0.23.7 the device also **reports a portal calibration back to the
+server**. The provisioning AP is offline, so a tare/span done there (and a
+"Save and reboot" that carries one) only sets a pending flag in NVS. On the first
+cycle with WiFi after the reboot, the device `PATCH`es its live calibration so the
+backend no longer holds only defaults: hives 1–2 in the `scale1/2_offset` +
+`factor` fields, and **hives 3–18 in the `hive_scales` array** (below). That
+`PATCH` bumps `config_version`; the device records the returned version as its
+last-applied one, so the config fetch in the same cycle does not bridge those
+values straight back.
+
+The GET response includes a `hive_scales` array carrying the stored calibration
+for hives 3–18 (hives 1–2 stay in the `scale1/2_*` fields):
+
+```json
+"hive_scales": [
+  { "index": 5, "scale": 0, "offset": 123, "factor": -7100.0 }
+]
+```
+
+A `PATCH` may send the same array to set them; each entry updates one hive
+(omitted `offset`/`factor` keep their current value). These are stored per hive
+in `device_configs.scale_offsets_by_hive` and, like the legacy fields, are
+bridged into the firmware's hive registry when `config_version` changes.
+
 ### `PATCH /api/v1/devices/{device_id}/config`
 
 Updates one or more config fields and increments `config_version`.

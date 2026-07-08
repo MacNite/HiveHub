@@ -14,6 +14,13 @@ void loadConfigFromPrefs();
 void saveScaleConfig();
 void markClaimRegistered();
 
+// Local scale calibration changed offline (a tare/span on the provisioning
+// portal, which has no internet) and should be pushed to the server on the next
+// cycle that has WiFi. Set by the portal, consumed by reportScaleCalibration().
+void markScaleCalibrationDirty();
+bool scaleCalibrationReportPending();
+void clearScaleCalibrationReport();
+
 int getWifiCount();
 bool saveWifiNetwork(int index, const String& ssid, const String& pass);
 void clearWifiCredentials();

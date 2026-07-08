@@ -5,6 +5,7 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import psycopg
 from fastapi import APIRouter, Depends, HTTPException
 
 from auth import require_device_key
@@ -14,6 +15,7 @@ from schemas import (
     DeviceChannelsUpdateIn,
     DeviceConfig,
     DeviceConfigUpdate,
+    HiveScaleCalibration,
     TempCoefficientFitIn,
 )
 from tempcomp import TEMP_SOURCE_FIELD, ema_temperatures, fit_temp_coefficient
@@ -76,8 +78,69 @@ DEVICE_CONFIG_SELECT_COLUMNS = """
     device_id, send_interval_seconds, scale1_offset, scale1_factor,
     scale2_offset, scale2_factor, config_version,
     tempco_enabled, tempco_source, tempco_ref_temp_c,
-    scale1_tempco_kg_per_c, scale2_tempco_kg_per_c
+    scale1_tempco_kg_per_c, scale2_tempco_kg_per_c,
+    scale_offsets_by_hive
 """
+
+
+def hive_scales_from_json(raw) -> list[HiveScaleCalibration]:
+    """Turn the scale_offsets_by_hive JSONB map into a sorted hive_scales list.
+
+    The column stores calibration for hives 3..MAX_HIVES as {hive_index: {offset,
+    factor, scale}} (hives 1–2 live in the scale1/2 columns). Malformed / stray
+    entries are skipped so a hand-edited row can never break the config read.
+    """
+    if not raw:
+        return []
+    out: list[HiveScaleCalibration] = []
+    for key, val in raw.items():
+        if not isinstance(val, dict):
+            continue
+        try:
+            idx = int(key)
+        except (TypeError, ValueError):
+            continue
+        if not (1 <= idx <= MAX_HIVES):
+            continue
+        try:
+            out.append(
+                HiveScaleCalibration(
+                    index=idx,
+                    scale=int(val.get("scale", 0) or 0),
+                    offset=int(val.get("offset", 0) or 0),
+                    factor=float(val.get("factor", -7050.0)),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    out.sort(key=lambda h: (h.index, h.scale))
+    return out
+
+
+def merge_hive_scales(current, updates: list[dict]) -> dict:
+    """Merge the requested hive_scales updates into the stored JSONB map.
+
+    ``updates`` are HiveScaleCalibrationIn dicts (from model_dump). Each fully or
+    partially updates one hive entry — an omitted offset/factor keeps its current
+    value — so a device reporting both fields overwrites cleanly while a partial
+    edit never wipes the other field. Returns the new map to store.
+    """
+    merged = dict(current) if current else {}
+    for hs in updates:
+        idx = hs.get("index")
+        if idx is None:
+            continue
+        key = str(int(idx))
+        entry = dict(merged.get(key) or {})
+        entry["scale"] = int(hs.get("scale") or entry.get("scale") or 0)
+        if hs.get("offset") is not None:
+            entry["offset"] = int(hs["offset"])
+        if hs.get("factor") is not None:
+            entry["factor"] = float(hs["factor"])
+        entry.setdefault("offset", 0)
+        entry.setdefault("factor", -7050.0)
+        merged[key] = entry
+    return merged
 
 
 def device_config_row_to_model(r) -> DeviceConfig:
@@ -87,6 +150,7 @@ def device_config_row_to_model(r) -> DeviceConfig:
         config_version=r[6], tempco_enabled=r[7], tempco_source=r[8],
         tempco_ref_temp_c=r[9], scale1_tempco_kg_per_c=r[10],
         scale2_tempco_kg_per_c=r[11],
+        hive_scales=hive_scales_from_json(r[12]),
     )
 
 
@@ -112,14 +176,27 @@ def get_device_config(device_id: str):
 def update_device_config(device_id: str, patch: DeviceConfigUpdate):
     ensure_device_config(device_id)
     fields = patch.model_dump(exclude_unset=True)
-    if not fields:
+    # hive_scales (hives 3..MAX_HIVES) is not a scalar column — it is merged into
+    # the scale_offsets_by_hive JSONB map. Pull it out and handle it separately so
+    # the generic column update below only sees real columns.
+    hive_scales = fields.pop("hive_scales", None)
+    if not fields and not hive_scales:
         return get_device_config(device_id)
-    assignments = [f"{k} = %({k})s" for k in fields]
-    assignments.append("config_version = config_version + 1")
-    assignments.append("updated_at = now()")
-    fields["device_id"] = device_id
     with get_conn() as conn:
         with conn.cursor() as cur:
+            if hive_scales:
+                cur.execute(
+                    "SELECT scale_offsets_by_hive FROM device_configs "
+                    "WHERE device_id = %s FOR UPDATE;",
+                    (device_id,),
+                )
+                row = cur.fetchone()
+                merged = merge_hive_scales(row[0] if row else None, hive_scales)
+                fields["scale_offsets_by_hive"] = psycopg.types.json.Jsonb(merged)
+            assignments = [f"{k} = %({k})s" for k in fields]
+            assignments.append("config_version = config_version + 1")
+            assignments.append("updated_at = now()")
+            fields["device_id"] = device_id
             cur.execute(
                 f"UPDATE device_configs SET {', '.join(assignments)} WHERE device_id = %(device_id)s;",
                 fields,

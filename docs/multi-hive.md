@@ -191,5 +191,9 @@ read, insights and temperature-compensation paths keep working unchanged.
   `trafficMac0/1` globals) — a pairing stored on hive 3+ is saved but not yet
   polled.
 - Server-side **temperature compensation** is applied to hives 1–2; hives 3–18
-  use raw weight for insights. The firmware already accepts a per-hive
-  `hive_scales` calibration array over remote config for all hives.
+  use raw weight for insights.
+- **Scale calibration** is synced for all hives (firmware 0.23.7+): hives 1–2 via
+  the legacy `scale1/2_offset`+`factor` config fields and hives 3–18 via the
+  `hive_scales` array (stored server-side in `device_configs.scale_offsets_by_hive`).
+  A tare/span done offline on the provisioning portal is reported back to the
+  backend on the next check-in and bridged into the registry over remote config.
