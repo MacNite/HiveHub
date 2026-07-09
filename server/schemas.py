@@ -40,8 +40,13 @@ class HiveBleIn(BaseModel):
     humidity_percent: Optional[float] = None
     pressure_hpa: Optional[float] = None
     battery_percent: Optional[int] = None
+    battery_mv: Optional[int] = None
     rssi_dbm: Optional[int] = None
     firmware_version: Optional[str] = None
+    # Board/architecture a HiveInside node reports over GATT ("esp32-c6" /
+    # "nrf54lm20a"), forwarded by the HiveHub so a board-specific OTA image is
+    # only ever relayed to matching silicon.
+    board: Optional[str] = None
 
 
 class HiveMicIn(BaseModel):
@@ -259,10 +264,13 @@ class MeasurementIn(BaseModel):
     ble_1_accel_y_mg:       Optional[float] = None
     ble_1_accel_z_mg:       Optional[float] = None
     ble_1_battery_percent:  Optional[int]   = None
+    ble_1_battery_mv:       Optional[int]   = None
     ble_1_rssi_dbm:         Optional[int]   = None
-    # HiveInside C6 reports its running firmware version over GATT ("fw"); kept
-    # in raw_json (declared so extra="ignore" does not drop it).
+    # HiveInside reports its running firmware version and board over GATT
+    # ("fw"/"board"); kept in raw_json (declared so extra="ignore" does not drop
+    # them). The board lets the relay pick a matching OTA image per architecture.
     ble_1_firmware_version: Optional[str]   = None
+    ble_1_board:            Optional[str]   = None
 
     ble_2_humidity_percent: Optional[float] = None
     ble_2_pressure_hpa:     Optional[float] = None
@@ -270,8 +278,10 @@ class MeasurementIn(BaseModel):
     ble_2_accel_y_mg:       Optional[float] = None
     ble_2_accel_z_mg:       Optional[float] = None
     ble_2_battery_percent:  Optional[int]   = None
+    ble_2_battery_mv:       Optional[int]   = None
     ble_2_rssi_dbm:         Optional[int]   = None
     ble_2_firmware_version: Optional[str]   = None
+    ble_2_board:            Optional[str]   = None
 
     # ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) ───────────
     # HiveHeart is an in-hive sensor read over GATT: its temperature/humidity feed

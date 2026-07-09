@@ -731,7 +731,7 @@ void handleSetupRoot() {
 
   // Inline controller (no external assets — works on the offline captive portal).
   html += R"HVJS(<script>(function(){
-var SENSOR_TYPES=[["holyiot","HolyIot 25015 — beacon"],["ruuvitag","RuuviTag — beacon"],["hiveinside","HiveInside — GATT"],["hiveheart","HiveHeart — GATT"],["beecounter","HiveTraffic counter — GATT"]];
+var SENSOR_TYPES=[["holyiot","HolyIot 25015 — beacon"],["ruuvitag","RuuviTag — beacon"],["hiveinside_nrf54","HiveInside (nRF54LM20A) — beacon"],["hiveinside","Legacy HiveInside (ESP32-C6) — GATT"],["hiveheart","HiveHeart — GATT"],["beecounter","HiveTraffic counter — GATT"]];
 var host=document.getElementById("hives"),form=document.getElementById("cfgform"),dsList=document.getElementById("dsprobeopts");
 if(dsList)dsList.innerHTML=(DETECTED_PROBES||[]).map(function(r){return "<option value='"+r+"'>";}).join("");
 function clone(o){return JSON.parse(JSON.stringify(o));}

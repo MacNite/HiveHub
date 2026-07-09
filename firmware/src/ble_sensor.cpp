@@ -50,23 +50,26 @@ static constexpr float PRESS_PA_SCALE = 0.01f;  // uint24 Pa × 0.01 → hPa
 static constexpr float GRAVITY_MG     = 1000.0f; // ~1 g at rest, removed for AC
 
 // ───────────────────────────────────────────────────────────────────────────
-// HiveInside ESP32-C6 manufacturer-data layout (scan-response blob)
+// HiveInside manufacturer-data layout (scan-response blob)
 // ───────────────────────────────────────────────────────────────────────────
 // Distinct from HolyIot by company id (HIVEINSIDE_COMPANY_ID, default Espressif
 // 0x02E5) plus a magic byte, so the dispatcher can tell the two apart even
 // though both ride the same passive-scan bridge. The HiveInside device runs the
 // vibration and acoustic FFTs on board, so it broadcasts finished RMS + band
-// values (no raw axes). Layout is documented in
-// HiveInside/docs/esp32c6-prototype.md and mirrored here:
+// values (no raw axes). Both the original ESP32-C6 prototype and the current
+// XIAO nRF54LM20A Sense node emit this exact 26-byte frame; the nRF54 node
+// advertises it continuously (beacon-only, no GATT measurement service), while
+// the C6 prototype served it either as a beacon or over GATT. Layout is
+// documented in HiveInside/firmware-nrf54lm20a/src/beacon.c and mirrored here:
 //
 //   off 0..1  : company id (LE)        == HIVEINSIDE_COMPANY_ID
 //   off 2     : magic                   == 0x48 ('H')
 //   off 3     : version                 (currently 0x01)
 //   off 4     : flags  bit0 sht bit1 accel bit2 mic bit3 batt
-//   off 5..6  : temperature  int16 LE, 0.01 °C
-//   off 7..8  : humidity      uint16 LE, 0.01 %RH
-//   off 9..10 : battery       uint16 LE, milli-volt
-//   off 11    : battery percent (uint8)
+//   off 5..6  : temperature  int16 LE, 0.1 °C   (valid only if flags bit0 set)
+//   off 7..8  : humidity      uint16 LE, 0.1 %RH (valid only if flags bit0 set)
+//   off 9..10 : battery       uint16 LE, milli-volt (valid only if bit3 set)
+//   off 11    : battery percent (uint8)             (valid only if bit3 set)
 //   off 12..13: accel RMS      uint16 LE, 0.1 mg
 //   off 14..15: accel band swarm    uint16 LE, 0.1 mg   (8–30 Hz)
 //   off 16..17: accel band fanning  uint16 LE, 0.1 mg   (30–100 Hz)
@@ -82,6 +85,14 @@ static constexpr uint8_t HI_MAGIC       = 0x48;  // 'H'
 static constexpr size_t HI_OFF_MAGIC    = 2;
 static constexpr size_t HI_OFF_VERSION  = 3;
 static constexpr size_t HI_OFF_FLAGS    = 4;
+// Flags byte (offset 4): a group's fields are only valid when its bit is set.
+// A cleared bit means the on-board sensor was absent or failed this cycle, so
+// the corresponding fields must be reported as "not present" (NAN / battery -1)
+// rather than the raw zeros the encoder leaves in the frame.
+static constexpr uint8_t HI_FLAG_SHT    = 1 << 0;  // temperature + humidity valid
+static constexpr uint8_t HI_FLAG_ACCEL  = 1 << 1;  // vibration RMS + bands valid
+static constexpr uint8_t HI_FLAG_MIC    = 1 << 2;  // acoustic RMS + bands valid
+static constexpr uint8_t HI_FLAG_BATT   = 1 << 3;  // battery mV + percent valid
 static constexpr size_t HI_OFF_TEMP     = 5;
 static constexpr size_t HI_OFF_HUMID    = 7;
 static constexpr size_t HI_OFF_BATT_MV  = 9;
@@ -122,6 +133,7 @@ struct Parsed {
   float temp_c = NAN, humidity_pct = NAN, pressure_hpa = NAN;
   float ax = NAN, ay = NAN, az = NAN;        // HolyIot raw axes
   int   battery_pct = -1;
+  int   battery_mv  = -1;                     // HiveInside raw cell voltage (-1 = absent)
   // HiveInside on-board FFT results.
   float accel_rms_mg = NAN;
   float accel_band_swarm_mg = NAN, accel_band_fanning_mg = NAN, accel_band_activity_mg = NAN;
@@ -167,28 +179,43 @@ static Parsed parseHolyIot(const uint8_t* d, size_t len) {
   return out;
 }
 
-// HiveInside ESP32-C6: on-board vibration + acoustic FFT, no raw axes.
+// HiveInside (ESP32-C6 prototype / nRF54LM20A): on-board vibration + acoustic
+// FFT, no raw axes. The flags byte (offset 4) says which sensor groups produced
+// a valid reading this cycle; a cleared bit means that sensor was absent or
+// failed, so the group is reported as "not present" instead of the raw zeros
+// the encoder leaves in the frame (a failed SHT40 must not read as 0.0 °C).
 static Parsed parseHiveInside(const uint8_t* d, size_t len) {
   Parsed out;
   if (d == nullptr || len < HI_MIN_LEN) return out;
   if (rd_u16(d, HOLYIOT_OFF_COMPANY) != (uint16_t)HIVEINSIDE_COMPANY_ID) return out;
   if (d[HI_OFF_MAGIC] != HI_MAGIC) return out;
 
-  out.type         = SensorType::HiveInside;
-  out.temp_c       = rd_i16(d, HI_OFF_TEMP)  * TEMP_SCALE;
-  out.humidity_pct = rd_u16(d, HI_OFF_HUMID) * HUMID_SCALE;
-  out.battery_pct  = d[HI_OFF_BATT_PCT];
-  out.accel_rms_mg          = rd_u16(d, HI_OFF_ACC_RMS)      * HI_ACCEL_SCALE;
-  out.accel_band_swarm_mg   = rd_u16(d, HI_OFF_ACC_SWARM)    * HI_ACCEL_SCALE;
-  out.accel_band_fanning_mg = rd_u16(d, HI_OFF_ACC_FANNING)  * HI_ACCEL_SCALE;
-  out.accel_band_activity_mg= rd_u16(d, HI_OFF_ACC_ACTIVITY) * HI_ACCEL_SCALE;
-  out.mic_present   = true;
-  out.mic_rms_dbfs       = (int8_t)d[HI_OFF_MIC_RMS];
-  out.mic_sub_bass_dbfs  = (int8_t)d[HI_OFF_MIC_SUB];
-  out.mic_hum_dbfs       = (int8_t)d[HI_OFF_MIC_HUM];
-  out.mic_piping_dbfs    = (int8_t)d[HI_OFF_MIC_PIPING];
-  out.mic_stress_dbfs    = (int8_t)d[HI_OFF_MIC_STRESS];
-  out.mic_high_dbfs      = (int8_t)d[HI_OFF_MIC_HIGH];
+  const uint8_t flags = d[HI_OFF_FLAGS];
+  out.type = SensorType::HiveInside;
+
+  if (flags & HI_FLAG_SHT) {
+    out.temp_c       = rd_i16(d, HI_OFF_TEMP)  * TEMP_SCALE;
+    out.humidity_pct = rd_u16(d, HI_OFF_HUMID) * HUMID_SCALE;
+  }
+  if (flags & HI_FLAG_BATT) {
+    out.battery_pct = d[HI_OFF_BATT_PCT];
+    out.battery_mv  = rd_u16(d, HI_OFF_BATT_MV);
+  }
+  if (flags & HI_FLAG_ACCEL) {
+    out.accel_rms_mg          = rd_u16(d, HI_OFF_ACC_RMS)      * HI_ACCEL_SCALE;
+    out.accel_band_swarm_mg   = rd_u16(d, HI_OFF_ACC_SWARM)    * HI_ACCEL_SCALE;
+    out.accel_band_fanning_mg = rd_u16(d, HI_OFF_ACC_FANNING)  * HI_ACCEL_SCALE;
+    out.accel_band_activity_mg= rd_u16(d, HI_OFF_ACC_ACTIVITY) * HI_ACCEL_SCALE;
+  }
+  if (flags & HI_FLAG_MIC) {
+    out.mic_present   = true;
+    out.mic_rms_dbfs       = (int8_t)d[HI_OFF_MIC_RMS];
+    out.mic_sub_bass_dbfs  = (int8_t)d[HI_OFF_MIC_SUB];
+    out.mic_hum_dbfs       = (int8_t)d[HI_OFF_MIC_HUM];
+    out.mic_piping_dbfs    = (int8_t)d[HI_OFF_MIC_PIPING];
+    out.mic_stress_dbfs    = (int8_t)d[HI_OFF_MIC_STRESS];
+    out.mic_high_dbfs      = (int8_t)d[HI_OFF_MIC_HIGH];
+  }
   out.ok = true;
   return out;
 }
@@ -254,6 +281,7 @@ struct Accumulator {
   SensorType type = SensorType::None;
   int     rssi_dbm = 0;
   int     battery_pct = -1;
+  int     battery_mv  = -1;    // HiveInside raw cell voltage (-1 = absent)
   float   temp_c = NAN, humidity_pct = NAN, pressure_hpa = NAN;
   float   ax = NAN, ay = NAN, az = NAN;
   std::vector<float> magnitudes;  // |a| per advertisement (HolyIot AC RMS/peak)
@@ -332,8 +360,11 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       a.type = p.type;
       a.rssi_dbm = dev->getRSSI();
       if (p.type == SensorType::HiveInside) {
-        // HiveInside: single manufacturer blob carries everything including battery.
+        // HiveInside: single manufacturer blob carries everything including
+        // battery. parseHiveInside() already applied the flags byte, so absent
+        // groups arrive as NAN / -1 and are copied through verbatim.
         a.battery_pct = p.battery_pct;
+        a.battery_mv  = p.battery_mv;
         a.temp_c = p.temp_c;
         a.humidity_pct = p.humidity_pct;
         // Device already ran the FFT — copy its finished values, no magnitudes.
@@ -417,11 +448,18 @@ static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
           out.type         = SensorType::HiveInside;
           out.rssi_dbm     = rssi;
           out.sample_count = 1;
+          // Every measurement field is optional: the nRF54 node's version
+          // characteristic answers with a version-only blob
+          // ({"fw":"1.0.0","board":"nrf54lm20a"}), and a C6 node with a failed
+          // sensor omits that group. Missing keys fall back to NAN / -1 / "" so
+          // this same read doubles as the fw-version + board discovery probe.
           out.temp_c       = doc["temp_c"]           | NAN;
           out.humidity_pct = doc["humidity_percent"]  | NAN;
           int bpct         = doc["battery_percent"]   | -1;
           out.battery_pct  = bpct;
-          out.fw_version   = (const char*)(doc["fw"] | "");
+          out.battery_mv   = doc["battery_mv"]        | -1;
+          out.fw_version   = (const char*)(doc["fw"]    | "");
+          out.board        = (const char*)(doc["board"] | "");
 
           if (doc["accel_ok"] | false) {
             out.accel_rms_mg          = doc["accel_rms_mg"]           | NAN;
@@ -514,6 +552,7 @@ static void copyToSnapshot(const Accumulator& a, Snapshot& s) {
   s.type         = a.type;
   s.rssi_dbm     = a.rssi_dbm;
   s.battery_pct  = a.battery_pct;
+  s.battery_mv   = a.battery_mv;
   s.temp_c       = a.temp_c;
   s.humidity_pct = a.humidity_pct;
   s.pressure_hpa = a.pressure_hpa;
@@ -545,7 +584,7 @@ static void copyToSnapshot(const Accumulator& a, Snapshot& s) {
 const char* sensorTypeName(SensorType t) {
   switch (t) {
     case SensorType::HolyIot:    return "HolyIot 25015";
-    case SensorType::HiveInside: return "HiveInside C6";
+    case SensorType::HiveInside: return "HiveInside";
     case SensorType::Ruuvi:      return "RuuviTag";
     default:                     return "";
   }
@@ -698,11 +737,15 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
   if (!isnan(snap.accel_y_mg))   doc[bp + "accel_y_mg"]       = snap.accel_y_mg;
   if (!isnan(snap.accel_z_mg))   doc[bp + "accel_z_mg"]       = snap.accel_z_mg;
   if (snap.battery_pct >= 0)     doc[bp + "battery_percent"]  = snap.battery_pct;
+  if (snap.battery_mv >= 0)      doc[bp + "battery_mv"]       = snap.battery_mv;
   doc[bp + "rssi_dbm"] = snap.rssi_dbm;
   // HiveInside reports its running firmware version over GATT ("fw"); surface it
   // as ble_{slot}_firmware_version so the backend and HivePal can display it
   // next to the HiveHub node's own firmware. HolyIot/Ruuvi leave this empty.
   if (snap.fw_version.length()) doc[bp + "firmware_version"] = snap.fw_version;
+  // Board/architecture ("esp32-c6" / "nrf54lm20a") so the backend relays only
+  // an OTA image built for this node's silicon (like ?board= for the hub).
+  if (snap.board.length())      doc[bp + "board"]            = snap.board;
 
   // ── reused accel_{slot}_* fields (per-cycle AC magnitude + FFT bands) ───────
   if (snap.sample_count > 0) {
@@ -752,8 +795,10 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
   if (!isnan(snap.accel_y_mg))   ble["accel_y_mg"]       = snap.accel_y_mg;
   if (!isnan(snap.accel_z_mg))   ble["accel_z_mg"]       = snap.accel_z_mg;
   if (snap.battery_pct >= 0)     ble["battery_percent"]  = snap.battery_pct;
+  if (snap.battery_mv >= 0)      ble["battery_mv"]       = snap.battery_mv;
   ble["rssi_dbm"] = snap.rssi_dbm;
   if (snap.fw_version.length())  ble["firmware_version"] = snap.fw_version;
+  if (snap.board.length())       ble["board"]            = snap.board;
 
   if (snap.sample_count > 0) {
     accel["sample_count"]   = snap.sample_count;

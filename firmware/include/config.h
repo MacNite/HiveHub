@@ -329,15 +329,23 @@
 #endif
 
 // ==============================
-// HIVEINSIDE ESP32-C6 IN-HIVE BLE SENSOR (optional, shares the same bridge)
+// HIVEINSIDE IN-HIVE BLE SENSOR (optional, shares the same bridge)
 // ==============================
-// The HiveInside ESP32-C6 prototype advertises through the SAME passive scan
-// bridge as the HolyIot 25015 (ENABLE_BLE_SCAN turns the bridge on). Its
-// manufacturer-specific payload is auto-detected by a distinct company id plus a
-// magic byte, so the two formats coexist with no extra enable flag. Unlike the
-// HolyIot beacon it also carries vibration AND acoustic FFT bands, which the
-// bridge folds into the existing accel_{slot}_band_* and mic_{left,right}_band_*
-// measurement fields (slot 1 -> mic_left, slot 2 -> mic_right).
+// HiveInside advertises through the SAME passive scan bridge as the HolyIot
+// 25015 (ENABLE_BLE_SCAN turns the bridge on). Its manufacturer-specific payload
+// is auto-detected by a distinct company id plus a magic byte, so the formats
+// coexist with no extra enable flag. Unlike the HolyIot beacon it also carries
+// vibration AND acoustic FFT bands, which the bridge folds into the existing
+// accel_{slot}_band_* and mic_{left,right}_band_* measurement fields (slot 1 ->
+// mic_left, slot 2 -> mic_right).
+//
+// Two boards emit the identical 26-byte frame: the original ESP32-C6 prototype
+// (served over GATT, HIVEINSIDE_USE_GATT below) and the current XIAO nRF54LM20A
+// Sense node, which advertises the frame CONTINUOUSLY as a beacon (no pairing
+// window, no GATT measurement service — passive scan + parseHiveInside() is the
+// whole ingest). Both share the Espressif company id so existing HiveHubs decode
+// either unchanged; flip BEACON_COMPANY_ID (nRF54 fw) + HIVEINSIDE_COMPANY_ID
+// together if a distinct Nordic identity is ever wanted.
 #ifndef HIVEINSIDE_COMPANY_ID
 #define HIVEINSIDE_COMPANY_ID 0x02E5   // Espressif's Bluetooth SIG company id
 #endif

@@ -9,7 +9,11 @@ from auth import require_api_key, require_device_key
 from config import PUBLIC_BASE_URL
 from db import get_conn
 from devices import ensure_device_config, get_device_owner_id
-from firmware import latest_release_for_owner
+from firmware import (
+    latest_hiveinside_release,
+    latest_release_for_owner,
+    reported_hiveinside_board,
+)
 from schemas import DeviceCommandIn, DeviceCommandResult
 
 router = APIRouter()
@@ -53,9 +57,18 @@ def queue_relay_firmware_update(device_id: str, target: str,
     The release is resolved owner-first (the relaying HiveHub's owner), falling
     back to a global release, so a sub-device only ever receives an image its
     owner published or an official build.
+
+    For ``hiveinside`` (two incompatible boards: the ESP32-C6 prototype and the
+    nRF54LM20A) the image is additionally matched to the board the target sensor
+    last reported, so a C6 image is never relayed to an nRF54 unit or vice versa;
+    a legacy board-agnostic release is used only as a fallback.
     """
     owner_id = get_device_owner_id(device_id)
-    r = latest_release_for_owner(target, owner_id)
+    if target == "hiveinside":
+        board = reported_hiveinside_board(device_id, slot)
+        r = latest_hiveinside_release(owner_id, board)
+    else:
+        r = latest_release_for_owner(target, owner_id)
     if not r:
         raise HTTPException(status_code=404, detail=f"No active {target} firmware release")
     version, filename, crc32 = r[0], r[1], r[2]
