@@ -1,10 +1,12 @@
-# current state of PCB-Design (as of 26th July 2026)
+# current state of PCB-Design (as of 9th June 2026): all published PCBs tested and working
 
-Scale Module (for xiao esp32-c6): v0.4 - currently untested
-Scale Module (for esp32 30pin): V0.3 ok
-Power Module: V0.3 ok
+# Recommended Setup:
+- use the ESP32-c6 Scale module for your main hivehub controller. You can use it to collect data of up to 18 BLE sensors and 2 scales using the NAU7802.
+- use the NAU7802 breakout PCB (without a MCU) to use up to 16 scales withe the HiveHub 
+- you can also use the NAU7802 breakout PCB (with a MCU) as a standalone BLE sensor with up to 16 scales, do not use it with an MCU as a HiveHub because it lacks the RTC and SD-Card
+- use of the esp32 30 pin is not longer recommended
 
-# HiveHub PCB Design — Scale Module V0.2
+# HiveHub PCB Design — Scale Module V0.4
 
 This directory contains the KiCad schematic and PCB layout for the HiveHub **Scale Module**. It is a breakout board that accepts off-the-shelf modules on pin headers — no SMD soldering required. All modules are simply plugged in.
 
