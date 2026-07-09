@@ -74,10 +74,11 @@ plaintext `X-User-Id` header is no longer accepted.
 
 ### `GET /health`
 
-Health check. No authentication required.
+Health check. No authentication required. `version` is the backend server
+version (`SERVER_VERSION` in `server/config.py`).
 
 ```json
-{ "status": "ok" }
+{ "status": "ok", "version": "0.1.0" }
 ```
 
 ### `GET /api/v1/time`

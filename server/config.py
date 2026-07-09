@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 
 
+# Backend server version. Bump on releases; reported in the OpenAPI metadata
+# (/docs) and by GET /health so a deployment's version is visible remotely.
+SERVER_VERSION = "0.1.0"
+
 DATABASE_URL = os.environ["DATABASE_URL"]
 API_KEY = os.environ["API_KEY"]
 HIVEPAL_SERVICE_API_KEY = os.environ.get("HIVEPAL_SERVICE_API_KEY", "")

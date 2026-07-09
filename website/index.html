@@ -66,7 +66,7 @@
     <p class="sub">Up to 18 hives per ESP32. Every sensor below is optional and
        compiled in per device — start with weight and add the rest as you build.</p>
     <div class="grid">
-      <div class="card"><div class="ico">⚖️</div><h3>Up to 18 scales</h3><p>HX711 and NAU7802 load-cell channels (I2C, with an optional mux) give each colony its own scale — up to 18 hives per ESP32.</p></div>
+      <div class="card"><div class="ico">⚖️</div><h3>Up to 18 scales</h3><p>NAU7802 load-cell channels (I2C, with an optional mux — plus HX711 on the legacy board) give each colony its own scale — up to 18 hives per ESP32.</p></div>
       <div class="card"><div class="ico">🌡️</div><h3>Per-hive temperature</h3><p>DS18B20 probes on a shared 1-Wire bus, or an in-hive BLE sensor as an alternative source.</p></div>
       <div class="card"><div class="ico">🔊</div><h3>In-hive sound</h3><p>Stereo INMP441 I2S microphones with per-band FFT energy to catch piping and stress.</p></div>
       <div class="card"><div class="ico">📳</div><h3>Comb vibration</h3><p>An in-hive BLE sensor (e.g. HiveInside) captures the ~20 Hz pre-swarm signal microphones miss.</p></div>
@@ -86,12 +86,12 @@
 <section id="hardware">
   <div class="wrap">
     <h2>Hardware at a glance</h2>
-    <p class="sub">A mains-or-solar ESP32 dev board plus off-the-shelf modules on pin headers —
-       no SMD soldering required for the core build.</p>
+    <p class="sub">A mains-or-solar ESP32 board plus off-the-shelf modules on pin headers —
+       no SMD soldering required for the core build. All published PCBs are tested and working.</p>
     <div class="grid">
-      <div class="card"><h3>Core</h3><p>ESP32 dev board · HX711 + NAU7802 load-cell channels (scale to 18 hives) · DS18B20 probes · INMP441 mics · SHT4x · DS3231 RTC · microSD module · setup button · 3.3 V supply.</p></div>
+      <div class="card"><h3>Core (recommended)</h3><p>Seeed XIAO <strong>ESP32-C6</strong> · <strong>NAU7802</strong> I2C load-cell channels (scale to 18 hives) · DS18B20 probes · SHT4x · DS3231 RTC · microSD module · setup button · BLE in-hive sensors. Legacy 30-pin ESP32 builds with HX711 + INMP441 mics remain supported.</p></div>
       <div class="card"><h3>Optional off-grid</h3><p>INA219 solar telemetry · MAX17048 LiPo gauge · CN3791 solar charger · TPS63020 buck-boost · TP4056 · LiPo + solar panel.</p></div>
-      <div class="card"><h3>Boards</h3><p>KiCad <strong>Scale Module</strong> (central, header-based) and a <strong>Power Module</strong> (solar / battery / LTE) connected over I2C / ESP-NOW. Fabrication outputs included.</p></div>
+      <div class="card"><h3>Boards</h3><p>KiCad <strong>ESP32-C6 Scale Module</strong> (recommended, central board) and the <strong>NAU7802 breakout</strong> for up to 16 wired scales — all tested and working, fabrication outputs included. A Power Module and the legacy 30-pin Scale Module round out the set.</p></div>
     </div>
     <p style="margin-top:1.5rem">
       Full pin mapping, wiring diagrams and the BOM live in the

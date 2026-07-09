@@ -39,6 +39,7 @@ from config import (
     MAX_BODY_BYTES,
     RATE_LIMIT_DEFAULT,
     RATE_LIMIT_ENABLED,
+    SERVER_VERSION,
 )
 from db import db_pool, init_db
 from insights_api import start_insight_reconciler, stop_insight_reconciler
@@ -55,7 +56,7 @@ limiter = Limiter(
 app = FastAPI(
     title="HiveHub API",
     description="HTTP endpoint for ESP32-based dual hive scales.",
-    version="0.3.2",
+    version=SERVER_VERSION,
 )
 
 # Rate limiting (slowapi): keyed on the real client IP, emits standard RateLimit
@@ -99,7 +100,7 @@ def shutdown():
 @app.get("/health")
 @limiter.exempt
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": SERVER_VERSION}
 
 
 @app.get("/api/v1/time", dependencies=[Depends(require_api_key)])

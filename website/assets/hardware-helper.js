@@ -188,15 +188,15 @@
       features.push("ENABLE_BLE_SCAN", "ENABLE_BEEHIVE_GATT");
       recommendations.push("Skip load-cell amplifier wiring and focus the guide on BLE pairing, hive mapping and backend deployment.");
     } else if (setup === "multi") {
-      board = "30-pin ESP32 DevKit plus scalable I2C load-cell frontend";
-      scaleInterface = scaleSource === "ble-existing" ? "BLE/GATT wireless scales" : "NAU7802 channels, optionally behind an I2C mux, or direct scale interface validation";
+      board = "XIAO ESP32-C6 Scale Module plus NAU7802 breakout PCB (I2C load-cell frontend)";
+      scaleInterface = scaleSource === "ble-existing" ? "BLE/GATT wireless scales" : "NAU7802 channels behind the breakout's I2C mux (up to 16 wired scales)";
       profileKey = "multi-scale";
       recommendations.push("Use the multi-scale guide path with I2C address planning, per-scale calibration and expansion notes.");
     } else {
-      board = hasAnyBle && scaleSource !== "wired-existing" ? "ESP32 DevKit or XIAO ESP32-C6 compact build" : "30-pin ESP32 DevKit";
-      scaleInterface = scaleSource === "ble-existing" ? "BLE/GATT wireless scales" : "1–2 HX711 channels";
+      board = "XIAO ESP32-C6 Scale Module (recommended; the 30-pin ESP32 DevKit is legacy)";
+      scaleInterface = scaleSource === "ble-existing" ? "BLE/GATT wireless scales" : "NAU7802 I2C channels (2 scales on the Scale Module)";
       profileKey = "simple-scale";
-      recommendations.push("Start with the simple wiring guide: two HX711 channels, I2C devices, SD card and setup button.");
+      recommendations.push("Start with the simple wiring guide: NAU7802 scale channels, I2C devices, SD card and setup button.");
     }
 
     if (power === "offgrid") {

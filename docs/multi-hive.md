@@ -11,7 +11,7 @@ portal, the BLE budget, and the data model.
 
 | Sensor | Max | How |
 | --- | --- | --- |
-| Scales | **18** | One scale source per hive: HX711 (1), HX711 (2), NAU7802 channels (main bus **or** mux — not both, see topology note), or a paired beehivemonitoring.com BLE HiveScale. Wired NAU7802-only tops out at **16** (mux); 18 wired channels needs the 2 HX711 channels too |
+| Scales | **18** | One scale source per hive: NAU7802 channels (main bus **or** mux — not both, see topology note), HX711 (1) / HX711 (2) on the legacy 30-pin board, or a paired beehivemonitoring.com BLE HiveScale. Wired NAU7802-only tops out at **16** (mux); 18 wired channels needs the 2 HX711 channels of the legacy board too (the recommended XIAO ESP32-C6 has no HX711) |
 | Wired temperature | **18** | One DS18B20 probe per hive on the single 1-Wire bus, mapped by ROM address |
 | In-hive BLE/GATT | **18** | One non-scale BLE/GATT sensor per hive. Passive beacons share one scan window; connection-based GATT reads remain cycle-capped |
 
@@ -66,8 +66,9 @@ sleep window.
 All DS18B20 probes share the single `ONE_WIRE_PIN` bus. Instead of reading by
 index (old behaviour), each hive maps a probe by its **ROM address**, so a
 specific probe always belongs to a specific hive regardless of bus enumeration
-order. Map probes in the portal after an I2C/1-Wire scan. (Not available on the
-XIAO ESP32-C6 — it has no spare pins; use BLE in-hive sensors there.)
+order. Map probes in the portal after an I2C/1-Wire scan. (On the XIAO ESP32-C6
+the 1-Wire bus lives on **D1** — the V0.4 Scale Module PCB wires a DS18B20
+header there.)
 
 ---
 
