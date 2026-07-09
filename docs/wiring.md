@@ -2,19 +2,20 @@
 
 This document covers wiring for both supported hardware variants:
 
-- **30-pin ESP32 DevKit** — original board, full sensor suite
-- **XIAO ESP32-C6** — compact RISC-V module, wireless-sensor-only variant
+- **XIAO ESP32-C6** — compact RISC-V module, the **recommended** board (used on the V0.4 Scale Module PCB); scales via I2C NAU7802
+- **30-pin ESP32 DevKit** — legacy board with the full wired sensor suite (obsolete, no longer recommended)
 
 ---
 
-## XIAO ESP32-C6 variant
+## XIAO ESP32-C6 variant (recommended)
 
-> **Wired in-hive sensors are NOT supported on this board.**
-> The XIAO ESP32-C6 uses only the 11 front-header pins (D0–D10), which are fully
-> occupied by the two HX711 amplifiers, the SD card, I2C bus, and the setup button.
-> There are no spare pins for DS18B20 probes or INMP441 microphones.
-> **Use wireless BLE in-hive sensors** (HolyIot 25015, RuuviTag, or HiveInside
-> ESP32-C6) to obtain in-hive temperature, humidity, acoustics, and vibration data.
+> The XIAO ESP32-C6 uses only the 11 front-header pins (D0–D10). There is **no
+> HX711** on this board — load cells are read over I2C with the **NAU7802**
+> 24-bit ADC (2 scales on the main bus, or up to 16 via the NAU7802 breakout
+> PCB's TCA9548A mux; see [multi-hive.md](multi-hive.md)). A single **DS18B20
+> 1-Wire bus on D1** is supported for wired in-hive temperature. The INMP441
+> microphone is not supported — **use wireless BLE in-hive sensors** (HolyIot
+> 25015, RuuviTag, or HiveInside ESP32-C6) for acoustics and vibration data.
 
 ### PlatformIO target
 
@@ -26,17 +27,15 @@ pio run -e xiao_esp32c6
 
 | Signal | XIAO pin | GPIO | Notes |
 |---|---|---|---|
-| HX711 #1 DOUT | D6 | 16 | Scale 1 data |
-| HX711 #1 SCK | D7 | 17 | Scale 1 clock |
-| HX711 #2 DOUT | D0 | 0 | Scale 2 data |
-| HX711 #2 SCK | D1 | 1 | Scale 2 clock |
-| I2C SDA | D4 | 22 | RTC, SHT4x, optional INA219/MAX17048 |
-| I2C SCL | D5 | 23 | RTC, SHT4x, optional INA219/MAX17048 |
+| DS18B20 1-Wire | D1 | 1 | In-hive temperature bus, 4.7 kΩ pull-up to 3.3 V |
+| I2C SDA | D4 | 22 | NAU7802 scales, RTC, SHT4x, BeeCounter, optional INA219/MAX17048 |
+| I2C SCL | D5 | 23 | NAU7802 scales, RTC, SHT4x, BeeCounter, optional INA219/MAX17048 |
 | SD CS | D3 | 21 | SD card chip select |
 | SD SCK | D8 | 19 | SPI clock (XIAO default SCK) |
 | SD MISO | D9 | 20 | SPI MISO (XIAO default MISO) |
 | SD MOSI | D10 | 18 | SPI MOSI (XIAO default MOSI) |
 | Setup button | D2 | 2 | Button to GND, INPUT_PULLUP |
+| (unused) | D0 | 0 | Free |
 
 Power the board from its USB-C connector (programming + serial via native USB-CDC)
 or from the 5 V / 3 V3 header pins. All sensors connect to 3 V3.
@@ -70,23 +69,24 @@ The firmware logs the active antenna selection on every boot:
 
 | Feature | Status |
 |---|---|
-| 2× HX711 weight cells | ✅ |
+| NAU7802 I2C scales (2 on main bus, up to 16 behind a TCA9548A mux) | ✅ |
+| HX711 weight cells | ❌ no pins available — use the NAU7802 |
 | SD card (cache + backup) | ✅ |
 | DS3231 RTC | ✅ |
 | SHT4x ambient temp/humidity | ✅ |
+| DS18B20 wired in-hive probes | ✅ (1-Wire bus on D1) |
 | BLE wireless in-hive sensors (HolyIot, RuuviTag, HiveInside) | ✅ |
 | OTA firmware update over WiFi | ✅ |
 | WiFi provisioning portal | ✅ |
 | Optional INA219 solar monitor | ✅ (I2C) |
 | Optional MAX17048 fuel gauge | ✅ (I2C) |
-| DS18B20 wired in-hive probes | ❌ no pins available |
-| INMP441 wired microphones | ❌ no pins available |
+| INMP441 wired microphones | ❌ no pins available — pair a BLE sensor for acoustics |
 | Deep-sleep timer wake | ✅ |
 | Deep-sleep button wake | ✅ (GPIO wake, D2) |
 
 ---
 
-## 30-pin ESP32 DevKit — pin mapping
+## 30-pin ESP32 DevKit — pin mapping (legacy, no longer recommended)
 
 The firmware pin definitions live in `firmware/include/config.h` (with optional per-device overrides in `secrets.h`). Keep this table aligned with those definitions whenever pins change.
 

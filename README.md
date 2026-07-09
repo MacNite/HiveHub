@@ -11,7 +11,7 @@
 > third-party **beehivemonitoring.com "HiveScale"** wireless weight scale is an
 > unrelated product and keeps its own name.
 
-**This is very much a WIP — please do not order the PCBs as published now; they are not fully tested and are for development only.**
+**Hardware status: all published PCBs are tested and working.** The recommended build is the **ESP32-C6 Scale Module** with **NAU7802** load-cell ADCs — see [pcb-design/README.md](pcb-design/README.md). The old ESP32 30-pin board is obsolete and no longer recommended.
 
 **HiveHub is an ESP32-based data collector for beehive sensors and scales.** It
 gathers weight, temperature, humidity, sound, vibration, power state, and network
@@ -71,7 +71,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Built-in web dashboard (optional)** — a login-free, dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts: device dropdown, per-hive selection, charts for every data group, plus device-config editing, hive renaming, firmware/OTA and calibration controls. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
 - **[HivePal](https://github.com/martinhrvn/hive-pal) integration** — dedicated `/api/v1/app/...` endpoints using a HivePal service key, per-user JWTs, and per-user access roles.
 - **Optional MQTT bridge** — mirror every reading to an MQTT broker (Home Assistant, Node-RED, openHAB…) with Home Assistant auto-discovery, alongside the built-in PostgreSQL store. Off by default; see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration).
-- **Breakout PCB design** — KiCad Scale Module + Power Module with fabrication outputs.
+- **PCB designs (tested and working)** — KiCad ESP32-C6 Scale Module (recommended) and NAU7802 breakout board with fabrication outputs, plus the Power Module and legacy 30-pin Scale Module.
 - **Docker Compose deployment** — the API and PostgreSQL database.
 
 ---
@@ -102,8 +102,10 @@ All links are affiliate links and support this project directly.
 
 | Component | Role |
 |---|---|
-| [ESP32 Dev Board](https://s.click.aliexpress.com/e/_c3LV3nfF)| Main controller |
-| 2x [HX711](https://s.click.aliexpress.com/e/_c3DkGsAN) + [load cells](https://s.click.aliexpress.com/e/_c33VsCl7) | Weight measurement for scale 1 and scale 2 |
+| Seeed Studio XIAO ESP32-C6 | Main controller (**recommended** — used on the ESP32-C6 Scale Module PCB) |
+| NAU7802 (I2C, on the Scale Module / breakout PCB) + [load cells](https://s.click.aliexpress.com/e/_c33VsCl7) | Weight measurement (**recommended** — 2 scales on the C6 Scale Module, up to 16 via the NAU7802 breakout PCB) |
+| [ESP32 Dev Board](https://s.click.aliexpress.com/e/_c3LV3nfF)| Legacy 30-pin main controller (obsolete — no longer recommended) |
+| 2x [HX711](https://s.click.aliexpress.com/e/_c3DkGsAN) + [load cells](https://s.click.aliexpress.com/e/_c33VsCl7) | Weight measurement on the legacy 30-pin board |
 | [SHT4x](https://s.click.aliexpress.com/e/_c3CvaIKz) | Ambient temperature and humidity |
 | [DS3231 RTC](https://s.click.aliexpress.com/e/_c4mfPBtR) | Offline timekeeping |
 | [MicroSD card module](https://s.click.aliexpress.com/e/_c3oDcFM9) + card | Local cache and backup storage |
@@ -133,6 +135,8 @@ Entrance traffic counting (in/out bees) is available wired over I2C or wireless 
 ### Firmware pin mapping
 
 Pins are defined in `firmware/include/config.h` (with optional per-device overrides in `secrets.h`). The firmware source is split into focused units under `firmware/src/` (`main.cpp`, `hivescale_network.cpp`, `portal.cpp`, `sensors.cpp`, `mics.cpp`, `accel.cpp`, `ble_sensor.cpp`, `beehive_gatt.cpp`, `bee_counter_client.cpp`, `storage_power.cpp`, `device_prefs.cpp`, `globals.cpp`).
+
+The table below is the **legacy 30-pin ESP32** map. The recommended **XIAO ESP32-C6** build (`pio run -e xiao_esp32c6`) has its own pin map — NAU7802 scales over I2C on D4/D5, DS18B20 on D1, SD on D3/D8–D10, button on D2, no HX711/INMP441 — see [docs/wiring.md](docs/wiring.md) and [pcb-design/README.md](pcb-design/README.md).
 
 | Signal | GPIO | Notes |
 |---|---:|---|
@@ -461,12 +465,14 @@ Commands are queued by the server and picked up by the device on its next cycle.
 
 ## PCB design
 
-The `pcb-design/` directory contains the KiCad design, split into two boards:
+The `pcb-design/` directory contains the KiCad designs — **all published boards are tested and working**:
 
-- **Scale Module** — the central board. It accepts off-the-shelf modules on pin headers (no SMD soldering): ESP32, both HX711 amplifiers, load-cell terminals, I2C sensors (RTC, SHT40), SD module, two INMP441 microphones, and the BeeCounter.
-- **Power Module** — handles power and connectivity (solar, battery, LTE) and connects to the Scale Module over I2C/ESP-NOW.
+- **ESP32-C6 Scale Module (V0.4, recommended)** — the central board. Off-the-shelf modules on pin headers (no SMD soldering): XIAO ESP32-C6, on-board NAU7802 for 2 scales, RTC, SHT40, SD module, DS18B20 bus, BeeCounter, battery gauge, and buck-boost regulator.
+- **NAU7802 breakout PCB (v0.2)** — I2C frontend for up to 16 wired scales (8× NAU7802 behind a TCA9548A mux); optionally carries its own XIAO MCU as a standalone BLE scale sensor.
+- **Power Module (V0.3)** — off-grid power (solar, battery) for a Scale Module; probably discontinued soon.
+- **ESP32 30-pin Scale Module (V0.3)** — the legacy board (ESP32 DevKit + 2× HX711 + INMP441 mics); obsolete and no longer recommended.
 
-Start with [pcb-design/README.md](pcb-design/README.md) for the connector pinout, design intent, fabrication files, and assembly notes. The current PCB is an early revision and should be prototyped before field deployment.
+Start with [pcb-design/README.md](pcb-design/README.md) for the recommended setup, connector pinouts, fabrication files, and assembly notes.
 
 ---
 
