@@ -75,6 +75,70 @@ def latest_release_for_owner(target: str, owner_user_id: Optional[str],
     return best[:4]
 
 
+def latest_release_board_null(target: str, owner_user_id: Optional[str]):
+    """Highest-version active release for a target that carries NO board stamp.
+
+    Used as the legacy fallback for board-aware relays: a deployment that
+    published a single ``board = NULL`` image before board stamping existed keeps
+    updating, without ever matching a release stamped for a specific (possibly
+    wrong) architecture.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT version, filename, crc32, owner_user_id, id "
+                "FROM firmware_releases "
+                "WHERE active = true AND target = %s AND board IS NULL "
+                "  AND (owner_user_id = %s OR owner_user_id IS NULL);",
+                (target, owner_user_id),
+            )
+            rows = cur.fetchall()
+    if not rows:
+        return None
+    best = max(rows, key=lambda r: (parse_version(r[0]), r[3] is not None, r[4]))
+    return best[:4]
+
+
+def latest_hiveinside_release(owner_user_id: Optional[str], board: Optional[str]):
+    """Resolve the HiveInside OTA image for a sensor of the given board.
+
+    Prefers a release stamped for that exact board; falls back to a legacy
+    board-agnostic (``board IS NULL``) release so single-board deployments that
+    predate board stamping keep updating. Never returns a release stamped for a
+    DIFFERENT board, so a C6 image is never relayed to an nRF54 unit or vice
+    versa. Returns a (version, filename, crc32, owner_user_id) tuple or None.
+    """
+    board = (board or "").strip().lower() or None
+    if board is not None and board in HIVEINSIDE_BOARDS:
+        r = latest_release_for_owner("hiveinside", owner_user_id, board)
+        if r:
+            return r
+    # Board unknown or no image stamped for it: fall back to a legacy NULL-board
+    # release only (never a release stamped for the other architecture).
+    return latest_release_board_null("hiveinside", owner_user_id)
+
+
+def reported_hiveinside_board(device_id: str, slot: int) -> Optional[str]:
+    """The board a HiveInside sensor last reported for a HiveHub slot (1|2).
+
+    Read from the most recent measurement's ``ble_{slot}_board`` (the HiveHub
+    forwards the node's GATT "board" field). Returns a known HiveInside board or
+    None when the sensor never reported one (older firmware / beacon-only node
+    that never exposed the version characteristic)."""
+    key = f"ble_{int(slot)}_board"
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT raw_json->>%s FROM measurements "
+                "WHERE device_id = %s AND raw_json->>%s IS NOT NULL "
+                "ORDER BY measured_at DESC LIMIT 1;",
+                (key, device_id, key),
+            )
+            r = cur.fetchone()
+    board = (r[0].strip().lower() if r and r[0] else None)
+    return board if board in HIVEINSIDE_BOARDS else None
+
+
 def other_board_releases(target: str, owner_user_id: Optional[str],
                          device_board: Optional[str],
                          current_version: Optional[str]) -> list:
@@ -229,22 +293,45 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
 # multipart upload endpoint below.
 FIRMWARE_TARGETS = ("hivescale", "beecounter", "hiveinside")
 
-# Board/architecture labels for the dual-board "hivescale" target. These MUST match
-# the firmware's HIVESCALE_BOARD_LABEL (config.h) and rename_firmware.py BOARD_LABELS
-# so a device's ?board=... query lines up with the release it should receive.
-FIRMWARE_BOARDS = ("esp32", "esp32-c6")
+# Board/architecture labels per multi-board target. These MUST match the
+# firmware's board labels (config.h HIVESCALE_BOARD_LABEL; the HiveInside JSON
+# "board" field) and rename_firmware.py BOARD_LABELS so a device's ?board=... /
+# reported board lines up with the release it should receive.
+#
+#  * hivescale is dual-architecture (Xtensa ESP32 vs RISC-V ESP32-C6).
+#  * hiveinside now has two incompatible boards too: the original ESP32-C6
+#    prototype and the current Nordic nRF54LM20A (a signed Zephyr/MCUboot image).
+# beecounter stays single-architecture (board = NULL).
+HIVESCALE_BOARDS = ("esp32", "esp32-c6")
+HIVEINSIDE_BOARDS = ("esp32-c6", "nrf54lm20a")
+# Kept for callers that only reason about the hivescale ?board= query.
+FIRMWARE_BOARDS = HIVESCALE_BOARDS
+
+# Targets whose releases are board-stamped, and the valid board set for each.
+BOARDS_BY_TARGET = {
+    "hivescale": HIVESCALE_BOARDS,
+    "hiveinside": HIVEINSIDE_BOARDS,
+}
+
+
+def boards_for_target(target: str) -> tuple:
+    """Valid board labels for a target, or () for single-architecture targets."""
+    return BOARDS_BY_TARGET.get(target, ())
 
 
 def board_from_filename(filename: str) -> Optional[str]:
     """Infer the board/architecture from a board-stamped firmware filename.
 
-    rename_firmware.py names artifacts ``hivehub_esp32_<v>.bin`` and
-    ``hivehub_esp32-c6_<v>.bin`` (legacy builds used the ``hivescale_`` prefix);
-    detection keys off the board token, so either prefix works. 'esp32-c6'
-    contains the substring 'esp32', so the C6 variants are matched first. Returns
-    None when the name carries no recognizable board token.
+    rename_firmware.py names artifacts ``hivehub_esp32_<v>.bin`` /
+    ``hivehub_esp32-c6_<v>.bin`` for the hub and ``hiveinside_esp32-c6_<v>.bin`` /
+    ``hiveinside_nrf54lm20a_<v>.bin`` for the in-hive node; detection keys off the
+    board token, so any prefix works. 'esp32-c6' contains the substring 'esp32',
+    so the C6 and Nordic variants are matched before plain esp32. Returns None
+    when the name carries no recognizable board token.
     """
     n = (filename or "").lower()
+    if "nrf54" in n:
+        return "nrf54lm20a"
     if "esp32-c6" in n or "esp32c6" in n or "xiao" in n:
         return "esp32-c6"
     if "esp32" in n:
@@ -252,25 +339,35 @@ def board_from_filename(filename: str) -> Optional[str]:
     return None
 
 
-def resolve_hivescale_board(target: str, declared_board: Optional[str],
-                            filename: str) -> Optional[str]:
+def resolve_release_board(target: str, declared_board: Optional[str],
+                          filename: str) -> Optional[str]:
     """Determine and validate the board for a release at registration time.
 
-    Publish guard (defence against shipping a cross-architecture image): for the
-    dual-board ``hivescale`` target the board must be known AND consistent with the
-    board-stamped filename. A declared board that disagrees with the filename, an
-    unknown board value, or a filename with no board token are all rejected, so a
-    C6 binary can never be registered as an ``esp32`` release. Non-hivescale
-    (single-architecture) targets carry no board.
+    Publish guard (defence against shipping a cross-architecture image):
+
+      * ``hivescale`` (dual-board) — the board MUST be known AND consistent with
+        the board-stamped filename, so a C6 binary can never register as ``esp32``.
+      * ``hiveinside`` (now dual-board) — a declared/detected board is validated
+        against the HiveInside board set and must agree with the filename, so an
+        nRF54 Zephyr image can never register as an ``esp32-c6`` release. A board
+        may be omitted (legacy single-architecture ``board = NULL`` release) for
+        backward compatibility, but stamping one is strongly preferred.
+      * every other (single-architecture) target carries no board.
     """
-    if target != "hivescale":
+    boards = boards_for_target(target)
+    if not boards:
         return None
     from_name = board_from_filename(filename)
+    # A filename token that is valid for SOME target but not this one (e.g. an
+    # "esp32" hub token on a hiveinside upload) must not be treated as this
+    # target's board.
+    if from_name not in boards:
+        from_name = None
     declared = (declared_board or "").strip().lower() or None
-    if declared is not None and declared not in FIRMWARE_BOARDS:
+    if declared is not None and declared not in boards:
         raise HTTPException(
             status_code=400,
-            detail=f"board must be one of {', '.join(FIRMWARE_BOARDS)}",
+            detail=f"board for {target} must be one of {', '.join(boards)}",
         )
     if declared is not None and from_name is not None and declared != from_name:
         raise HTTPException(
@@ -280,7 +377,8 @@ def resolve_hivescale_board(target: str, declared_board: Optional[str],
                     "possibly cross-architecture image"),
         )
     board = declared or from_name
-    if board is None:
+    if board is None and target == "hivescale":
+        # hivescale has always required a board; keep that strict.
         raise HTTPException(
             status_code=400,
             detail=("cannot determine board for a hivescale release: pass board= "
@@ -288,6 +386,10 @@ def resolve_hivescale_board(target: str, declared_board: Optional[str],
                     "hivehub_esp32-c6_<v>.bin"),
         )
     return board
+
+
+# Backwards-compatible alias (older name).
+resolve_hivescale_board = resolve_release_board
 
 # A conservative filename pattern. Firmware filenames are referenced verbatim in
 # download URLs and joined onto FIRMWARE_DIR, so we reject anything that is not a
@@ -345,9 +447,11 @@ def create_firmware_release(payload: FirmwareReleaseIn):
     path = FIRMWARE_DIR / payload.filename
     if not path.exists():
         raise HTTPException(status_code=400, detail=f"Firmware file '{payload.filename}' not found in firmware directory")
-    # Publish guard: a hivescale release must carry a board that matches its
-    # board-stamped filename, so a C6 image can never be registered as esp32.
-    board = resolve_hivescale_board(payload.target, payload.board, payload.filename)
+    # Publish guard: a multi-board release (hivescale / hiveinside) must carry a
+    # board consistent with its board-stamped filename, so a cross-architecture
+    # image (e.g. a C6 build registered as esp32, or an nRF54 image as esp32-c6)
+    # is refused.
+    board = resolve_release_board(payload.target, payload.board, payload.filename)
     crc = crc32_of_file(path)
     upsert_firmware_release(
         payload.version, payload.filename, payload.active, payload.target, crc,
@@ -414,9 +518,10 @@ async def store_firmware_upload(
         raise HTTPException(status_code=400, detail="Invalid firmware filename")
 
     # Publish guard: resolve + validate the board BEFORE writing the image to disk,
-    # so a hivescale release whose declared board contradicts its filename (or which
-    # carries no board token at all) is rejected and leaves nothing behind.
-    release_board = resolve_hivescale_board(target, board, filename)
+    # so a multi-board release (hivescale / hiveinside) whose declared board
+    # contradicts its filename — or, for hivescale, carries no board token at all —
+    # is rejected and leaves nothing behind.
+    release_board = resolve_release_board(target, board, filename)
 
     FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
 

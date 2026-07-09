@@ -6,9 +6,9 @@
 
   var DEVICE_META = {
     hiveinside: {
-      label: "HiveInside",
-      features: ["ENABLE_BLE_SCAN", "ENABLE_BEEHIVE_GATT"],
-      guide: "Pair HiveInside devices and decide whether their data overrides wired in-hive sensors."
+      label: "HiveInside (nRF54LM20A; legacy ESP32-C6 also supported)",
+      features: ["ENABLE_BLE_SCAN"],
+      guide: "Pair HiveInside devices and decide whether their data overrides wired in-hive sensors. The current nRF54LM20A node is a passive beacon (always discoverable, no pairing window); the legacy ESP32-C6 prototype is read over GATT."
     },
     hiveheart: {
       label: "Beehivemonitoring.com HiveHeart",

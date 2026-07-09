@@ -39,7 +39,7 @@ namespace blesensor {
 enum class SensorType : uint8_t {
   None       = 0,
   HolyIot    = 1,   // HolyIot 25015 beacon: temp/humidity/pressure/raw accel
-  HiveInside = 2,   // HiveInside ESP32-C6: + vibration & acoustic FFT bands
+  HiveInside = 2,   // HiveInside (ESP32-C6 / nRF54LM20A): + vibration & acoustic FFT bands
   Ruuvi      = 3,   // RuuviTag beacon: temp/humidity/pressure/raw accel
 };
 
@@ -79,10 +79,17 @@ struct Snapshot {
   float    mic_high_dbfs     = NAN;  // 1500–3000 Hz
 
   int      battery_pct   = -1;     // -1 = not reported
+  int      battery_mv    = -1;     // HiveInside raw cell voltage in mV (-1 = not reported)
 
-  // Running firmware version reported by a HiveInside C6 over GATT (JSON "fw").
+  // Running firmware version reported by a HiveInside node over GATT (JSON "fw").
   // Empty for HolyIot/Ruuvi beacons, which carry no firmware field.
   String   fw_version;
+
+  // Board/architecture the HiveInside node reports over GATT (JSON "board",
+  // e.g. "esp32-c6" or "nrf54lm20a"). HiveHub forwards it so the backend only
+  // relays an OTA image built for that architecture. Empty for beacons and for
+  // nodes that don't expose the version characteristic.
+  String   board;
 
   // Capability helpers used by the wired/BLE arbitration in sensors.cpp.
   bool providesTemp()  const { return present && !isnan(temp_c); }

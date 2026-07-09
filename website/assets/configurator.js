@@ -51,11 +51,15 @@
   var SENSOR_TYPES = [
     ["holyiot", "HolyIot 25015 — beacon"],
     ["ruuvitag", "RuuviTag — beacon"],
-    ["hiveinside", "HiveInside — GATT"],
+    ["hiveinside_nrf54", "HiveInside (nRF54LM20A) — beacon"],
+    ["hiveinside", "Legacy HiveInside (ESP32-C6) — GATT"],
     ["hiveheart", "HiveHeart — GATT (beehivemonitoring.com)"],
     ["beecounter", "HiveTraffic counter — GATT (polled on hives 1-2 only)"]
   ];
-  var SCAN_TYPES = { holyiot: 1, ruuvitag: 1, hiveinside: 1, hiveheart: 1 };
+  // Passively-scanned beacon types (one shared scan window, no GATT connection).
+  // The nRF54 HiveInside advertises continuously, so it joins the beacon set;
+  // only the legacy ESP32-C6 HiveInside ("hiveinside") is read over GATT.
+  var SCAN_TYPES = { holyiot: 1, ruuvitag: 1, hiveinside_nrf54: 1, hiveinside: 1, hiveheart: 1 };
 
   var hiveList = $("#hive-list");
   var HIVES = []; // {i, n, sk, ds: string|null, bl: {t,m}|null, wm}
