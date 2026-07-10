@@ -522,6 +522,70 @@ static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
   NimBLEDevice::deleteClient(client);
   return ok;
 }
+
+// ── nRF54 HiveInside board / firmware-version discovery ─────────────────────
+// A beacon-only nRF54 node never serves measurements over GATT, so its board
+// and running firmware version can't come from the advertisement — they are
+// learned by a ONE-OFF connect to the version characteristic (8e8b0002), which
+// answers with {"fw":..,"board":..}. Unlike gattReadHiveInside() this does NOT
+// write the wake-sync hint (a beacon node has no sleep schedule to steer).
+//
+// The result is cached per MAC so the connect happens at most once per node per
+// HiveHub session: the board never changes, and the firmware version only
+// changes on an OTA (which invalidates the cached entry). Without this the
+// backend never learns the node's board and can only relay a legacy
+// board-agnostic image — a board-stamped nrf54lm20a release is never selected.
+struct HiVersion { String mac; String board; String fw; };
+static std::vector<HiVersion> s_hiVersions;
+
+static bool hiVersionLookup(const String& mac, String& board, String& fw) {
+  for (auto& v : s_hiVersions) {
+    if (v.mac == mac) { board = v.board; fw = v.fw; return true; }
+  }
+  return false;
+}
+
+static void hiVersionStore(const String& mac, const String& board, const String& fw) {
+  for (auto& v : s_hiVersions) {
+    if (v.mac == mac) { v.board = board; v.fw = fw; return; }
+  }
+  s_hiVersions.push_back(HiVersion{mac, board, fw});
+}
+
+static void hiVersionInvalidate(const String& mac) {
+  for (size_t i = 0; i < s_hiVersions.size(); i++) {
+    if (s_hiVersions[i].mac == mac) { s_hiVersions.erase(s_hiVersions.begin() + i); return; }
+  }
+}
+
+// Connect, read the version JSON, extract board + fw, disconnect. Returns true
+// if either field was present. Deliberately does not touch the measurement or
+// wake-sync characteristics — a beacon node exposes neither meaningfully.
+static bool discoverHiVersion(const NimBLEAddress& addr, String& board, String& fw) {
+  NimBLEClient* client = NimBLEDevice::createClient();
+  client->setConnectTimeout((uint32_t)HIVEINSIDE_GATT_CONNECT_TIMEOUT_S * 1000UL);
+  if (!client->connect(addr)) {
+    NimBLEDevice::deleteClient(client);
+    return false;
+  }
+  bool ok = false;
+  NimBLERemoteService* svc = client->getService(HIVEINSIDE_GATT_SVC);
+  NimBLERemoteCharacteristic* chr = svc ? svc->getCharacteristic(HIVEINSIDE_GATT_CHR) : nullptr;
+  if (chr && chr->canRead()) {
+    std::string val = chr->readValue();
+    if (!val.empty()) {
+      JsonDocument doc;
+      if (deserializeJson(doc, val) == DeserializationError::Ok) {
+        board = (const char*)(doc["board"] | "");
+        fw    = (const char*)(doc["fw"]    | "");
+        ok = board.length() || fw.length();
+      }
+    }
+  }
+  if (client->isConnected()) client->disconnect();
+  NimBLEDevice::deleteClient(client);
+  return ok;
+}
 #endif  // HIVEINSIDE_USE_GATT
 
 // Reduce the accumulated |a| samples to a per-cycle AC RMS/peak (gravity removed).
@@ -653,6 +717,26 @@ void scanPairedSensorsMulti(const std::vector<String>& macs,
     if (g_slot[s].mac.length() == 0 || !g_slot[s].found_by_mac) continue;
     if (g_slot[s].present) {
       copyToSnapshot(g_slot[s], out[s]);   // advertising data — no GATT needed
+      // nRF54 HiveInside beacon: the frame carries no board/fw, so learn them
+      // once (wake-sync-free, cached) to enable board-matched OTA selection.
+      // Uses at most one GATT connect per node per session, budget permitting.
+      if (out[s].type == SensorType::HiveInside) {
+        String hiBoard, hiFw;
+        if (hiVersionLookup(g_slot[s].mac, hiBoard, hiFw)) {
+          out[s].board = hiBoard;
+          out[s].fw_version = hiFw;
+        } else if (gattBudget < 0 || gattUsed < gattBudget) {
+          NimBLEAddress addr(g_slot[s].mac.c_str(), g_slot[s].ble_addr_type);
+          if (discoverHiVersion(addr, hiBoard, hiFw)) {
+            gattUsed++;
+            hiVersionStore(g_slot[s].mac, hiBoard, hiFw);
+            out[s].board = hiBoard;
+            out[s].fw_version = hiFw;
+            Serial.printf("[BLE] HiveInside %s discovered: board=%s fw=%s\n",
+                          g_slot[s].mac.c_str(), hiBoard.c_str(), hiFw.c_str());
+          }
+        }
+      }
       continue;
     }
     bool wantGatt = (s < isGatt.size()) ? isGatt[s] : true;
@@ -881,6 +965,11 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
     s_otaLastError = "bad OTA arguments (mac/size)";
     return false;
   }
+#if HIVEINSIDE_USE_GATT
+  // This relay changes the node's firmware version; drop any cached board/fw so
+  // the next scan re-reads the new version from the node.
+  hiVersionInvalidate(m);
+#endif
 
   NimBLEDevice::init("");
   NimBLEDevice::setMTU(247);  // ask for a larger ATT MTU; the device may grant less
