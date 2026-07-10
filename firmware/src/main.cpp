@@ -13,6 +13,7 @@
 #include "bee_counter_client.h"
 #include "hive_config.h"
 #include "scale_bus.h"
+#include "status_led.h"
 
 #if ENABLE_INMP441_MICS
 #include "mics.h"
@@ -153,6 +154,12 @@ void setup() {
   releaseSleepPinHolds();
   configureC6Antenna();
   pinMode(SETUP_BUTTON_PIN, INPUT_PULLUP);
+
+  // Heartbeat: a short blink of the on-board user LED as soon as we wake, so a
+  // powered board visibly confirms it booted. The matching double blink before
+  // deep sleep lives in enterDeepSleep(). No-op when ENABLE_STATUS_LED is 0.
+  statusLedInit();
+  statusLedBootBlink();
 
   rtcBootCount++;
 
