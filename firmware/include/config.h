@@ -604,6 +604,49 @@
 #endif
 #endif // HIVEHUB_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
 
+// ==============================
+// STATUS LED (on-board user LED)
+// ==============================
+// The XIAO ESP32-C6 has a user-programmable LED on GPIO15, wired active-LOW
+// (drive the pin LOW to light it). We use it purely as a heartbeat: a short
+// blink on boot ("I woke up") and a double blink right before deep sleep
+// ("cycle done, going back to sleep"). It is never left on — an always-on LED
+// would burn a couple of mA continuously, which is significant for a
+// battery/solar hive node, so every helper drives it back off when it returns.
+//
+// The classic 30-pin ESP32 board has no defined user LED here (its GPIO15 is a
+// boot strapping pin), so the feature defaults OFF there. Any deployment can
+// force it off to save the blink energy with -DENABLE_STATUS_LED=0.
+#ifndef ENABLE_STATUS_LED
+#  if defined(HIVEHUB_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
+#    define ENABLE_STATUS_LED 1
+#  else
+#    define ENABLE_STATUS_LED 0
+#  endif
+#endif
+
+// GPIO the user LED is wired to (XIAO ESP32-C6: GPIO15).
+#ifndef STATUS_LED_GPIO
+#define STATUS_LED_GPIO 15
+#endif
+
+// 1 = active-low (LOW lights the LED), as on the XIAO ESP32-C6.
+#ifndef STATUS_LED_ACTIVE_LOW
+#define STATUS_LED_ACTIVE_LOW 1
+#endif
+
+// Blink timings (ms). Kept short so the LED costs a few tens of milliseconds of
+// on-time per wake cycle, not a steady drain.
+#ifndef STATUS_LED_BOOT_MS
+#define STATUS_LED_BOOT_MS 120
+#endif
+#ifndef STATUS_LED_BLINK_ON_MS
+#define STATUS_LED_BLINK_ON_MS 60
+#endif
+#ifndef STATUS_LED_BLINK_OFF_MS
+#define STATUS_LED_BLINK_OFF_MS 120
+#endif
+
 // External button shared constants (both board variants)
 static const unsigned long BUTTON_DEBOUNCE_MS = 50;
 static const unsigned long BUTTON_LONG_PRESS_MS = 10000;

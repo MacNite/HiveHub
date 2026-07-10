@@ -11,6 +11,7 @@
 #endif
 
 #include "scale_bus.h"
+#include "status_led.h"
 
 #if ENABLE_INMP441_MICS
 #include "mics.h"
@@ -206,6 +207,12 @@ void enterDeepSleep(unsigned long sleepMs) {
   }
 
   Serial.printf("[SLEEP] Entering deep sleep for %lu seconds\n", sleepMs / 1000UL);
+
+  // Heartbeat: double blink to signal "cycle done, going to sleep". Runs only on
+  // the real sleep path — the early returns above (calibration active / interval
+  // too short) skip it because the device stays awake in those cases. The LED is
+  // left off, so it draws nothing across the sleep window.
+  statusLedSleepBlink();
 
   powerDownScalesForSleep();
   preparePowerMonitorsForSleep();
