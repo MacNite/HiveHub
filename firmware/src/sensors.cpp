@@ -127,6 +127,17 @@ float weightFromRaw(long raw, long offset, float factor) {
   return ((float)(raw - offset)) / factor;
 }
 
+// A 24-bit bridge ADC (NAU7802, HX711) rails to within a couple of counts of its
+// signed full scale (±8388607) when its differential input is open — i.e. no load
+// cell is wired to that channel. readRaw() also returns exactly 0 for a missing or
+// unreachable chip. Neither is a real weight, so treat both as "no usable reading":
+// the hive is then reported with weight_kg omitted (null) and scale_ok=false
+// instead of emitting a nonsense value like -1189 kg from a floating input.
+static const long ADC24_FULLSCALE_MARGIN = 8388600L;  // ~0x7FFFF8 (2^23 - 8)
+static bool scaleRawUsable(long raw) {
+  return raw != 0 && raw < ADC24_FULLSCALE_MARGIN && raw > -ADC24_FULLSCALE_MARGIN;
+}
+
 static const char* scaleBackendName(hivecfg::ScaleBackend b) {
   switch (b) {
     case hivecfg::ScaleBackend::HX711:   return "hx711";
@@ -370,17 +381,27 @@ String createMeasurementJson() {
     const bhgatt::ScaleReading* bhScale = (h < MAX_HIVES && bh.scale[h].present) ? &bh.scale[h] : nullptr;
 #endif
 
-    // Scales: sum every channel mapped to this hive (usually one).
+    // Scales: sum every channel mapped to this hive (usually one). A channel with
+    // no load cell rails its 24-bit ADC to full scale, and a missing chip reads 0;
+    // scaleRawUsable() drops both so an unwired hive reports null weight +
+    // scale_ok=false instead of a nonsense value from a floating input.
     double weightSum = 0.0;
-    bool   anyScale = false;
+    bool   anyScale = false;         // got at least one usable reading
+    bool   triedWiredScale = false;  // a wired NAU7802/HX711 channel is configured
     long   firstRaw = 0;
     const char* scaleSrc = "";
     for (uint8_t s = 0; s < hive.scaleCount; s++) {
       const hivecfg::ScaleChannel& ch = hive.scales[s];
       if (!ch.valid()) continue;
+      triedWiredScale = true;
       long raw = scalebus::readRaw(ch);
-      float kg = weightFromRaw(raw, ch.offset, ch.factor);
       if (s == 0) { firstRaw = raw; scaleSrc = scaleBackendName(ch.backend); }
+      if (!scaleRawUsable(raw)) {
+        Serial.printf("[MEASURE] hive %u scale %u (%s) raw=%ld UNUSABLE (open input / no chip)\n",
+                      hive.index, s, scaleBackendName(ch.backend), raw);
+        continue;
+      }
+      float kg = weightFromRaw(raw, ch.offset, ch.factor);
       if (!isnan(kg)) { weightSum += kg; anyScale = true; }
       Serial.printf("[MEASURE] hive %u scale %u (%s) raw=%ld kg=%.3f\n",
                     hive.index, s, scaleBackendName(ch.backend), raw, kg);
@@ -389,6 +410,7 @@ String createMeasurementJson() {
       ho["weight_kg"]    = weightSum;
       ho["raw_weight"]   = firstRaw;
       ho["scale_source"] = scaleSrc;
+      ho["scale_ok"]     = true;
     }
 #if ENABLE_BEEHIVE_GATT
     else if (bhScale) {
@@ -397,6 +419,14 @@ String createMeasurementJson() {
       ho["scale_source"] = "hivescale_gatt";
     }
 #endif
+    else if (triedWiredScale) {
+      // A wired scale is configured but produced no usable reading. Expose the raw
+      // (the railed full-scale value or 0) for diagnostics, but omit weight_kg so
+      // the DB stores null instead of a bogus weight.
+      ho["raw_weight"]   = firstRaw;
+      ho["scale_source"] = scaleSrc;
+      ho["scale_ok"]     = false;
+    }
 
     // Temperature arbitration: BLE overrides the wired DS18B20 when configured;
     // otherwise the wired probe wins and BLE/HiveHeart are the fallback.

@@ -96,6 +96,11 @@ class HiveReadingIn(BaseModel):
     weight_kg: Optional[float] = None
     raw_weight: Optional[int] = None
     scale_source: Optional[str] = None
+    # False when a wired scale is configured for this hive but produced no usable
+    # reading (open load-cell input rails the 24-bit ADC to full scale; a missing
+    # chip reads 0). weight_kg is null in that case. None when the hive has no
+    # wired scale (e.g. a BLE-only hive or a hivescale_gatt source).
+    scale_ok: Optional[bool] = None
     temp_c: Optional[float] = None
     temp_source: Optional[str] = None
     humidity_percent: Optional[float] = None
