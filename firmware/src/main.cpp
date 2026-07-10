@@ -84,6 +84,58 @@ void runUploadCycle() {
   debugLine();
 }
 
+// Release a wedged I2C bus before handing it to the Wire driver. If a slave is
+// interrupted mid-read (brown-out, a glitch, or a reset between the ACK and the
+// data byte) it keeps holding SDA low, waiting to clock out the rest of its
+// byte. The master can then never issue a START, so *every* device — SHT4x, RTC,
+// NAU7802, the MAX17048 — reads as MISSING, and a plain reset does not clear it:
+// only a full power-cycle of the stuck slave does. That is exactly the failure
+// where the bus "works for days, then goes dead until the battery is unplugged."
+//
+// The standard rescue is to bit-bang up to 9 SCL pulses so the slave finishes
+// its byte and lets SDA float back high, then manufacture a STOP. This is a
+// no-op on a healthy (idle-high) bus, so it is safe to run on every boot before
+// Wire.begin().
+static void recoverI2CBus() {
+  pinMode(I2C_SDA, INPUT_PULLUP);
+  pinMode(I2C_SCL, OUTPUT_OPEN_DRAIN);
+  digitalWrite(I2C_SCL, HIGH);
+  delayMicroseconds(5);
+
+  if (digitalRead(I2C_SDA) == HIGH) {
+    pinMode(I2C_SDA, INPUT);
+    pinMode(I2C_SCL, INPUT);
+    return;  // bus already idle — nothing to recover
+  }
+
+  int cycles = 0;
+  while (digitalRead(I2C_SDA) == LOW && cycles < 9) {
+    digitalWrite(I2C_SCL, LOW);
+    delayMicroseconds(5);
+    digitalWrite(I2C_SCL, HIGH);   // released; external pull-up raises SCL
+    delayMicroseconds(5);
+    cycles++;
+  }
+
+  // Manufacture a STOP (SDA low->high while SCL is high) so any slave still
+  // listening sees a clean end-of-transaction before the driver takes over.
+  pinMode(I2C_SDA, OUTPUT_OPEN_DRAIN);
+  digitalWrite(I2C_SDA, LOW);
+  delayMicroseconds(5);
+  digitalWrite(I2C_SCL, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(I2C_SDA, HIGH);
+  delayMicroseconds(5);
+
+  const bool released = digitalRead(I2C_SDA) == HIGH;
+  Serial.printf("[I2C] Bus recovery: clocked %d cycle(s); SDA %s\n",
+                cycles, released ? "released" : "STILL LOW (check wiring/slave)");
+
+  // Return the pins to inputs so Wire.begin() can reconfigure them cleanly.
+  pinMode(I2C_SDA, INPUT);
+  pinMode(I2C_SCL, INPUT);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -131,6 +183,7 @@ void setup() {
     initSdCard();
     // Bring up I2C + the scale bus + the 1-Wire bus so the portal's "Scan I2C
     // scales" and DS18B20 mapping can enumerate what is physically attached.
+    recoverI2CBus();
     Wire.begin(I2C_SDA, I2C_SCL);
     scalebus::begin();
 #if ENABLE_DS18B20_HIVE_TEMP
@@ -140,6 +193,7 @@ void setup() {
     return;
   }
 
+  recoverI2CBus();
   Wire.begin(I2C_SDA, I2C_SCL);
   Serial.println("[I2C] Started");
 
