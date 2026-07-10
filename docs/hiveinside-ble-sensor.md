@@ -71,6 +71,18 @@ HiveHub forwards the node's `board` field, e.g. `nrf54lm20a`). A legacy
 board-agnostic release is used only as a fallback, so a C6 image is never relayed
 to an nRF54 unit or vice versa.
 
+> **How the board is learned (beacon nodes).** The 26-byte beacon carries no
+> board/version, so the HiveHub does a **one-off** connect to the node's version
+> characteristic (`8e8b0002-…`, which answers `{"fw":…,"board":…}`) the first
+> time it sees the node, and caches the result — the board never changes and the
+> firmware version only changes on an OTA (which drops the cache so the new
+> version is re-read). This read is wake-sync-free and counts against the
+> per-cycle GATT budget, so it costs at most one connect per node per HiveHub
+> session. Until that first read lands, the node has no known board and only a
+> legacy board-agnostic release is eligible. Board discovery needs
+> `HIVEINSIDE_USE_GATT 1` (the default); a build with it disabled updates
+> beacon nodes only through board-agnostic releases.
+
 > **nRF54 / MCUboot semantics:** the signed Zephyr image is small (transfer is
 > quick), and after the relay completes the node reboots into a *test* image and
 > confirms it. A reverted (unconfirmed) update silently keeps the old firmware,

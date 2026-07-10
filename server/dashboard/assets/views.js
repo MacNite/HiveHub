@@ -1098,17 +1098,38 @@ function renderDevice(root, state) {
     el("option", { value: "hivescale" }, "Main unit (HiveHub / HiveScale)"),
     el("option", { value: "hiveinside" }, "HiveInside"),
     el("option", { value: "beecounter" }, "BeeCounter"));
-  const boardSelect = el("select", { class: "full" },
-    el("option", { value: "" }, "Detect from filename (…_esp32_… / …_esp32-c6_…)"),
-    el("option", { value: "esp32" }, "ESP32 (classic 30-pin)"),
-    el("option", { value: "esp32-c6" }, "ESP32-C6"));
+  // Board options depend on the target: the main unit ships two architectures
+  // (Xtensa ESP32 vs RISC-V ESP32-C6), and HiveInside now ships two too — the
+  // legacy ESP32-C6 prototype and the nRF54LM20A (signed Zephyr image). The
+  // server refuses a release whose board disagrees with its filename, so a
+  // cross-architecture image can never be published.
+  const BOARDS_BY_TARGET = {
+    hivescale: [
+      ["", "Detect from filename (…_esp32_… / …_esp32-c6_…)"],
+      ["esp32", "ESP32 (classic 30-pin)"],
+      ["esp32-c6", "ESP32-C6"],
+    ],
+    hiveinside: [
+      ["", "Detect from filename (…_esp32-c6_… / …_nrf54lm20a_…)"],
+      ["esp32-c6", "Legacy HiveInside (ESP32-C6)"],
+      ["nrf54lm20a", "HiveInside (nRF54LM20A)"],
+    ],
+  };
+  const boardSelect = el("select", { class: "full" });
   const boardRow = el("div", { class: "form-row" }, el("label", {}, "Board"), boardSelect);
-  const boardNote = el("p", { class: "note" },
-    "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.");
+  const boardNote = el("p", { class: "note" });
+  const BOARD_NOTES = {
+    hivescale: "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.",
+    hiveinside: "HiveInside now has two boards — pick the one this image targets, or keep auto-detect when the file is named like hiveinside_nrf54lm20a_1.0.0.bin. A board-stamped release is only ever relayed to a matching sensor.",
+  };
   const syncBoardRow = () => {
-    const isHivescale = targetSelect.value === "hivescale";
-    boardRow.hidden = !isHivescale;
-    boardNote.hidden = !isHivescale;
+    const opts = BOARDS_BY_TARGET[targetSelect.value];
+    boardRow.hidden = !opts;
+    boardNote.hidden = !opts;
+    if (!opts) return;
+    boardSelect.innerHTML = "";
+    opts.forEach(([v, label]) => boardSelect.appendChild(el("option", { value: v }, label)));
+    boardNote.textContent = BOARD_NOTES[targetSelect.value];
   };
   targetSelect.addEventListener("change", syncBoardRow);
   const uploadBtn = el("button", { class: "btn", type: "submit" }, "Upload firmware");
@@ -1129,7 +1150,9 @@ function renderDevice(root, state) {
     fd.append("file", fileInput.files[0]);
     fd.append("version", versionInput.value.trim());
     fd.append("target", targetSelect.value);
-    if (targetSelect.value === "hivescale" && boardSelect.value) fd.append("board", boardSelect.value);
+    if ((targetSelect.value === "hivescale" || targetSelect.value === "hiveinside") && boardSelect.value) {
+      fd.append("board", boardSelect.value);
+    }
     uploadBtn.disabled = true;
     try {
       const res = await state.actions.uploadFirmware(fd);
