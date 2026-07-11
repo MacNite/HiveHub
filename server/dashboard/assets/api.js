@@ -103,6 +103,27 @@ export const api = {
     return req(`/devices/${encodeURIComponent(deviceId)}/insights/history${qs ? "?" + qs : ""}`);
   },
 
+  // ── Insight-alert notifications ──────────────────────────────────────────
+  // Which channels the server has enabled, plus the VAPID public key the
+  // browser needs to subscribe to Web Push.
+  notificationsConfig: () => req("/notifications/config"),
+
+  pushSubscribe: (subscription) =>
+    req("/notifications/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(subscription),
+    }),
+
+  pushUnsubscribe: (endpoint) =>
+    req("/notifications/unsubscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint }),
+    }),
+
+  testNotification: () => req("/notifications/test", { method: "POST" }),
+
   firmwareStatus: (deviceId) =>
     req(`/devices/${encodeURIComponent(deviceId)}/firmware/status`),
 

@@ -89,6 +89,50 @@ INSIGHTS_HISTORY_LOOKBACK_DAYS = int(
     os.environ.get("INSIGHTS_HISTORY_LOOKBACK_DAYS", "14")
 )
 
+
+def _env_bool(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+# ── Insight alert notifications (optional) ───────────────────────────────────
+# When a new insight alert fires (or an existing one escalates in severity), the
+# backend can push it out over two independent channels: e-mail (SMTP) and Web
+# Push (browser / installable PWA). Both are OFF until configured; the alert
+# lifecycle in insight_alerts is unaffected either way. Only alerts at or above
+# NOTIFY_MIN_SEVERITY are ever dispatched, so the noisy "info"/"watch" tiers can
+# be kept in the dashboard without spamming phones. Recipient e-mail addresses
+# are NOT configured here — they are stored per dashboard account
+# (dashboard_users.email), while the credentials below are server-wide infra.
+NOTIFY_MIN_SEVERITY = os.environ.get("NOTIFY_MIN_SEVERITY", "warning").strip().lower()
+
+# ── SMTP (e-mail channel) ────────────────────────────────────────────────────
+# Set SMTP_ENABLED=true and point SMTP_HOST/PORT at a relay. Use SMTP_TLS=true
+# for implicit TLS (usually port 465) or SMTP_STARTTLS=true to upgrade a plain
+# connection (usually port 587). SMTP_FROM defaults to SMTP_USERNAME.
+SMTP_ENABLED = _env_bool("SMTP_ENABLED")
+SMTP_HOST = os.environ.get("SMTP_HOST", "localhost").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_TLS = _env_bool("SMTP_TLS")  # implicit TLS (SMTPS, e.g. port 465)
+SMTP_STARTTLS = _env_bool("SMTP_STARTTLS", "true")  # STARTTLS upgrade (e.g. 587)
+SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or SMTP_USERNAME
+SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "HiveHub").strip()
+SMTP_TIMEOUT_SECONDS = int(os.environ.get("SMTP_TIMEOUT_SECONDS", "20"))
+
+# ── Web Push (browser / PWA channel) ─────────────────────────────────────────
+# Web Push needs a VAPID key pair (application server keys). Generate one with
+# `python gen_vapid.py` (see server/gen_vapid.py) or the `vapid` CLI, then
+# set the three vars below. VAPID_SUBJECT must be a mailto: or https: URL that
+# identifies you to push services. The public key is also exposed to the browser
+# via GET /api/v1/local/notifications/config so it can subscribe.
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "").strip()
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "").strip()
+WEB_PUSH_ENABLED = _env_bool("WEB_PUSH_ENABLED") and bool(
+    VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY and VAPID_SUBJECT
+)
+
 logger = logging.getLogger("hivescale.insights")
 
 # Earliest year a device-supplied measurement timestamp is trusted. Anything

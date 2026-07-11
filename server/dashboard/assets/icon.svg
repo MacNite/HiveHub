@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Full-bleed background so the icon works as a maskable PWA / notification icon. -->
+  <rect width="512" height="512" fill="#f4b400"/>
+  <!-- Faint honeycomb hint -->
+  <g fill="none" stroke="#c98f00" stroke-width="10" opacity="0.35">
+    <polygon points="256,96 316,131 316,201 256,236 196,201 196,131"/>
+  </g>
+  <!-- Bee emoji, centered. Browsers render emoji in SVG <text> (same approach as the favicon). -->
+  <text x="50%" y="50%" dy="0.36em" text-anchor="middle" font-size="300"
+        font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif">🐝</text>
+</svg>

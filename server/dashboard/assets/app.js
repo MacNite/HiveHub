@@ -330,6 +330,11 @@ function buildState() {
       deleteUser: (id) => auth.deleteUser(id),
       changePassword: (cur, next) => auth.changePassword(cur, next),
       updateEmail: (email) => auth.updateEmail(email),
+      // Insight-alert notifications: channel config + one-off test send. The
+      // Web Push subscribe/unsubscribe handshake lives in push.js (used directly
+      // by the settings card) since it needs the ServiceWorker/PushManager APIs.
+      notificationsConfig: () => api.notificationsConfig(),
+      testNotification: () => api.testNotification(),
     },
   };
 }

@@ -47,6 +47,7 @@ hardware list, firmware/server setup, and API summary, start with the
 - [temperature-compensation.md](temperature-compensation.md) — backend load-cell temperature-drift correction and the fit endpoint.
 - [insights.md](insights.md) — rule-based colony insight detector catalogue.
 - [insights-sources-tldr.md](insights-sources-tldr.md) — TL;DR of the research literature behind the insights.
+- [notifications.md](notifications.md) — insight alert notifications by e-mail (SMTP) and Web Push (browser / PWA).
 
 ## Deployment & testing
 

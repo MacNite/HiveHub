@@ -13,10 +13,17 @@ from config import (
     INSIGHTS_HISTORY_LOOKBACK_DAYS,
     INSIGHTS_RECONCILE_ENABLED,
     INSIGHTS_RECONCILE_INTERVAL_SECONDS,
+    NOTIFY_MIN_SEVERITY,
     logger,
 )
 from db import get_conn
 from insights import compute_insights, summarize
+from notifications import (
+    SEVERITY_RANK,
+    AlertEvent,
+    enqueue_alert_events,
+    notifications_enabled,
+)
 from measurements import MEASUREMENT_SELECT_COLUMNS, measurements_for_insights
 
 router = APIRouter()
@@ -81,6 +88,16 @@ def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> Non
     current = {alert.id: alert for alert in alerts}
     active_keys = list(current.keys())
 
+    # Decide, per alert, whether this pass warrants a notification. We only
+    # dispatch when an alert is *new* or has *escalated* beyond the severity we
+    # last notified at, and only at/above NOTIFY_MIN_SEVERITY. The decision is
+    # made from the upsert's RETURNING data (was this row freshly inserted, and
+    # what severity had we previously notified at) so it's race-free per row.
+    notify_active = notifications_enabled()
+    min_rank = SEVERITY_RANK.get(NOTIFY_MIN_SEVERITY, SEVERITY_RANK["warning"])
+    events_to_send: list[AlertEvent] = []
+    notified_keys: list[str] = []
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             for key, alert in current.items():
@@ -120,7 +137,8 @@ def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> Non
                         window_end = EXCLUDED.window_end,
                         last_seen_at = EXCLUDED.last_seen_at,
                         update_count = insight_alerts.update_count + 1,
-                        updated_at = now();
+                        updated_at = now()
+                    RETURNING (xmax = 0) AS inserted, notified_severity;
                     """,
                     {
                         "device_id": device_id,
@@ -137,6 +155,40 @@ def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> Non
                         "window_end": alert.window_end,
                         "now": computed_at,
                     },
+                )
+                if notify_active:
+                    inserted, prev_notified = cur.fetchone()
+                    rank = SEVERITY_RANK.get(alert.severity, 0)
+                    prev_rank = SEVERITY_RANK.get(prev_notified, 0)
+                    # New alert, or an escalation past what we already notified —
+                    # and only if it clears the configured minimum severity.
+                    if rank >= min_rank and (inserted or rank > prev_rank):
+                        notified_keys.append(key)
+                        events_to_send.append(
+                            AlertEvent(
+                                device_id=device_id,
+                                alert_key=key,
+                                category=alert.category,
+                                channel=alert.channel,
+                                severity=alert.severity,
+                                title=alert.title,
+                                description=alert.description,
+                                reason="new" if inserted else "escalated",
+                            )
+                        )
+
+            # Record the severity we're about to notify at, in the same
+            # transaction, so a restart mid-dispatch never replays these alerts.
+            if notified_keys:
+                cur.execute(
+                    """
+                    UPDATE insight_alerts
+                    SET notified_at = %(now)s, notified_severity = severity
+                    WHERE device_id = %(device_id)s
+                      AND resolved_at IS NULL
+                      AND alert_key = ANY(%(keys)s::text[]);
+                    """,
+                    {"device_id": device_id, "now": computed_at, "keys": notified_keys},
                 )
 
             # Resolve active alerts that are no longer firing. With an empty
@@ -173,6 +225,12 @@ def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> Non
     # the dashboard summary can be served from insight_alerts without a recompute.
     with _insights_reconciled_lock:
         _insights_reconciled_at[device_id] = computed_at
+    # Hand the newly-changed alerts to the async notification worker. This runs
+    # after the commit (never holding a DB transaction open across network I/O)
+    # and returns immediately — actual e-mail / Web Push delivery happens off
+    # the caller's thread, so it never slows the reconciler or a dashboard load.
+    if events_to_send:
+        enqueue_alert_events(events_to_send)
 
 
 def reconcile_device_insights(

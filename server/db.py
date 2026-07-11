@@ -518,6 +518,16 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS insight_alerts_device_first_seen_idx
                     ON insight_alerts (device_id, first_seen_at DESC);
 
+                -- Alert-notification bookkeeping (added after the table shipped).
+                -- notified_at / notified_severity record the last severity a row
+                -- was *dispatched* at (e-mail / Web Push), so the reconciler fires
+                -- once when an alert first appears and again only if it escalates,
+                -- and never re-sends the same state after a restart.
+                ALTER TABLE insight_alerts
+                    ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+                ALTER TABLE insight_alerts
+                    ADD COLUMN IF NOT EXISTS notified_severity TEXT;
+
                 -- Local-dashboard login accounts. The dashboard is auth-gated when
                 -- enabled (ENABLE_LOCAL_DASHBOARD): the first visit creates the
                 -- initial admin via the setup wizard, after which every data /
@@ -545,6 +555,23 @@ def init_db():
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+
+                -- Browser / PWA Web Push subscriptions, one row per device+user
+                -- that opted in from the dashboard. endpoint is the push service
+                -- URL (unique per subscription); p256dh/auth are the client keys
+                -- used to encrypt the payload. failure_count lets the sender prune
+                -- endpoints the push service has permanently rejected (404/410).
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT REFERENCES dashboard_users(id) ON DELETE CASCADE,
+                    endpoint TEXT NOT NULL UNIQUE,
+                    p256dh TEXT NOT NULL,
+                    auth TEXT NOT NULL,
+                    user_agent TEXT,
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_used_at TIMESTAMPTZ
                 );
                 """
             )

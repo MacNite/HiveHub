@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
   <title>HiveHub Dashboard</title>
+  <!-- Installable PWA + Web Push. On iOS, adding to the Home Screen (16.4+) is
+       what unlocks push; the apple-mobile-web-app tags make that install clean. -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#f4b400" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="HiveHub" />
+  <link rel="apple-touch-icon" href="assets/icon.svg" />
   <!-- Set the theme before the stylesheet paints, so there's no light flash. -->
   <script>
     (function () {
@@ -27,6 +34,7 @@
   <link rel="modulepreload" href="assets/format.js" />
   <link rel="modulepreload" href="assets/views.js" />
   <link rel="modulepreload" href="assets/charts.js" />
+  <link rel="modulepreload" href="assets/push.js" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🐝</text></svg>" />
 </head>
 <body>
@@ -113,5 +121,14 @@
 
   <script src="assets/theme.js"></script>
   <script type="module" src="assets/app.js"></script>
+  <!-- Register the Web Push service worker (scope = /dashboard/). Failures are
+       non-fatal: the dashboard works fine without notifications. -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("sw.js").catch(function () { /* push unavailable */ });
+      });
+    }
+  </script>
 </body>
 </html>
