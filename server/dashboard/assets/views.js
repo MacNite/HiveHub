@@ -4,6 +4,7 @@
 
 import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, fmtDateTime, DASH } from "./format.js";
 import { drawLineChart, drawSpectrumChart, seriesFrom, dailyMaxSeries, valueAt, PALETTE, withAlpha } from "./charts.js";
+import { isSupported as pushSupported, isSubscribed as pushIsSubscribed, subscribe as pushSubscribe, unsubscribe as pushUnsubscribe } from "./push.js";
 
 // Pull the firmware version out of a build artifact's filename so the upload
 // form can pre-fill the Version field. rename_firmware.py names artifacts
@@ -1303,7 +1304,7 @@ function renderDevice(root, state) {
     el("div", { class: "admin-col" }, channelsCard, sdCard),
     el("div", { class: "admin-col" }, uploadCard));
 
-  const adminCards = [accountCard(state)];
+  const adminCards = [accountCard(state), notificationsCard(state)];
   if (isAdmin) adminCards.push(usersCard(state), visibleDevicesCard(state), deleteMeasurementsCard(state));
 
   node.append(
@@ -1460,6 +1461,105 @@ function accountCard(state) {
     emailForm,
     el("h3", { style: "margin:.8rem 0 .2rem" }, "Change password"),
     form);
+}
+
+// "Alert notifications": lets a beekeeper turn on push notifications for this
+// browser/PWA and see whether e-mail alerts are active, plus a "send test"
+// button. The server tells us which channels are configured; the Web Push
+// subscribe/unsubscribe handshake runs client-side via push.js. Renders
+// synchronously with a placeholder, then fills in from the async config.
+function notificationsCard(state) {
+  const emailRow = el("div", { class: "rows" }, el("p", { class: "muted-text" }, "Loading…"));
+  const pushRow = el("div", { class: "rows" });
+  const sevNote = el("p", { class: "note" });
+  const testBtn = el("button", { class: "btn small ghost", type: "button" }, "Send test notification");
+  testBtn.disabled = true;
+  testBtn.addEventListener("click", async () => {
+    testBtn.disabled = true;
+    try {
+      const r = await state.actions.testNotification();
+      const res = (r && r.result) || {};
+      const parts = [];
+      if (res.email) parts.push(`email: ${res.email}`);
+      if (res.web_push) parts.push(`push: ${res.web_push}`);
+      state.toast(parts.length ? `Test sent — ${parts.join(" · ")}` : "Nothing to send — no channel active", parts.length ? "success" : "error");
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { testBtn.disabled = false; }
+  });
+
+  (async () => {
+    let cfg;
+    try {
+      cfg = await state.actions.notificationsConfig();
+    } catch (err) {
+      emailRow.replaceChildren(el("p", { class: "auth-error" }, err.message || "Failed to load notification settings"));
+      pushRow.replaceChildren();
+      return;
+    }
+
+    // Severity floor applies to every channel.
+    sevNote.textContent = `Only ${cfg.min_severity || "warning"} alerts and above are sent (set NOTIFY_MIN_SEVERITY on the server to change).`;
+
+    // ── E-mail ────────────────────────────────────────────────────────────
+    emailRow.replaceChildren(
+      el("div", { class: "row" },
+        el("span", { class: "k" }, "E-mail delivery"),
+        el("span", { class: "v" }, cfg.email_enabled ? "Active (server SMTP configured)" : "Not configured on server")),
+      el("p", { class: "note" }, cfg.email_enabled
+        ? "Alerts go to the “Alert email” set under Your account above. Leave it blank to receive none."
+        : "An administrator must set the SMTP_* environment variables to enable e-mail alerts."));
+
+    // ── Web Push ──────────────────────────────────────────────────────────
+    if (!pushSupported()) {
+      pushRow.replaceChildren(
+        el("div", { class: "row" },
+          el("span", { class: "k" }, "Push on this device"),
+          el("span", { class: "v" }, "Not supported")),
+        el("p", { class: "note" }, "This browser can't receive Web Push. On iPhone/iPad, add HiveHub to your Home Screen first (iOS 16.4+), then reopen it here."));
+    } else if (!cfg.web_push_enabled) {
+      pushRow.replaceChildren(
+        el("div", { class: "row" },
+          el("span", { class: "k" }, "Push on this device"),
+          el("span", { class: "v" }, "Not configured on server")),
+        el("p", { class: "note" }, "An administrator must generate a VAPID key pair (python gen_vapid.py) and set VAPID_* + WEB_PUSH_ENABLED=true."));
+    } else {
+      const toggle = el("button", { class: "btn small", type: "button" }, "…");
+      const statusV = el("span", { class: "v" }, "Checking…");
+      const paint = (subscribed) => {
+        statusV.textContent = subscribed ? "Enabled" : "Disabled";
+        toggle.textContent = subscribed ? "Disable on this device" : "Enable on this device";
+        toggle.dataset.on = subscribed ? "1" : "";
+      };
+      toggle.addEventListener("click", async () => {
+        toggle.disabled = true;
+        const turningOn = toggle.dataset.on !== "1";
+        try {
+          if (turningOn) { await pushSubscribe(cfg.vapid_public_key); state.toast("Notifications enabled on this device", "success"); }
+          else { await pushUnsubscribe(); state.toast("Notifications disabled on this device", "success"); }
+          paint(turningOn);
+        } catch (err) { state.toast(err.message, "error"); }
+        finally { toggle.disabled = false; }
+      });
+      pushRow.replaceChildren(
+        el("div", { class: "row" },
+          el("span", { class: "k" }, "Push on this device"),
+          statusV),
+        el("div", { class: "form-actions" }, toggle));
+      try { paint(await pushIsSubscribed()); } catch (_) { paint(false); }
+    }
+
+    // Enable the test button once we know at least one channel is live.
+    testBtn.disabled = !(cfg.email_enabled || cfg.web_push_enabled);
+  })();
+
+  return el("div", { class: "card" }, el("h2", {}, "Alert notifications"),
+    el("p", { class: "note" }, "Get insight alerts (swarm, robbing, winter risk…) by e-mail and/or push notification when they first fire or escalate."),
+    el("h3", { style: "margin:.6rem 0 .2rem" }, "E-mail"),
+    emailRow,
+    el("h3", { style: "margin:.8rem 0 .2rem" }, "Push notifications"),
+    pushRow,
+    el("div", { style: "margin-top:.8rem" }, sevNote),
+    el("div", { class: "form-actions" }, testBtn));
 }
 
 // "Dashboard users" (admin only): list / add / remove accounts. The list is

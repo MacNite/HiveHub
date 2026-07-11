@@ -66,6 +66,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Wi-Fi provisioning portal** — opened by the setup button for field configuration, including pairing wireless sensors.
 - **Multi-network Wi-Fi** — up to three saved networks.
 - **Insights** — backend auto-evaluation of weight, temperature, sound, vibration, and entrance traffic per hive, based on [these publications](docs/insights-sources-tldr.md).
+- **Insight alert notifications (optional)** — get swarm / robbing / winter-risk alerts by **e-mail (SMTP)** and/or **Web Push** to your phone or an installable dashboard PWA (Android, iOS 16.4+, desktop) when an insight first fires or escalates. Off by default; see [Insight alert notifications](docs/notifications.md).
 - **Optional off-grid mode** — solar/LiPo charging with INA219 solar telemetry and MAX17048 LiPo telemetry.
 - **Optional entrance bee counters** — wired [BeeCounter](https://github.com/MacNite/2026-easy-bee-counter) (I2C) or wireless HiveTraffic (BLE/GATT).
 - **Built-in web dashboard (optional)** — a login-free, dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts: device dropdown, per-hive selection, charts for every data group, plus device-config editing, hive renaming, firmware/OTA and calibration controls. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
@@ -304,6 +305,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `MAX_BODY_BYTES` / `MAX_FIRMWARE_BYTES` | Optional | Request-body and firmware-upload size caps (default 256 KiB / 16 MiB) |
 | `ENABLE_LOCAL_DASHBOARD` | Optional | Serve the built-in login-free dashboard at `/dashboard` and the auth-free `/api/v1/local/*` read API (default off — single-owner self-hosts on a trusted LAN only) |
 | `INSIGHTS_RECONCILE_*` | Optional | Background insight-history reconciliation (see `server/.env.example`) |
+| `SMTP_*` / `NOTIFY_MIN_SEVERITY` | Optional | E-mail channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
+| `WEB_PUSH_ENABLED` / `VAPID_*` | Optional | Web Push channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
 | `MQTT_*` | Optional | MQTT bridge to Home Assistant / Node-RED / openHAB (off by default — see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration)) |
 | `TZ` | Optional | Server timezone, for example `Europe/Berlin` |
 
@@ -414,6 +417,9 @@ Enabled only when `ENABLE_LOCAL_DASHBOARD=true`. **No authentication** and **not
 | `GET`/`POST` | `/api/v1/local/devices/{id}/firmware/status` · (upload) · `/approve` | OTA status / upload binary / approve |
 | `POST` | `/api/v1/local/devices/{id}/calibration/start` · `/stop` | Start / stop calibration mode |
 | `POST` | `/api/v1/local/devices/{id}/temp-compensation/fit` | Fit a load-cell temperature coefficient |
+| `GET` | `/api/v1/local/notifications/config` | Which alert channels are enabled + VAPID public key |
+| `POST` | `/api/v1/local/notifications/subscribe` · `/unsubscribe` | Register / forget this browser's Web Push subscription |
+| `POST` | `/api/v1/local/notifications/test` | Send a test alert over every enabled channel |
 
 ---
 
@@ -484,6 +490,7 @@ A full index is in [docs/README.md](docs/README.md). Highlights:
 - [docs/api.md](docs/api.md) — complete API reference.
 - [server/dashboard/README.md](server/dashboard/README.md) — the built-in web dashboard ([live demo](https://macnite.github.io/HiveHub/dashboard-demo/)).
 - [docs/insights.md](docs/insights.md) — rule-based colony insights and detector catalogue.
+- [docs/notifications.md](docs/notifications.md) — insight alert notifications by e-mail and Web Push.
 - [docs/holyiot-ble-sensor.md](docs/holyiot-ble-sensor.md) · [docs/ruuvitag-ble-sensor.md](docs/ruuvitag-ble-sensor.md) · [docs/beehivemonitoring-gatt.md](docs/beehivemonitoring-gatt.md) — in-hive BLE sensors.
 - [docs/hivetraffic-bee-counter.md](docs/hivetraffic-bee-counter.md) — wireless entrance counter.
 - [docs/temperature-compensation.md](docs/temperature-compensation.md) — load-cell drift correction.

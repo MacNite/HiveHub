@@ -45,6 +45,7 @@ from db import db_pool, init_db
 from insights_api import start_insight_reconciler, stop_insight_reconciler
 from middleware import MaxBodySizeMiddleware, _client_ip_key
 from mqtt_publisher import publisher as mqtt_publisher
+from notifications import start_notification_worker, stop_notification_worker
 
 limiter = Limiter(
     key_func=_client_ip_key,
@@ -86,6 +87,7 @@ def startup():
     db_pool.open()
     FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
+    start_notification_worker()
     start_insight_reconciler()
     mqtt_publisher.start()
 
@@ -93,6 +95,7 @@ def startup():
 @app.on_event("shutdown")
 def shutdown():
     stop_insight_reconciler()
+    stop_notification_worker()
     mqtt_publisher.stop()
     db_pool.close()
 
@@ -140,7 +143,13 @@ class DashboardStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
         if response.status_code < 400:
-            if path in ("", ".", "index.html") or path.endswith(".html"):
+            # The HTML shell, the service worker and the manifest must revalidate
+            # every load so a deploy (or a changed SW) is picked up promptly; the
+            # hashed-in-practice JS/CSS assets get a modest max-age.
+            if (
+                path in ("", ".", "index.html", "sw.js", "manifest.webmanifest")
+                or path.endswith(".html")
+            ):
                 response.headers["Cache-Control"] = "no-cache"
             else:
                 response.headers["Cache-Control"] = "public, max-age=3600"

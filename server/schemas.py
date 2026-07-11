@@ -591,6 +591,21 @@ class DashboardUpdateEmailIn(BaseModel):
     _norm_email = field_validator("email")(lambda cls, v: normalize_optional_email(v))
 
 
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(..., min_length=1, max_length=256)
+    auth: str = Field(..., min_length=1, max_length=256)
+
+
+class PushSubscriptionIn(BaseModel):
+    """A browser Web Push subscription, as produced by PushManager.subscribe()."""
+    endpoint: str = Field(..., min_length=1, max_length=2048)
+    keys: PushSubscriptionKeys
+
+
+class PushUnsubscribeIn(BaseModel):
+    endpoint: str = Field(..., min_length=1, max_length=2048)
+
+
 class AppDeviceConfigUpdate(DeviceConfigUpdate):
     pass
 

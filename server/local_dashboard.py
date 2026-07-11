@@ -36,7 +36,14 @@ from auth import (
     _public_dashboard_user,
 )
 from commands import create_command
-from config import DASHBOARD_SESSION_COOKIE
+from config import DASHBOARD_SESSION_COOKIE, NOTIFY_MIN_SEVERITY, VAPID_PUBLIC_KEY
+from notifications import (
+    delete_push_subscription,
+    email_enabled,
+    send_test_notification,
+    upsert_push_subscription,
+    web_push_enabled,
+)
 from db import get_conn, hash_claim_code
 from devices import (
     apply_device_channels,
@@ -86,6 +93,8 @@ from schemas import (
     MEASUREMENT_IMPORT_MAX,
     MeasurementDeleteIn,
     MeasurementIn,
+    PushSubscriptionIn,
+    PushUnsubscribeIn,
     TempCoefficientFitIn,
 )
 from sd_import import distinct_source_device_ids, parse_sd_measurements
@@ -183,14 +192,67 @@ def local_auth_update_email(
 ):
     """Set or clear the logged-in user's contact email.
 
-    This address is where insights-based alerts will be delivered once alert
-    notifications are wired up; storing it now lets beekeepers opt in early.
+    This is the destination for insight-alert e-mails (swarm, robbing, winter
+    risk…). Delivery is active when the server has SMTP configured; leave the
+    field blank to receive none.
     """
     user = get_dashboard_user_by_username(session["username"])
     if not user:
         raise HTTPException(status_code=404, detail="Account not found")
     set_dashboard_user_email(user["id"], body.email)
     return {"ok": True, "email": body.email}
+
+
+# ── Insight-alert notifications (e-mail + Web Push) ──────────────────────────
+
+
+@router.get("/api/v1/local/notifications/config", dependencies=LOCAL_DASHBOARD_DEP)
+def local_notifications_config():
+    """Report which notification channels the server has enabled, plus the VAPID
+    public key the browser needs to subscribe to Web Push."""
+    push_on = web_push_enabled()
+    return {
+        "email_enabled": email_enabled(),
+        "web_push_enabled": push_on,
+        # Only expose the key when push is actually configured, so the frontend
+        # doesn't try to subscribe against a half-configured server.
+        "vapid_public_key": VAPID_PUBLIC_KEY if push_on else None,
+        "min_severity": NOTIFY_MIN_SEVERITY,
+    }
+
+
+@router.post("/api/v1/local/notifications/subscribe")
+def local_notifications_subscribe(
+    body: PushSubscriptionIn, request: Request, session: dict = Depends(require_dashboard_session)
+):
+    """Register (or refresh) this browser's Web Push subscription for the user."""
+    if not web_push_enabled():
+        raise HTTPException(status_code=409, detail="Web Push is not configured on this server")
+    user = get_dashboard_user_by_username(session["username"])
+    upsert_push_subscription(
+        user_id=user["id"] if user else None,
+        endpoint=body.endpoint,
+        p256dh=body.keys.p256dh,
+        auth=body.keys.auth,
+        user_agent=request.headers.get("user-agent", "")[:512] or None,
+    )
+    return {"ok": True}
+
+
+@router.post("/api/v1/local/notifications/unsubscribe", dependencies=LOCAL_DASHBOARD_DEP)
+def local_notifications_unsubscribe(body: PushUnsubscribeIn):
+    """Forget a browser's Web Push subscription (called on opt-out)."""
+    removed = delete_push_subscription(body.endpoint)
+    return {"ok": True, "removed": removed}
+
+
+@router.post("/api/v1/local/notifications/test")
+def local_notifications_test(session: dict = Depends(require_dashboard_session)):
+    """Send a one-off test over every enabled channel to the current user."""
+    user = get_dashboard_user_by_username(session["username"])
+    email = user.get("email") if user else None
+    result = send_test_notification(email)
+    return {"ok": True, "result": result}
 
 
 @router.get("/api/v1/local/auth/users", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)

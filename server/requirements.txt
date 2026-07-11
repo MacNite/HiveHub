@@ -6,3 +6,6 @@ python-multipart==0.0.20
 slowapi==0.1.9
 python-jose[cryptography]==3.3.0
 paho-mqtt==2.1.0
+# Web Push (VAPID) delivery for insight-alert notifications. Optional at runtime:
+# notifications.py imports it lazily, so e-mail-only deployments work without it.
+pywebpush==2.0.0

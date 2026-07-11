@@ -1,0 +1,18 @@
+{
+  "name": "HiveHub Dashboard",
+  "short_name": "HiveHub",
+  "description": "Beehive sensor dashboard and colony insight alerts.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#111417",
+  "theme_color": "#f4b400",
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
