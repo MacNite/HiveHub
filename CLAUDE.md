@@ -21,7 +21,7 @@ remote.
 
 ## About this project
 
-HiveHub is an ESP32-based data collector for beehive sensors and scales. It gathers weight, temperature, humidity, sound, vibration, power state, and network state from one or more hives (up to 18 per ESP32) and sends the readings to a self-hosted FastAPI backend backed by PostgreSQL, where they can be displayed in HivePal or the included frontend.
+HiveHub is an ESP32-based data collector for beehive sensors and scales. It gathers weight, temperature, humidity, sound, vibration, power state, and network state from one or more hives (up to 16 per ESP32) and sends the readings to a self-hosted FastAPI backend backed by PostgreSQL, where they can be displayed in HivePal or the included frontend.
 
 - `firmware/` — ESP32 PlatformIO project (`src/main.cpp` is the main source).
 - `server/` — Python FastAPI backend and insights logic.

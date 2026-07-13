@@ -28,8 +28,8 @@ pio run -e xiao_esp32c6
 | Signal | XIAO pin | GPIO | Notes |
 |---|---|---|---|
 | DS18B20 1-Wire | D1 | 1 | In-hive temperature bus, 4.7 kΩ pull-up to 3.3 V |
-| I2C SDA | D4 | 22 | NAU7802 scales, RTC, SHT4x, BeeCounter, optional INA219/MAX17048 |
-| I2C SCL | D5 | 23 | NAU7802 scales, RTC, SHT4x, BeeCounter, optional INA219/MAX17048 |
+| I2C SDA | D4 | 22 | NAU7802 scales, RTC, SHT4x, BeeCounter, optional MAX17048 |
+| I2C SCL | D5 | 23 | NAU7802 scales, RTC, SHT4x, BeeCounter, optional MAX17048 |
 | SD CS | D3 | 21 | SD card chip select |
 | SD SCK | D8 | 19 | SPI clock (XIAO default SCK) |
 | SD MISO | D9 | 20 | SPI MISO (XIAO default MISO) |
@@ -78,7 +78,6 @@ The firmware logs the active antenna selection on every boot:
 | BLE wireless in-hive sensors (HolyIot, RuuviTag, HiveInside) | ✅ |
 | OTA firmware update over WiFi | ✅ |
 | WiFi provisioning portal | ✅ |
-| Optional INA219 solar monitor | ✅ (I2C) |
 | Optional MAX17048 fuel gauge | ✅ (I2C) |
 | INMP441 wired microphones | ❌ no pins available — pair a BLE sensor for acoustics |
 | Deep-sleep timer wake | ✅ |
@@ -97,8 +96,8 @@ The firmware pin definitions live in `firmware/include/config.h` (with optional 
 | HX711 #2 DOUT | 32 | Input | Scale 2 data |
 | HX711 #2 SCK | 33 | Output | Scale 2 clock; used to power down HX711 during deep sleep |
 | DS18B20 data | 4 | Bidirectional | Shared 1-Wire bus for both hive probes |
-| I2C SDA | 21 | Bidirectional | RTC, SHT4x, BeeCounter, optional INA219, optional MAX17048 |
-| I2C SCL | 22 | Output | RTC, SHT4x, BeeCounter, optional INA219, optional MAX17048 |
+| I2C SDA | 21 | Bidirectional | RTC, SHT4x, BeeCounter, optional MAX17048 |
+| I2C SCL | 22 | Output | RTC, SHT4x, BeeCounter, optional MAX17048 |
 | SD CS | 5 | Output | SD card chip select |
 | SD SCK | 18 | Output | SPI clock |
 | SD MISO | 23 | Input | SD card SPI MISO |
@@ -127,7 +126,6 @@ The firmware pin definitions live in `firmware/include/config.h` (with optional 
 | INMP441 mics x2 | I2S | BCLK 14, WS 13, SD 34 (shared bus) |
 | BeeCounter x2 | I2C | GPIO21 SDA, GPIO22 SCL (`0x30` / `0x31`) |
 | LIS3DH / LIS2DH12 x2 | I2C | GPIO21 SDA, GPIO22 SCL (`0x18` / `0x19`) |
-| INA219 | I2C | GPIO21 SDA, GPIO22 SCL |
 | MAX17048 | I2C | GPIO21 SDA, GPIO22 SCL |
 
 ---
@@ -354,30 +352,8 @@ address). It is the recommended part for the final, easily sourced BOM.
 Cellular (SIM7080G) transport has been removed from the ESP32 firmware — the
 Scale Module is **Wi-Fi only**. LTE/NB-IoT, solar charging, and battery
 management now live on a separate **Power Module** that connects to the Scale
-Module over I2C/ESP-NOW. The optional INA219 and MAX17048 telemetry below still
+Module over I2C/ESP-NOW. The optional MAX17048 telemetry below still
 runs on the ESP32 itself over the shared I2C bus.
-
----
-
-## Optional INA219 solar/load monitor
-
-The INA219 shares the I2C bus.
-
-| INA219 pin | ESP32 pin |
-|---|---|
-| VCC | 3.3 V |
-| GND | GND |
-| SDA | GPIO21 |
-| SCL | GPIO22 |
-
-Default address is `0x40`. Enable with:
-
-```cpp
-#define ENABLE_INA219_SOLAR 1
-#define INA219_I2C_ADDRESS  0x40
-```
-
-The firmware reports bus voltage, shunt voltage, load voltage, current, and power when the module is present.
 
 ---
 
@@ -408,14 +384,33 @@ The firmware reports battery voltage, state-of-charge, monitor status, and low-b
 
 | Device | Address |
 |---|---|
+| NAU7802 | `0x2A` (fixed) |
+| TCA9548A mux | `0x70` |
 | DS3231 RTC | `0x68` |
 | SHT4x | `0x44` |
+| MAX17048 | `0x36` |
 | BeeCounter 1 / 2 | `0x30` / `0x31` |
 | LIS3DH / LIS2DH12 1 / 2 | `0x18` / `0x19` (set by SDO/SA0) |
-| INA219 | `0x40` by default |
-| MAX17048 | Fixed by device/library |
 
-Most breakout boards include SDA/SCL pull-ups. If multiple breakout boards are installed, verify the effective pull-up resistance is not too low.
+### I2C pull-ups — avoid bus brownouts
+
+Almost every breakout module ships with its own SDA/SCL pull-up resistors, and
+they all end up **in parallel** on the shared bus:
+
+- **NAU7802, MAX17048 and TCA9548A mux modules** generally carry **10 kΩ** pull-ups.
+- **RTC (DS3231) modules and wired SHT40 breakouts** often carry **4.7 kΩ** pull-ups.
+
+Stack a few of those and the combined pull-up becomes so strong that the bus
+lines can no longer be pulled low reliably — the bus "browns out": devices stop
+ACKing, drop off mid-transfer, or are detected intermittently. To avoid this:
+
+- **Remove the 4.7 kΩ pull-up resistors from the RTC module.**
+- **Do not populate additional pull-up resistors on the PCB** — leave the
+  footprints empty. The 10 kΩ pull-ups already on the NAU7802 / MAX17048 / mux
+  modules (and the SHT40's, if wired) are plenty.
+- If devices still behave erratically, measure the effective pull-up: with
+  everything connected and powered off the bus should read a few kΩ from
+  SDA/SCL to 3.3 V — not well under 2 kΩ.
 
 ---
 
@@ -432,13 +427,11 @@ Most breakout boards include SDA/SCL pull-ups. If multiple breakout boards are i
 
 ## Multi-hive I2C scales (NAU7802 + TCA9548A) — firmware v0.20.0+
 
-Beyond the two HX711 pin channels, HiveHub can read load cells over I2C with the
-**NAU7802** 24-bit ADC, and fan out up to eight of them with a **TCA9548A** 1-to-8
-I2C multiplexer. An all-NAU7802 setup tops out at **16 scales** (8 chips behind the
-mux); the full **18 wired channels** is reached by adding the 2 HX711 pin channels
-(**2 HX711 + 16 NAU7802**). See [multi-hive.md](multi-hive.md) for the full feature
-overview and the topology note explaining why a main-bus NAU7802 and the mux cannot
-be combined.
+HiveHub reads load cells over I2C with the **NAU7802** 24-bit ADC, and fans out
+up to eight of them with a **TCA9548A** 1-to-8 I2C multiplexer — up to
+**16 scales** per HiveHub (8 chips behind the mux, 2 channels each). See
+[multi-hive.md](multi-hive.md) for the full feature overview and the topology
+note explaining why a main-bus NAU7802 and the mux cannot be combined.
 
 ### NAU7802 (one chip = two load cells)
 
@@ -464,16 +457,17 @@ differential inputs (CH1/CH2):
 | `A0`/`A1`/`A2` | GND for address `0x70` (default) |
 | `SD0..SD7` / `SC0..SC7` | one NAU7802's SDA/SCL per channel |
 
-Pull-ups: keep 4.7 kΩ pull-ups on the **upstream** bus; each downstream channel
-needs its own pull-ups too (most NAU7802 breakouts include them).
+Pull-ups: the module pull-ups already present are enough — NAU7802 and mux
+modules ship 10 kΩ pull-ups, and each downstream mux channel gets its own from
+the NAU7802 breakout on it. Do **not** add extra pull-ups (see
+[I2C pull-ups — avoid bus brownouts](#i2c-pull-ups--avoid-bus-brownouts)).
 
 > All NAU7802s share `0x2A` (the chip has no address-select pin), so do **not**
 > also place a NAU7802 on the upstream bus while populating mux channels — the two
 > would collide. Use the mux (≤16 scales) **or** a single main-bus chip (2 scales),
-> not both. To reach 18, pair 16 muxed NAU7802s with the 2 HX711 channels. See the
-> topology note in [multi-hive.md](multi-hive.md).
+> not both. See the topology note in [multi-hive.md](multi-hive.md).
 
-### DS18B20 — up to 18 on one bus
+### DS18B20 — up to 16 on one bus
 
 All DS18B20 probes share the single 1-Wire data pin (`ONE_WIRE_PIN`, GPIO4 on the
 DevKit) with one 4.7 kΩ pull-up to 3V3 for the whole bus. Each probe is mapped to

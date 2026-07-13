@@ -188,21 +188,21 @@
       features.push("ENABLE_BLE_SCAN", "ENABLE_BEEHIVE_GATT");
       recommendations.push("Skip load-cell amplifier wiring and focus the guide on BLE pairing, hive mapping and backend deployment.");
     } else if (setup === "multi") {
-      board = "XIAO ESP32-C6 Scale Module plus NAU7802 breakout PCB (I2C load-cell frontend)";
-      scaleInterface = scaleSource === "ble-existing" ? "BLE/GATT wireless scales" : "NAU7802 channels behind the breakout's I2C mux (up to 16 wired scales)";
+      board = "XIAO ESP32-C6 on the Scale Module V0.4 plus the NAU7802 breakout PCB (TCA9548A mux + up to 8× NAU7802)";
+      scaleInterface = scaleSource === "ble-existing" ? "BLE/GATT wireless scales" : "NAU7802 channels behind the breakout's TCA9548A mux (up to 16 wired scales; no NAU7802 on the main PCB)";
       profileKey = "multi-scale";
       recommendations.push("Use the multi-scale guide path with I2C address planning, per-scale calibration and expansion notes.");
     } else {
-      board = "XIAO ESP32-C6 Scale Module (recommended; the 30-pin ESP32 DevKit is legacy)";
+      board = "XIAO ESP32-C6 on the Scale Module V0.4 (recommended; the 30-pin ESP32 DevKit is legacy)";
       scaleInterface = scaleSource === "ble-existing" ? "BLE/GATT wireless scales" : "NAU7802 I2C channels (2 scales on the Scale Module)";
       profileKey = "simple-scale";
       recommendations.push("Start with the simple wiring guide: NAU7802 scale channels, I2C devices, SD card and setup button.");
     }
 
     if (power === "offgrid") {
-      powerPlan = "Battery + solar panel with charger/regulator, INA219 solar telemetry and MAX17048 battery gauge";
-      features.push("ENABLE_INA219_SOLAR", "ENABLE_MAX17048_BATTERY");
-      recommendations.push("Add an off-grid power section covering charger, regulator, battery gauge, solar telemetry and weatherproofing.");
+      powerPlan = "Battery + solar panel (CN3791 MPPT charger, TPS63020 buck-boost) with a MAX17048 battery gauge";
+      features.push("ENABLE_MAX17048_BATTERY");
+      recommendations.push("Add an off-grid power section covering charger, regulator, battery gauge and weatherproofing.");
     } else {
       powerPlan = "Stable grid / PoE-derived supply with a regulated 5 V or 3.3 V rail";
       recommendations.push("Add a power section for grid or PoE-derived supply, common ground and outdoor cable strain relief.");

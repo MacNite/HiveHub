@@ -1,0 +1,39 @@
+Category;Component;Amount;Est. price (EUR);Link;Note
+Core;Seeed Studio XIAO ESP32-C6 (3-pack);1;15.00;https://www.seeedstudio.com/Seeed-StudioXIAO-ESP32C6-3PCS-p-5918.html;Pack of 3 boards — one HiveHub needs one board (~5 EUR each)
+Core;External antenna for XIAO ESP32-C6;1;3.00;https://www.seeedstudio.com/2-4GHz-2-81dBi-Antenna-for-XIAO-ESP32C3-p-5475.html;u.FL 2.4 GHz antenna; enable with XIAO_C6_USE_EXTERNAL_ANTENNA
+Core;NAU7802 load-cell ADC module;1 (up to 8);3.00;;1 module reads 2 scales. Install on the main PCB for a dual-scale build, or up to 8 on the NAU7802 breakout PCB (behind the mux) for up to 16 scales. Do NOT install one on the main PCB when the mux is used.
+Core;TCA9548A I2C multiplexer;0-1;2.00;https://s.click.aliexpress.com/e/_c3pbRTG7;0 for a dual-scale build, 1 for 3+ scales (goes on the NAU7802 breakout PCB)
+Core;TPS63020 buck-boost module;1;3.00;https://s.click.aliexpress.com/e/_c43xOeuP;Battery/5 V input to a stable 3.3 V rail
+Core;Micro SD card slot module;1;1.50;https://s.click.aliexpress.com/e/_c3Yp6uvv;
+Core;Micro SD card (256 MB is fine);1;2.00;https://s.click.aliexpress.com/e/_c3TZXpDN;
+Core;SHT40 temperature/humidity module;1;2.00;https://s.click.aliexpress.com/e/_c4DEhpMT;Usually ships with 4.7k I2C pull-ups — do not add further pull-ups elsewhere
+Core;DS3231 RTC module;1;2.00;https://s.click.aliexpress.com/e/_c3lts5zN;Remove the module's 4.7k I2C pull-up resistors (see I2C pull-up note)
+Core;USB-C LiPo charger (TP4056);1;1.50;https://s.click.aliexpress.com/e/_c37DSTiP;
+Core;IP65 push button;1;2.00;https://s.click.aliexpress.com/e/_c37ODKA3;Setup/provisioning button
+Core;Aluminium U-profile (50x25x3 mm, 400-450 mm long);1;10.00;;Scale frame — local metal shop / hardware store
+Hardware;PCB standoffs M3 (set);1;3.00;https://s.click.aliexpress.com/e/_c30slno3;
+Hardware;2-pin header (female);8;2.00;https://s.click.aliexpress.com/e/_c3GBnPRp;
+Hardware;4-pin header (female);8;2.00;https://s.click.aliexpress.com/e/_c3B9xweb;
+Hardware;6-pin header (female);3;1.50;https://s.click.aliexpress.com/e/_c3YUhIZv;
+Hardware;7-pin header (female);2;1.50;https://s.click.aliexpress.com/e/_c3Kqz4LV;You may use 6-pin headers to install the XIAO ESP32-C6 and leave 5V and D0 unconnected
+Hardware;2-pin screw terminal;1;0.50;https://s.click.aliexpress.com/e/_c4PNxv0x;
+Hardware;4-pin screw terminal;1;0.50;https://s.click.aliexpress.com/e/_c4PNxv0x;
+Hardware;2.54 mm male pin header (1x3);1;1.00;https://s.click.aliexpress.com/e/_c3ATQr9H;Power-source selection jumper
+Hardware;Wire crimps for SHT40 + scale;1 set;3.00;;
+Hardware;Cable (sensor + load-cell wiring);as needed;5.00;;
+Optional;CN3791 MPPT solar charger (6 V);1;4.00;https://s.click.aliexpress.com/e/_c2w6BtBD;Needed to charge the LiPo from a solar panel
+Optional;Solar panel 6 V / 4.5 W;1;8.00;https://s.click.aliexpress.com/e/_c4m1RMgP;
+Optional;MAX17048 LiPo fuel gauge;1;2.00;https://s.click.aliexpress.com/e/_c34IGpXp;Battery voltage / state-of-charge telemetry; module has 10k I2C pull-ups
+Optional;USB-C passthrough with cover;1;4.00;https://s.click.aliexpress.com/e/_c3DeN3t5;Optional external charging port if solar fails
+Optional;Internal USB-C cable (20 cm flat);1;2.00;https://s.click.aliexpress.com/e/_c3M2lkOL;Needed for the USB-C passthrough
+Optional;HolyIot 25015 in-hive BLE sensor;1 per hive;10.00;https://s.click.aliexpress.com/e/_c2xertXZ;HiveInside and HiveHeart provide more data, but the 25015 is a cheap ready-to-use (add casing) device
+Load cells (pick one);TAL220-style TAL203;2 per scale;10.00;https://s.click.aliexpress.com/e/_c3rPYqeF;Cheap, works just fine
+Load cells (pick one);Mavin NA2;2 per scale;30.00;https://s.click.aliexpress.com/e/_c376PSA3;Best medium-range performance; dimensions identical to Bosch H30A
+Load cells (pick one);Bosche H30A;2 per scale;90.00;https://www.bosche.eu/p/plattform-waegezelle-h30a/100-300-30-59;Best name-brand option
+Enclosure (pick one);Very nice box;1;15.00;https://s.click.aliexpress.com/e/_c3yfTU0R;Should be 150x150 to 200x200 mm and plastic — a bigger box makes wiring easier
+Enclosure (pick one);Standard box;1;8.00;https://s.click.aliexpress.com/e/_c32vdL15;
+Battery (pick one);Budget 10,000 mAh LiPo;1;20.00;https://s.click.aliexpress.com/e/_c3cW9f1H;
+Battery (pick one);18650 cell;2-4;12.00;https://s.click.aliexpress.com/e/_c4dSHbsj;2 cheap 18650 in parallel give roughly 2-4 weeks of runtime
+Battery (pick one);18650 holder;1;2.00;https://s.click.aliexpress.com/e/_c4BrsjZN;
+Scale connectors (pick one);SP13 5-pin connector;1-16;2.00;https://s.click.aliexpress.com/e/_c3cMT1Zl;1 per wired scale — waterproof option
+Scale connectors (pick one);PG7 cable gland (set);1 set;5.00;https://s.click.aliexpress.com/e/_c4PacAJN;Budget alternative — removing single scales becomes a hassle without pluggable connectors

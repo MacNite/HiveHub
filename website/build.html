@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Build your own — HiveHub</title>
-<meta name="description" content="Build your own HiveHub: start with the hardware helper to turn a few questions into a recommended build profile, then jump to the hardware BOM, wiring reference and firmware config tool. Step-by-step assembly and setup tutorials are coming." />
+<meta name="description" content="Build your own HiveHub for up to 16 hive scales: bill of materials with price estimates, PCB ordering, wiring notes, PlatformIO firmware setup, calibration and backend deployment — all steps downloadable as a PDF." />
 <meta name="color-scheme" content="light dark" />
 <!-- Set the theme before the stylesheet paints, so there's no light flash. -->
 <script>
@@ -20,6 +20,43 @@
 </script>
 <link rel="stylesheet" href="assets/style.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%9D%3C/text%3E%3C/svg%3E" />
+<style>
+  /* ── Build-guide specific styles ─────────────────────────────── */
+  .bom-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+  table.bom { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  table.bom th, table.bom td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.bom th { color: var(--ink-soft); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+  table.bom td.amt, table.bom td.price { white-space: nowrap; }
+  table.bom tr.cat td { background: var(--comb); font-weight: 800; color: var(--ink); font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+  table.bom td .note-txt { display: block; color: var(--ink-soft); font-size: .82rem; }
+  .guide-img { max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .img-row { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin: 1rem 0; }
+  .img-row figure { margin: 0; }
+  .img-row figcaption { color: var(--ink-soft); font-size: .85rem; margin-top: .4rem; }
+  details.pins { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); padding: 0; margin: 1rem 0; }
+  details.pins summary { cursor: pointer; font-weight: 700; padding: .9rem 1.1rem; }
+  details.pins[open] summary { border-bottom: 1px solid var(--line); }
+  details.pins .inner { padding: .3rem 1.1rem 1.1rem; }
+  details.pins table { border-collapse: collapse; width: 100%; font-size: .88rem; margin: .6rem 0 .2rem; }
+  details.pins th, details.pins td { text-align: left; padding: .38rem .6rem; border-bottom: 1px solid var(--line); }
+  details.pins th { color: var(--ink-soft); font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+  .step h4 { margin: 1rem 0 .3rem; font-size: .98rem; }
+  .step ul, .step ol { color: var(--ink-soft); margin: .4rem 0 .6rem; padding-left: 1.3rem; }
+  .step li { margin: .25rem 0; }
+
+  /* ── Print / PDF layout — used to generate the downloadable guide PDF ── */
+  @media print {
+    .site-nav, footer, .no-print, .toast { display: none !important; }
+    section { border-top: none; padding: 1.2rem 0; }
+    .hero { padding: 0 0 1rem; }
+    .hero .cta { display: none; }
+    body { background: #fff; color: #111; }
+    .card, .step, .bom-wrap, details.pins { box-shadow: none; break-inside: avoid; }
+    details.pins summary { list-style: none; }
+    a { color: inherit; }
+    pre { white-space: pre-wrap; }
+  }
+</style>
 </head>
 <body>
 
@@ -43,60 +80,411 @@
 <a id="top"></a>
 <section class="hero" style="border-top:none">
   <div class="wrap">
-    <span class="badge">🧭 New — the hardware helper is live</span>
+    <span class="badge">🔧 The complete build guide — parts to live data</span>
     <h1>Build your own HiveHub.</h1>
     <p class="lead">
-      A guided builder is on the way: choose how many hives (up to 18) and which
-      sensors you want, and HiveHub will generate the exact parts list, wiring and
-      firmware config — backed by step-by-step assembly and setup tutorials. The
-      first step is ready now — the hardware helper turns a few questions about
-      power, scales and wireless devices into a recommended build profile.
+      Everything you need to build a HiveHub for <strong>up to 16 hive scales</strong>:
+      the full parts list with price estimates, the PCBs, wiring notes, firmware
+      flashing with VS Code + PlatformIO, scale calibration and the self-hosted
+      backend. Roughly <strong>€90–120 for a dual-scale build</strong> (plus load
+      cells of your choice), a weekend of soldering-iron-free assembly, and no
+      subscription — ever.
     </p>
     <div class="cta">
-      <a class="btn" href="hardware-helper.html">🧭 Open hardware helper</a>
-      <a class="btn ghost" href="https://github.com/MacNite/HiveHub#hardware">📦 Current BOM</a>
-      <a class="btn ghost" href="configurator.html">⚙️ Config tool</a>
-      <a class="btn ghost" href="index.html#setup">🚀 Setup guide</a>
+      <a class="btn" href="#bom">📦 Parts list (BOM)</a>
+      <a class="btn ghost" href="assets/hivehub-build-guide.pdf" download>⬇️ Download the guide as PDF</a>
+      <a class="btn ghost" href="hardware-helper.html">🧭 Not sure what to build? Open the hardware helper</a>
     </div>
   </div>
 </section>
 
-<section id="helper">
+<section id="overview">
   <div class="wrap">
-    <h2>Start with the hardware helper</h2>
-    <p class="sub">The first piece of the guided builder is live. Answer a few
-       questions about power, initial setup, scales and optional wireless in-hive
-       devices, and the helper generates a recommended build profile — board,
-       power plan, scale interface and firmware flags — plus a guide outline and a
-       copyable profile to carry into the config tool.</p>
-    <div class="cta" style="margin:1.1rem 0 1.6rem">
-      <a class="btn" href="hardware-helper.html">🧭 Open the hardware helper</a>
-      <a class="btn ghost" href="configurator.html">⚙️ Continue to config tool</a>
-    </div>
-    <p class="sub">Building on the profile the helper produces, still on the roadmap:</p>
+    <h2>The recommended setup</h2>
+    <p class="sub">One board, off-the-shelf modules on pin headers, no SMD soldering.</p>
     <div class="grid">
-      <div class="card"><div class="ico">🔧</div><h3>Assembly tutorials</h3><p>Step-by-step guides for the ESP32-C6 Scale Module and the NAU7802 breakout: module placement, load cells, I2C sensors, wiring and the enclosure.</p></div>
-      <div class="card"><div class="ico">⚡</div><h3>Flashing &amp; setup</h3><p>From PlatformIO upload to the on-device provisioning portal, sensor pairing and claiming the device in HivePal.</p></div>
-      <div class="card"><div class="ico">🔌</div><h3>Wiring diagrams</h3><p>Per-sensor wiring and pin maps generated to match the exact build you configured — no guessing from a generic table.</p></div>
+      <div class="card"><div class="ico">🧠</div><h3>Scale Module V0.4 + XIAO ESP32-C6</h3>
+        <p>The central PCB. It carries the <strong>XIAO ESP32-C6</strong> and off-the-shelf
+        modules on headers: <strong>NAU7802</strong> load-cell ADC (2 scales),
+        <strong>MAX17048</strong> battery gauge, <strong>TPS63020</strong> buck-boost,
+        <strong>TP4056</strong> USB-C charger, <strong>DS3231 RTC</strong>,
+        <strong>micro-SD</strong> and <strong>SHT40</strong>.</p></div>
+      <div class="card"><div class="ico">⚖️</div><h3>Optional: up to 16 scales</h3>
+        <p>Add the <strong>NAU7802 breakout PCB</strong> with its <strong>TCA9548A</strong>
+        I2C multiplexer and up to <strong>8× NAU7802</strong> modules — 16 scales in
+        total on one HiveHub. (When the mux is used, no NAU7802 is installed on the
+        main PCB — see the wiring notes below.)</p></div>
+      <div class="card"><div class="ico">☀️</div><h3>Optional: off-grid power</h3>
+        <p>A LiPo or 18650 pack, a <strong>CN3791</strong> MPPT solar charger and a 6 V
+        panel keep a HiveHub running unattended; the MAX17048 reports the battery
+        state with every measurement.</p></div>
     </div>
-    <p class="sub" style="margin-top:1.5rem">Have ideas for what the builder should
-       cover? Open an issue on
-       <a href="https://github.com/MacNite/HiveHub/issues">GitHub</a>.</p>
+    <p style="margin-top:1.5rem" class="sub">
+      The guide below walks through the whole build in six steps. Prefer paper?
+      <a href="assets/hivehub-build-guide.pdf" download>Download every step as a nicely formatted PDF</a>.
+    </p>
   </div>
 </section>
 
-<section id="meantime">
+<section id="bom">
   <div class="wrap">
-    <h2>In the meantime</h2>
-    <p class="sub">The guided builder isn't ready yet — but everything you need to
-       build a HiveHub already exists in the repository:</p>
+    <h2>Step 1 — Order the parts</h2>
+    <p class="sub">The bill of materials for <strong>one HiveHub</strong>. Prices are rough
+      2026 ballpark figures (AliExpress / Seeed, excl. shipping) — they fluctuate, so
+      treat them as orientation, not a quote. AliExpress links are affiliate links and
+      support the project.</p>
+
+    <div class="cta no-print" style="margin:0 0 1.2rem">
+      <a class="btn" href="assets/hivehub-bom.csv" download>⬇️ Download the BOM (CSV)</a>
+    </div>
+
+    <div class="bom-wrap">
+    <table class="bom">
+      <tr><th>Component</th><th>Amount</th><th>Est. price</th><th>Note</th></tr>
+
+      <tr class="cat"><td colspan="4">Core electronics — ≈ €47</td></tr>
+      <tr><td><a href="https://www.seeedstudio.com/Seeed-StudioXIAO-ESP32C6-3PCS-p-5918.html">Seeed Studio XIAO ESP32-C6 (3-pack)</a></td><td class="amt">1 pack</td><td class="price">≈ €15</td><td>One HiveHub uses one board (≈ €5 each); keep the spares for HiveInside sensors or the next hub.</td></tr>
+      <tr><td><a href="https://www.seeedstudio.com/2-4GHz-2-81dBi-Antenna-for-XIAO-ESP32C3-p-5475.html">External antenna for the XIAO ESP32-C6</a></td><td class="amt">1</td><td class="price">≈ €3</td><td>u.FL 2.4 GHz antenna — much better range from inside a plastic box.</td></tr>
+      <tr><td>NAU7802 load-cell ADC module</td><td class="amt">1 (up to 8)</td><td class="price">≈ €3</td><td>One module reads <strong>2 scales</strong>. Dual-scale build: 1 on the main PCB. 3+ scales: up to 8 on the breakout PCB — and <strong>none</strong> on the main PCB.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3pbRTG7">TCA9548A I2C multiplexer</a></td><td class="amt">0–1</td><td class="price">≈ €2</td><td>0 for a dual-scale build, 1 for 3+ scales (installed on the NAU7802 breakout PCB).</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c43xOeuP">TPS63020 buck-boost module</a></td><td class="amt">1</td><td class="price">≈ €3</td><td>Battery or 5 V input → stable 3.3 V rail.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3Yp6uvv">Micro-SD card slot module</a></td><td class="amt">1</td><td class="price">≈ €1.50</td><td>Local cache and measurement backup.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3TZXpDN">Micro-SD card</a></td><td class="amt">1</td><td class="price">≈ €2</td><td>256 MB is fine.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c4DEhpMT">SHT40 module</a></td><td class="amt">1</td><td class="price">≈ €2</td><td>Ambient temperature &amp; humidity. Wired modules usually carry 4.7 kΩ I2C pull-ups — see the pull-up note in step 3.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3lts5zN">DS3231 RTC module</a></td><td class="amt">1</td><td class="price">≈ €2</td><td>Timekeeping without NTP. <strong>Remove its 4.7 kΩ I2C pull-up resistors</strong> — see the pull-up note in step 3.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c37DSTiP">USB-C LiPo charger (TP4056)</a></td><td class="amt">1</td><td class="price">≈ €1.50</td><td>Charges the battery over USB-C.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c37ODKA3">IP65 push button</a></td><td class="amt">1</td><td class="price">≈ €2</td><td>Setup / provisioning button, mounted through the enclosure.</td></tr>
+      <tr><td>Aluminium U-profile 50×25×3 mm, 400–450 mm</td><td class="amt">1 per scale</td><td class="price">≈ €10</td><td>Scale frame — local metal shop or hardware store.</td></tr>
+
+      <tr class="cat"><td colspan="4">Headers &amp; hardware — ≈ €17</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c30slno3">PCB standoffs M3 (set)</a></td><td class="amt">1 set</td><td class="price">≈ €3</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3GBnPRp">2-pin female header</a></td><td class="amt">8</td><td class="price">≈ €2</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3B9xweb">4-pin female header</a></td><td class="amt">8</td><td class="price">≈ €2</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3YUhIZv">6-pin female header</a></td><td class="amt">3</td><td class="price">≈ €1.50</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3Kqz4LV">7-pin female header</a></td><td class="amt">2</td><td class="price">≈ €1.50</td><td>You may use 6-pin headers for the XIAO ESP32-C6 and leave 5V and D0 unconnected.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c4PNxv0x">2-pin screw terminal</a></td><td class="amt">1</td><td class="price">≈ €0.50</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c4PNxv0x">4-pin screw terminal</a></td><td class="amt">1</td><td class="price">≈ €0.50</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3ATQr9H">2.54 mm male pin header (1×3)</a></td><td class="amt">1</td><td class="price">≈ €1</td><td>The power-source selection jumper.</td></tr>
+      <tr><td>Wire crimps for SHT40 + scale</td><td class="amt">1 set</td><td class="price">≈ €3</td><td></td></tr>
+      <tr><td>Cable (sensor + load-cell wiring)</td><td class="amt">as needed</td><td class="price">≈ €5</td><td></td></tr>
+
+      <tr class="cat"><td colspan="4">Load cells — pick one option (2 per scale platform)</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3rPYqeF">TAL203</a></td><td class="amt">2</td><td class="price">≈ €10</td><td>Cheap, works just fine.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c376PSA3">Mavin NA2</a></td><td class="amt">2</td><td class="price">≈ €30</td><td>Best medium-range performance; dimensions identical to the Bosche H30A.</td></tr>
+      <tr><td><a href="https://www.bosche.eu/p/plattform-waegezelle-h30a/100-300-30-59">Bosche H30A</a></td><td class="amt">2</td><td class="price">≈ €90</td><td>Best name-brand option.</td></tr>
+
+      <tr class="cat"><td colspan="4">Enclosure — pick one (150×150 to 200×200 mm, plastic; bigger = easier wiring)</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3yfTU0R">Very nice box</a></td><td class="amt">1</td><td class="price">≈ €15</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c32vdL15">Standard box</a></td><td class="amt">1</td><td class="price">≈ €8</td><td></td></tr>
+
+      <tr class="cat"><td colspan="4">Battery — pick one option</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3cW9f1H">Budget 10,000 mAh LiPo</a></td><td class="amt">1</td><td class="price">≈ €20</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c4dSHbsj">18650 cells</a> + <a href="https://s.click.aliexpress.com/e/_c4BrsjZN">holder</a></td><td class="amt">2–4 + 1</td><td class="price">≈ €14</td><td>Two cheap 18650 in parallel give roughly 2–4 weeks of runtime.</td></tr>
+
+      <tr class="cat"><td colspan="4">Scale connectors — pick one option</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3cMT1Zl">SP13 5-pin connectors</a></td><td class="amt">1 per scale</td><td class="price">≈ €2 each</td><td>Waterproof, pluggable — recommended.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c4PacAJN">PG7 cable glands (set)</a></td><td class="amt">1 set</td><td class="price">≈ €5</td><td>Budget alternative — but removing a single scale becomes a hassle when it cannot simply be unplugged.</td></tr>
+
+      <tr class="cat"><td colspan="4">Optional — off-grid &amp; extras</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c2w6BtBD">CN3791 MPPT solar charger, 6 V</a></td><td class="amt">1</td><td class="price">≈ €4</td><td>Needed to charge the LiPo from a solar panel.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c4m1RMgP">Solar panel 6 V / 4.5 W</a></td><td class="amt">1</td><td class="price">≈ €8</td><td></td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c34IGpXp">MAX17048 fuel gauge</a></td><td class="amt">1</td><td class="price">≈ €2</td><td>Battery voltage / state-of-charge with every measurement; module carries 10 kΩ I2C pull-ups.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3DeN3t5">USB-C passthrough with cover</a></td><td class="amt">1</td><td class="price">≈ €4</td><td>External charging port in the enclosure wall, in case solar fails.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c3M2lkOL">Internal USB-C cable (20 cm, flat)</a></td><td class="amt">1</td><td class="price">≈ €2</td><td>Connects the passthrough to the TP4056.</td></tr>
+      <tr><td><a href="https://s.click.aliexpress.com/e/_c2xertXZ">HolyIot 25015 in-hive BLE sensor</a></td><td class="amt">1 per hive</td><td class="price">≈ €10</td><td>HiveInside and HiveHeart provide more data, but the 25015 is a cheap, ready-to-use (add casing) in-hive sensor.</td></tr>
+    </table>
+    </div>
+
+    <div class="note info" style="margin-top:1rem">
+      💰 <strong>What does a build cost?</strong> Core electronics + hardware land around
+      <strong>€65</strong>. A typical dual-scale build with TAL203 load cells, a standard
+      box and two 18650 cells comes to roughly <strong>€90–120</strong>; going off-grid
+      with solar adds about <strong>€15</strong>. Each additional scale afterwards costs
+      about €10–95 depending on your load-cell choice — the electronics are already there.
+    </div>
+    <div class="note info">
+      🟩 <strong>PCBs are ordered separately</strong> (step 2) and are deliberately not in
+      the BOM: their price is almost entirely shipping — 5 boards cost around
+      <strong>€5 + shipping</strong> at the usual fabs.
+    </div>
+  </div>
+</section>
+
+<section id="pcbs">
+  <div class="wrap">
+    <h2>Step 2 — Order the PCBs</h2>
+    <p class="sub">Ready-to-upload fabrication files (Gerbers + drill, zipped) are included
+      in the repository for every board. Upload the zip at any PCB fab (JLCPCB, PCBWay,
+      Aisler, …), keep the default settings, and order — 5 boards cost around €5 plus shipping.</p>
     <div class="grid">
-      <div class="card"><h3>📦 Hardware &amp; BOM</h3><p>The full parts list with core and optional modules.</p><p><a href="https://github.com/MacNite/HiveHub#hardware">repository README →</a></p></div>
-      <div class="card"><h3>🐝 Multi-hive guide</h3><p>How up to 18 hives per ESP32 works — NAU7802 I2C scales and the TCA9548A mux.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/multi-hive.md">docs/multi-hive.md →</a></p></div>
-      <div class="card"><h3>🔌 Wiring</h3><p>Full pin map, pull-ups and the load-cell wiring reference.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md →</a></p></div>
-      <div class="card"><h3>🧩 PCB design</h3><p>KiCad boards, all tested and working: ESP32-C6 Scale Module (recommended), NAU7802 breakout, Power Module — with fabrication outputs.</p><p><a href="https://github.com/MacNite/HiveHub/tree/main/pcb-design">pcb-design/ →</a></p></div>
-      <div class="card"><h3>⚙️ Config tool</h3><p>Generate a firmware <code>secrets.h</code> in your browser, no values leave your machine.</p><p><a href="configurator.html">Open the config tool →</a></p></div>
-      <div class="card"><h3>🚀 Setup steps</h3><p>The five-step clone-to-live-data guide on the home page.</p><p><a href="index.html#setup">Set up your own HiveHub →</a></p></div>
+      <div class="card"><h3>🟩 Scale Module V0.4 (required)</h3>
+        <p>The central board — carries the XIAO ESP32-C6 and every module from the BOM
+        on pin headers.</p>
+        <p><a href="https://github.com/MacNite/HiveHub/tree/main/pcb-design/scale%20module/esp32-c6">pcb-design/scale module/esp32-c6 →</a></p></div>
+      <div class="card"><h3>🟨 NAU7802 breakout PCB v0.2 (3+ scales)</h3>
+        <p>The 16-scale expander: TCA9548A mux + up to 8× NAU7802. Only needed for more
+        than 2 scales; connects to the Scale Module's I2C expansion header.</p>
+        <p><a href="https://github.com/MacNite/HiveHub/tree/main/pcb-design/NAU7802%20breakout%20pcb">pcb-design/NAU7802 breakout pcb →</a></p></div>
+      <div class="card"><h3>📂 All boards &amp; fabrication files</h3>
+        <p>KiCad projects and <code>fabrication/</code> outputs for every board, plus
+        assembly notes.</p>
+        <p><a href="https://github.com/MacNite/HiveHub/blob/main/pcb-design/README.md">pcb-design/README.md →</a></p></div>
+    </div>
+  </div>
+</section>
+
+<section id="wiring">
+  <div class="wrap">
+    <h2>Step 3 — Assemble &amp; wire</h2>
+    <p class="sub">With the Scale Module PCB the wiring is mostly done for you: solder the
+      female headers onto the board, plug the modules in, connect load cells and battery to
+      the screw terminals — done. That is why there is <strong>no full hand-wiring diagram</strong>:
+      the PCB <em>is</em> the wiring diagram. The collapsed pin list at the bottom covers the
+      rare fully-hand-wired build.</p>
+
+    <div class="img-row">
+      <figure>
+        <img class="guide-img" src="assets/scale-module-v0_4.png" alt="Scale Module V0.4 PCB render with module placement" />
+        <figcaption>Scale Module V0.4 — module placement. Every footprint is labelled on the silkscreen.</figcaption>
+      </figure>
+      <figure>
+        <img class="guide-img" src="assets/scale-module-v0_4-photo.png" alt="Assembled Scale Module V0.4 with modules installed" />
+        <figcaption>An assembled V0.4 board. More photos live in
+          <a href="https://github.com/MacNite/HiveHub/tree/main/pcb-design">pcb-design/</a> in the repository.</figcaption>
+      </figure>
+    </div>
+
+    <div class="steps">
+      <div class="step"><div class="n">⚡</div><div>
+        <h3>The power jumper</h3>
+        <p>The 1×3 pin header on the Scale Module selects the power source. Set the jumper to the
+          <strong>top position when powered from a battery</strong> (through the TPS63020 buck-boost)
+          and to the <strong>bottom position when powered from a 5 V power supply</strong>.
+          Never bridge all three pins.</p>
+      </div></div>
+      <div class="step"><div class="n">🔀</div><div>
+        <h3>Mux rule — where the NAU7802 goes</h3>
+        <p>The NAU7802 has a fixed I2C address, so two of them can never share one bus.
+          <strong>Dual-scale build:</strong> one NAU7802 on the main PCB, no mux.
+          <strong>3–16 scales:</strong> all NAU7802 modules (up to 8) go on the NAU7802 breakout
+          PCB behind its TCA9548A mux — and <strong>no NAU7802 may be installed on the main PCB</strong>,
+          or every read would collide with the muxed chips.</p>
+      </div></div>
+      <div class="step"><div class="n">🪢</div><div>
+        <h3>I2C pull-ups — avoid bus brownouts</h3>
+        <p>Most I2C modules ship with their own pull-up resistors, and they add up in parallel:
+          NAU7802, MAX17048 and mux modules generally carry <strong>10 kΩ</strong> pull-ups, while
+          RTC modules and wired SHT40 breakouts often carry <strong>4.7 kΩ</strong>. Too many in
+          parallel pull the bus so hard that the lines can no longer be driven low reliably —
+          the bus "browns out" and devices drop off.
+          <strong>Remove the 4.7 kΩ resistors from the RTC module and do not populate additional
+          pull-ups on the PCB.</strong> The remaining module pull-ups are plenty.</p>
+      </div></div>
+      <div class="step"><div class="n">⚖️</div><div>
+        <h3>Scales &amp; sensors</h3>
+        <p>Bolt two load cells per platform onto the aluminium U-profile and wire them to the
+          NAU7802 screw terminals (E+, E−, A+, A−). Route the DS18B20 probe and the SP13 scale
+          connectors through the enclosure wall, mount the SHT40 outside the box (shielded from
+          rain and sun), install the IP65 button, and insert the RTC coin cell before closing up.
+          Keep load-cell wiring away from the switching regulator.</p>
+      </div></div>
+    </div>
+
+    <details class="pins">
+      <summary>Hand-wiring reference — which pin connects to what (only needed without the PCB)</summary>
+      <div class="inner">
+        <p class="muted" style="font-size:.9rem">The PCB is the recommended way to build a
+          HiveHub — this list exists for repairs, breadboard experiments and fully hand-wired
+          builds. All XIAO ESP32-C6 pins are the 11 front-header pins (D0–D10).</p>
+
+        <h4>Power path</h4>
+        <table>
+          <tr><th>From</th><th>To</th><th>Notes</th></tr>
+          <tr><td>Solar panel (optional)</td><td>CN3791 MPPT input</td><td>6 V panel; CN3791 output goes to the battery</td></tr>
+          <tr><td>USB-C (external or passthrough)</td><td>TP4056 input</td><td>Charges the same battery</td></tr>
+          <tr><td>Battery + / −</td><td>TPS63020 VIN / GND</td><td>LiPo or 18650 pack</td></tr>
+          <tr><td>TPS63020 VOUT (set to 3.3 V)</td><td>XIAO 3V3 pin + all module VCC pins</td><td>One regulated 3.3 V rail for everything</td></tr>
+          <tr><td>Battery +</td><td>MAX17048 BAT/CELL</td><td>Fuel-gauge sense connection (optional)</td></tr>
+          <tr><td>Alternative: regulated 5 V PSU</td><td>XIAO 5V pin</td><td>Grid-powered builds — skip battery, charger and buck-boost</td></tr>
+          <tr><td>All grounds</td><td>Common GND</td><td>Every module, the button and the load-cell shields share one ground</td></tr>
+        </table>
+
+        <h4>Signals (XIAO ESP32-C6)</h4>
+        <table>
+          <tr><th>Signal</th><th>XIAO pin</th><th>GPIO</th><th>Connects to</th></tr>
+          <tr><td>I2C SDA</td><td>D4</td><td>22</td><td>NAU7802 (0x2A) <em>or</em> TCA9548A (0x70), DS3231 RTC (0x68), SHT40 (0x44), MAX17048 (0x36), BeeCounter (0x30/0x31)</td></tr>
+          <tr><td>I2C SCL</td><td>D5</td><td>23</td><td>Same devices — shared bus clock</td></tr>
+          <tr><td>DS18B20 1-Wire</td><td>D1</td><td>1</td><td>All in-hive temperature probes in parallel; one 4.7 kΩ pull-up to 3.3 V for the whole bus</td></tr>
+          <tr><td>SD CS</td><td>D3</td><td>21</td><td>SD module chip select</td></tr>
+          <tr><td>SD SCK</td><td>D8</td><td>19</td><td>SD module clock</td></tr>
+          <tr><td>SD MISO</td><td>D9</td><td>20</td><td>SD module data out</td></tr>
+          <tr><td>SD MOSI</td><td>D10</td><td>18</td><td>SD module data in</td></tr>
+          <tr><td>Setup button</td><td>D2</td><td>2</td><td>Button to GND (internal pull-up)</td></tr>
+          <tr><td>(free)</td><td>D0</td><td>0</td><td>Unused</td></tr>
+          <tr><td>Load cells</td><td>—</td><td>—</td><td>Each platform's cells → one NAU7802 channel (E+, E−, A+, A−); one NAU7802 = 2 channels = 2 scales</td></tr>
+          <tr><td>TCA9548A downstream (3+ scales)</td><td>—</td><td>—</td><td>SD0–SD7 / SC0–SC7 → one NAU7802's SDA/SCL per mux channel</td></tr>
+        </table>
+        <p class="muted" style="font-size:.9rem">Full details, addresses and the legacy 30-pin
+          ESP32 map: <a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md</a>.</p>
+      </div>
+    </details>
+  </div>
+</section>
+
+<section id="firmware">
+  <div class="wrap">
+    <h2>Step 4 — Flash the firmware (VS Code + PlatformIO)</h2>
+    <p class="sub">Condensed but complete — from a blank machine to a flashed board in
+      about 15 minutes (most of it download time).</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div>
+        <h3>Install the tools</h3>
+        <p>Install <a href="https://code.visualstudio.com/">VS Code</a>, open its
+          <strong>Extensions</strong> panel (Ctrl/Cmd+Shift+X), search for
+          <strong>“PlatformIO IDE”</strong> and install it. Wait until PlatformIO finishes its
+          first-time setup (status bar stops spinning), then restart VS Code.</p>
+      </div></div>
+      <div class="step"><div class="n">2</div><div>
+        <h3>Get the code &amp; open the project</h3>
+        <pre>git clone https://github.com/MacNite/HiveHub.git</pre>
+        <p>In VS Code: <strong>File → Open Folder…</strong> and select the
+          <code>HiveHub/firmware</code> folder (the folder that contains
+          <code>platformio.ini</code> — not the repository root). PlatformIO will detect the
+          project and install the toolchain and libraries automatically on the first build.</p>
+      </div></div>
+      <div class="step"><div class="n">3</div><div>
+        <h3>Optional: pre-seed a config</h3>
+        <p>You can flash completely unconfigured and do everything on the device's
+          provisioning portal later (step 6). To pre-seed Wi-Fi, backend and hives instead,
+          generate a <code>secrets.h</code> with the
+          <a href="configurator.html">device config tool</a> and save it as
+          <code>firmware/include/secrets.h</code> (it is gitignored — never commit it).</p>
+      </div></div>
+      <div class="step"><div class="n">4</div><div>
+        <h3>Build &amp; upload</h3>
+        <p>Connect the XIAO ESP32-C6 via USB-C. In the PlatformIO toolbar (bottom status bar),
+          pick the <strong><code>xiao_esp32c6</code></strong> environment, then hit
+          <strong>Upload</strong> (→ arrow). Or from a terminal:</p>
+        <pre>cd HiveHub/firmware
+pio run -e xiao_esp32c6 --target upload
+pio device monitor   # serial log, 115200 baud</pre>
+        <p class="muted">If the upload cannot find the port: hold the XIAO's
+          <strong>BOOT</strong> button while plugging in USB, then retry. On Linux add
+          yourself to the <code>dialout</code> group.</p>
+      </div></div>
+      <div class="step"><div class="n">5</div><div>
+        <h3>Verify</h3>
+        <p>The serial monitor should show the boot banner, the antenna selection, the I2C
+          devices it found and the first measurement cycle. Sensors you have not connected
+          are simply reported as not present — nothing crashes.</p>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<section id="backend">
+  <div class="wrap">
+    <h2>Step 5 — Run the backend</h2>
+    <p class="sub">The backend is a FastAPI + PostgreSQL stack shipped as a Docker Compose
+      file. It runs on anything that runs Docker — a home server, NAS, Raspberry Pi ≥ 4 or a
+      small VPS.</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div>
+        <h3>Prerequisites</h3>
+        <p>A host with <a href="https://docs.docker.com/engine/install/">Docker + the compose
+          plugin</a> installed, and — for devices in the field — a domain with
+          <strong>HTTPS</strong> (the firmware verifies TLS; a reverse proxy with a Let's
+          Encrypt certificate is the simplest setup).</p>
+      </div></div>
+      <div class="step"><div class="n">2</div><div>
+        <h3>Configure</h3>
+        <pre>git clone https://github.com/MacNite/HiveHub.git
+cd HiveHub/docker
+cp .env.example .env</pre>
+        <p>Edit <code>.env</code> and set at least:</p>
+        <ul>
+          <li><code>API_KEY</code> — master/admin key (<code>openssl rand -hex 32</code>)</li>
+          <li><code>POSTGRES_PASSWORD</code> — database password</li>
+          <li><code>HIVEPAL_SERVICE_API_KEY</code> / <code>HIVEPAL_JWT_SECRET</code> — only if you use HivePal</li>
+          <li><code>PUBLIC_BASE_URL</code> — your public HTTPS URL (used for OTA download links)</li>
+          <li><code>ENABLE_LOCAL_DASHBOARD=true</code> — for the built-in login-free dashboard</li>
+          <li>volume paths for the database and firmware directories</li>
+        </ul>
+      </div></div>
+      <div class="step"><div class="n">3</div><div>
+        <h3>Start it</h3>
+        <pre>docker compose up -d
+docker compose logs -f api   # watch the first start</pre>
+        <p>The API listens on port <code>31115</code>. It auto-creates the database schema on
+          first start — no manual migrations needed. Check <code>http://&lt;host&gt;:31115/health</code>
+          and the interactive docs at <code>/docs</code>.</p>
+      </div></div>
+      <div class="step"><div class="n">4</div><div>
+        <h3>Expose it with HTTPS</h3>
+        <p>Put a reverse proxy (Caddy, nginx, Traefik, NPM) in front of port 31115 with a valid
+          certificate and point <code>API_BASE_URL</code> on the device at
+          <code>https://your-domain.example</code>. NTP (UDP 123) must be reachable from the
+          device's network so it can validate the certificate.</p>
+        <p class="muted">Detailed guides: <a href="https://github.com/MacNite/HiveHub/blob/main/docs/docker-install.md">docker-install.md</a> ·
+          <a href="https://github.com/MacNite/HiveHub/blob/main/docs/truenas-install.md">truenas-install.md</a></p>
+      </div></div>
+      <div class="step"><div class="n">5</div><div>
+        <h3>Watch the data</h3>
+        <p><strong>Built-in dashboard (no account):</strong> open
+          <code>http://&lt;host&gt;:31115/dashboard</code> —
+          charts, device config, OTA and calibration (<a href="dashboard-demo/">demo</a>).
+          <strong>HivePal:</strong> claim the device by its claim code for accounts, sharing
+          and mobile access.</p>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<section id="calibration">
+  <div class="wrap">
+    <h2>Step 6 — Configure &amp; calibrate</h2>
+    <p class="sub">Everything after flashing happens on the device's own Wi-Fi provisioning
+      portal — no reflashing, no app required.</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><div>
+        <h3>Open the provisioning portal</h3>
+        <p>Short-press the setup button. The device opens the
+          <code>HiveHub-Setup-XXXX</code> Wi-Fi access point — connect to it and the portal
+          appears (or open <code>http://192.168.4.1</code>). Set Wi-Fi credentials, the backend
+          URL and API key, then add your hives: the portal auto-detects every NAU7802 channel
+          and DS18B20 probe and lets you pair BLE in-hive sensors per hive. Settings persist on
+          the device and survive OTA updates.</p>
+      </div></div>
+      <div class="step"><div class="n">2</div><div>
+        <h3>Calibrate each scale (tare + known weight)</h3>
+        <ol>
+          <li>In the portal, open <strong>Scale calibration</strong> — every configured channel
+            shows its live reading.</li>
+          <li>With the platform <strong>empty</strong>, press <strong>Tare (zero)</strong>.</li>
+          <li>Place a <strong>known weight</strong> (a 10–20 kg dumbbell plate or a canister of
+            water you weighed on a kitchen scale works well — the heavier, the more accurate),
+            type its mass in kg and press <strong>Set weight</strong>.</li>
+          <li>Verify: remove the weight (reading returns to ~0.00 kg), put it back
+            (reading shows the known mass). Each change is saved to the device immediately and
+            reported to the backend on the next upload.</li>
+        </ol>
+        <p class="muted">Calibrate <em>after</em> final mechanical assembly — bolting the frame
+          onto the hive stand changes the zero point. Re-tare at the start of the season.
+          Remote recalibration later works from the dashboard/HivePal without a site visit
+          (<a href="https://github.com/MacNite/HiveHub/blob/main/docs/calibration-mode.md">calibration mode</a>).</p>
+      </div></div>
+      <div class="step"><div class="n">3</div><div>
+        <h3>Done — first data</h3>
+        <p>Reboot out of the portal (“Save and reboot”). The device connects to your Wi-Fi,
+          uploads its first measurement with its claim code, and shows up in the dashboard.
+          From here on it wakes on its interval, measures, uploads and deep-sleeps.</p>
+      </div></div>
+    </div>
+    <div class="cta" style="margin-top:1.6rem">
+      <a class="btn" href="assets/hivehub-build-guide.pdf" download>⬇️ Download all steps as PDF</a>
+      <a class="btn ghost" href="hardware-helper.html">🧭 Hardware helper</a>
+      <a class="btn ghost" href="configurator.html">⚙️ Device config tool</a>
+      <a class="btn ghost" href="https://github.com/MacNite/HiveHub/issues">💬 Stuck? Open an issue</a>
     </div>
   </div>
 </section>
@@ -108,6 +496,22 @@
   </div>
 </footer>
 
+<script>
+  // Expand the collapsed pin tables while printing so the PDF is complete.
+  (function () {
+    var toggled = [];
+    window.addEventListener("beforeprint", function () {
+      toggled = [];
+      document.querySelectorAll("details:not([open])").forEach(function (d) {
+        d.setAttribute("open", ""); toggled.push(d);
+      });
+    });
+    window.addEventListener("afterprint", function () {
+      toggled.forEach(function (d) { d.removeAttribute("open"); });
+      toggled = [];
+    });
+  })();
+</script>
 <script src="assets/theme.js"></script>
 </body>
 </html>

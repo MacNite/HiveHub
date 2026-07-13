@@ -2,7 +2,7 @@
 
 > **Project renamed: HiveScale → HiveHub.** What began as a dual beehive scale
 > has grown into a general **data collector / hub for many types of beehive
-> sensors and scales** (up to 18 hives per ESP32), so the project was renamed.
+> sensors and scales** (up to 16 hives per ESP32), so the project was renamed.
 > A few internal identifiers (the database measurement columns, the OTA `target`
 > value, the Docker image name, the device's stored-config namespace, MQTT
 > topics) still use the old `hivescale` name on purpose — changing them would
@@ -13,15 +13,15 @@
 Reference docs for **HiveHub**, an ESP32-based data collector for beehive
 sensors and scales. HiveHub reads a range of sensors natively on the device —
 **SHT4x/SHT40** (ambient temperature & humidity), **DS18B20** (in-hive
-temperature), **INMP441** (in-hive sound), **INA219** (solar/load power),
-**MAX17048** (LiPo battery), and **wired load cells via HX711 or NAU7802** — and
+temperature), **INMP441** (in-hive sound),
+**MAX17048** (LiPo battery), and **wired load cells via NAU7802 or HX711** — and
 bridges wireless BLE/GATT sensors and scales on top. For the project overview,
 hardware list, firmware/server setup, and API summary, start with the
 [main README](../README.md). The pages below go deeper on individual topics.
 
 ## Hardware & wiring
 
-- [multi-hive.md](multi-hive.md) — **up to 18 hives per ESP32** (firmware v0.20.0): NAU7802 I2C scales, TCA9548A mux, up to 18 DS18B20, the hive-centric portal, the BLE budget, and the data model.
+- [multi-hive.md](multi-hive.md) — **up to 16 hives per ESP32** (firmware v0.20.0): NAU7802 I2C scales, TCA9548A mux, one DS18B20 per hive, the hive-centric portal, the BLE budget, and the data model.
 - [wiring.md](wiring.md) — full ESP32 pin map and wiring for every sensor and module.
 - [../pcb-design/README.md](../pcb-design/README.md) — the KiCad boards (all tested and working): **ESP32-C6 Scale Module (recommended)**, NAU7802 breakout, Power Module, and the legacy 30-pin Scale Module — pinouts and fabrication notes.
 - [accelerometer.md](accelerometer.md) — the vibration science and ~20 Hz pre-swarm signal (and the legacy wired LIS3DH/LIS2DH12 driver; stock builds now read vibration over BLE).
@@ -36,7 +36,7 @@ hardware list, firmware/server setup, and API summary, start with the
 
 ## Firmware behaviour
 
-- [offgrid-firmware-notes.md](offgrid-firmware-notes.md) — solar (INA219) and LiPo (MAX17048) power telemetry, and the wake/deep-sleep cycle.
+- [offgrid-firmware-notes.md](offgrid-firmware-notes.md) — LiPo (MAX17048) power telemetry and the wake/deep-sleep cycle.
 - [calibration-mode.md](calibration-mode.md) — fast-cycle calibration mode (firmware + backend).
 - [ap-mode-sd-download.md](ap-mode-sd-download.md) — AP/setup mode, the setup button, and the SD-card download + HivePal re-import.
 

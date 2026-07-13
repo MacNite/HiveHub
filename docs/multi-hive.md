@@ -1,7 +1,7 @@
-# Multi-hive support (up to 18 hives per ESP32)
+# Multi-hive support (up to 16 hives per ESP32)
 
 Firmware **v0.20.0** generalises HiveHub from a fixed two-hive device into a
-dynamic registry of **up to 18 hives**, each with one scale source and at most
+dynamic registry of **up to 16 hives**, each with one scale source and at most
 one in-hive sensor. This page covers the new hardware paths, the hive-centric provisioning
 portal, the BLE budget, and the data model.
 
@@ -11,9 +11,14 @@ portal, the BLE budget, and the data model.
 
 | Sensor | Max | How |
 | --- | --- | --- |
-| Scales | **18** | One scale source per hive: NAU7802 channels (main bus **or** mux — not both, see topology note), HX711 (1) / HX711 (2) on the legacy 30-pin board, or a paired beehivemonitoring.com BLE HiveScale. Wired NAU7802-only tops out at **16** (mux); 18 wired channels needs the 2 HX711 channels of the legacy board too (the recommended XIAO ESP32-C6 has no HX711) |
-| Wired temperature | **18** | One DS18B20 probe per hive on the single 1-Wire bus, mapped by ROM address |
-| In-hive BLE/GATT | **18** | One non-scale BLE/GATT sensor per hive. Passive beacons share one scan window; connection-based GATT reads remain cycle-capped |
+| Scales | **16** | One scale source per hive: NAU7802 channels (main bus **or** mux — not both, see topology note), HX711 (1) / HX711 (2) on the legacy 30-pin board, or a paired beehivemonitoring.com BLE HiveScale. All-NAU7802 wired reaches **16** (8 chips behind the TCA9548A mux) |
+| Wired temperature | **16** | One DS18B20 probe per hive on the single 1-Wire bus, mapped by ROM address |
+| In-hive BLE/GATT | **16** | One non-scale BLE/GATT sensor per hive. Passive beacons share one scan window; connection-based GATT reads remain cycle-capped |
+
+> **Registry footnote:** the firmware's registry (`MAX_HIVES`) technically holds
+> **18** hives — 16 muxed NAU7802 channels plus the 2 HX711 pin channels of the
+> obsolete 30-pin board. Since the legacy board is no longer recommended, the
+> supported and advertised maximum is **16**.
 
 `MAX_HIVES`, `MAX_SCALES`, `ENABLE_NAU7802`, `ENABLE_I2C_MUX` and
 `MAX_GATT_READS_PER_CYCLE` are defined in `firmware/include/config.h` and may be
@@ -42,12 +47,10 @@ an alternative/complement to the HX711:
 > fully disabled, and the provisioning portal hides the mux channels to avoid
 > phantom detections.)
 >
-> **Reaching the full 18 wired channels** therefore means combining the two HX711
-> pin channels (which use dedicated GPIOs, not I2C, so they never collide with
-> `0x2A`) with 16 muxed NAU7802 channels — i.e. **2 HX711 + 16 NAU7802 = 18** on
-> the classic ESP32 board. An all-NAU7802 path to 18 would require a **second
-> TCA9548A** strapped to a different address; the firmware models a single mux
-> address today, so that is not yet supported.
+> On the obsolete 30-pin board the two HX711 pin channels (dedicated GPIOs, not
+> I2C, so no `0x2A` collision) could technically be combined with the 16 muxed
+> NAU7802 channels for 18 wired channels — but the legacy board is no longer
+> recommended, so **16 is the supported maximum**.
 
 The firmware reads NAU7802s **raw** and applies the same `offset`/`factor`
 calibration as the HX711 path (`weightFromRaw`), so calibration is per scale
@@ -61,7 +64,7 @@ walks the registry and issues `powerDown()` to every NAU7802 (main bus + each mu
 channel). Without this the ADC keeps converting and draws milliamps for the whole
 sleep window.
 
-## Wired temperature: up to 18 DS18B20
+## Wired temperature: up to 16 DS18B20
 
 All DS18B20 probes share the single `ONE_WIRE_PIN` bus. Instead of reading by
 index (old behaviour), each hive maps a probe by its **ROM address**, so a
@@ -99,7 +102,7 @@ two-hive registry, so an existing device keeps working until you remap it.
 
 The portal is the recommended way to set this up, but a brand-new device can
 also ship already knowing every hive on **first boot**, before it has ever
-visited the portal: set `HIVE_COUNT` (1..18) and one `HIVE_<n>_JSON` macro per
+visited the portal: set `HIVE_COUNT` (1..16) and one `HIVE_<n>_JSON` macro per
 hive in `secrets.h`, in exactly the JSON shape `hiveToJson()` /
 `hiveFromJson()` use (`firmware/src/hive_config.cpp`). The
 [website config tool](../website/configurator.html) builds these for you from
@@ -115,7 +118,7 @@ keeps the pre-0.20 two-slot migration behavior described above.
 
 A passive BLE **scan** hears every nearby **beacon** in one window. The portal
 now limits each hive to one non-scale in-hive BLE/GATT sensor, matching the
-backend's single nested `ble` object per `hive_readings` row; up to 18 hives can
+backend's single nested `ble` object per `hive_readings` row; up to 16 hives can
 still each have one beacon without extra scan windows.
 
 **GATT** sensors (GATT-mode HiveInside, HiveHeart, wireless HiveScale, HiveTraffic)
@@ -171,7 +174,7 @@ read, insights and temperature-compensation paths keep working unchanged.
 - a **`hives`** array (all hives, from `hive_readings`, or synthesized from the
   legacy columns for historical/old-firmware rows), **and**
 - synthesized flat **`scale_N_*` / `hive_N_*`** keys for every hive, so existing
-  consumers (HivePal, MQTT, the insight detectors) reach all 18 hives without
+  consumers (HivePal, MQTT, the insight detectors) reach every hive without
   changes. Insights run for every hive index reported.
 
 ---
@@ -186,15 +189,15 @@ read, insights and temperature-compensation paths keep working unchanged.
 ## Known limitations
 
 - Connection-based **HiveHeart / wireless HiveScale** GATT sensors are read for
-  **any hive up to 18** (`beehive_gatt.cpp` walks the whole registry), same as
+  **any hive** (`beehive_gatt.cpp` walks the whole registry), same as
   the passive beacons. **HiveTraffic** wireless bee counters are still read for
   **hives 1–2 only** (`bee_counter_client.cpp` uses the legacy two-slot
   `trafficMac0/1` globals) — a pairing stored on hive 3+ is saved but not yet
   polled.
-- Server-side **temperature compensation** is applied to hives 1–2; hives 3–18
+- Server-side **temperature compensation** is applied to hives 1–2; hives 3+
   use raw weight for insights.
 - **Scale calibration** is synced for all hives (firmware 0.23.7+): hives 1–2 via
-  the legacy `scale1/2_offset`+`factor` config fields and hives 3–18 via the
+  the legacy `scale1/2_offset`+`factor` config fields and hives 3+ via the
   `hive_scales` array (stored server-side in `device_configs.scale_offsets_by_hive`).
   A tare/span done offline on the provisioning portal is reported back to the
   backend on the next check-in and bridged into the registry over remote config.

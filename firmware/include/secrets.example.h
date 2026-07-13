@@ -47,11 +47,7 @@
 // Keep these as numeric 0/1 values because the firmware uses preprocessor #if.
 // They are per-device build configuration rather than secrets, but this project
 // already uses secrets.h as the local, untracked per-device config file.
-#define ENABLE_INA219_SOLAR      0
 #define ENABLE_MAX17048_BATTERY  0
-
-// INA219 solar monitor. Default address is 0x40 on most breakout boards.
-#define INA219_I2C_ADDRESS       0x40
 
 // MAX17048 LiPo fuel gauge alert threshold, in percent.
 #define MAX17048_ALERT_PERCENT   20
@@ -129,10 +125,10 @@
 #define RUUVI_COMPANY_ID         0x0499
 
 // ==============================
-// MULTI-HIVE PRE-SEED (optional, up to 18 hives)
+// MULTI-HIVE PRE-SEED (optional, up to 16 hives)
 // ==============================
 // Firmware v0.20.0+ generalises HiveHub to a dynamic registry of up to
-// MAX_HIVES (18) hives, each with one scale source and at most one in-hive
+// MAX_HIVES hives (16 supported wired scales), each with one scale source and at most one in-hive
 // sensor — see hive_config.h and docs/multi-hive.md. The provisioning portal
 // (hold the setup button after flashing) configures this registry directly and
 // is the recommended way to set it up. To pre-seed it from secrets.h instead
