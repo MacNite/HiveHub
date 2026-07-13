@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>My device isn't supported yet — HiveHub</title>
+<meta name="description" content="Your wireless beehive device isn't in HiveHub's list yet? Request support as a GitHub issue and capture the integration data with nRF Connect — a short guide." />
+<meta name="color-scheme" content="light dark" />
+<!-- Set the theme before the stylesheet paints, so there's no light flash. -->
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem("hivehub-theme");
+      if (t !== "dark" && t !== "light") {
+        t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) { /* localStorage blocked — fall back to the light default */ }
+  })();
+</script>
+<link rel="stylesheet" href="assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%9D%3C/text%3E%3C/svg%3E" />
+<style>
+  .capture-example { background: var(--field-bg); border: 1px solid var(--line); border-radius: 12px; padding: .9rem 1rem; overflow-x: auto; }
+  .capture-example pre { margin: 0; }
+  .path-cols { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+</style>
+</head>
+<body>
+
+<header class="site-nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="logo">🐝</span> HiveHub</a>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="index.html#setup">Setup</a>
+      <a href="build.html">Build your own</a>
+      <a href="hardware-helper.html">Hardware helper</a>
+      <a href="configurator.html">Config tool</a>
+      <a href="https://github.com/MacNite/HiveHub">GitHub</a>
+      <button data-theme-toggle class="btn small ghost theme-toggle" type="button" aria-label="Toggle dark mode"></button>
+    </nav>
+  </div>
+</header>
+
+<section class="hero" style="border-top:none; padding-bottom:1.5rem">
+  <div class="wrap">
+    <span class="badge">📡 Device not supported yet?</span>
+    <h1>Your device isn't in the list yet.<br>Here's how to get it added.</h1>
+    <p class="lead">
+      HiveHub speaks to a fixed catalogue of wireless in-hive sensors, scales and
+      bee counters. If yours isn't one of them, it's not a dead end — it just needs
+      a decoder added to the firmware, and a short <strong>nRF Connect</strong>
+      capture is all it takes to get started.
+    </p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/MacNite/HiveHub/issues/new">🐛 Request support on GitHub</a>
+      <a class="btn ghost" href="#capture">How to capture the data</a>
+      <a class="btn ghost" href="https://github.com/MacNite/HiveHub/blob/main/docs/device-not-supported-yet.md">Full docs →</a>
+    </div>
+    <div class="note info" style="max-width:70ch">
+      <strong>In short:</strong> open a GitHub issue asking for your device, and
+      attach a short nRF Connect capture of what it advertises or notifies. That
+      capture is the exact data needed to write the integration.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Already supported</h2>
+    <p class="sub">Before anything else, check whether your device is one HiveHub
+       already handles — these need no new work, just pairing from the config tool
+       or the on-device portal.</p>
+    <div class="grid">
+      <div class="card"><h3>📶 HolyIot 25015</h3><p>BLE beacon — temperature, humidity, pressure and acceleration.</p></div>
+      <div class="card"><h3>📶 RuuviTag</h3><p>Four-in-one BLE beacon on the same scan bridge.</p></div>
+      <div class="card"><h3>📳 HiveInside</h3><p>In-hive vibration / FFT node (nRF54LM20A beacon; legacy ESP32-C6 over GATT).</p></div>
+      <div class="card"><h3>❤️ HiveHeart</h3><p>beehivemonitoring.com in-hive sensor over GATT.</p></div>
+      <div class="card"><h3>⚖️ HiveScale</h3><p>beehivemonitoring.com wireless weight scale over GATT.</p></div>
+      <div class="card"><h3>🐝 HiveTraffic</h3><p>Wireless entrance bee counter (BLE/GATT, hives 1–2).</p></div>
+    </div>
+    <p style="margin-top:1.2rem">
+      Not in this list? Continue below. See the
+      <a href="https://github.com/MacNite/HiveHub/tree/main/docs#in-hive-ble-sensors--bee-counters">BLE sensor docs</a>
+      for the full details on each.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Step 1 — Request support as a GitHub issue</h2>
+    <p class="sub">
+      <strong>All support requests for new devices must be submitted as an issue
+      on GitHub.</strong> An issue is trackable, and it's searchable by the next
+      person with the same device — please don't send it by e-mail.
+    </p>
+    <p><a class="btn" href="https://github.com/MacNite/HiveHub/issues/new">🐛 Open a new issue</a>
+       &nbsp;<a class="btn ghost" href="https://github.com/MacNite/HiveHub/issues?q=is%3Aissue">Search existing issues first</a></p>
+
+    <p style="margin-top:1.2rem">Please include:</p>
+    <div class="grid">
+      <div class="card"><div class="ico">🏷️</div><h3>Make &amp; model</h3><p>The device name and a link to its product page or datasheet, if any.</p></div>
+      <div class="card"><div class="ico">📊</div><h3>What it measures</h3><p>Temperature, humidity, weight, sound, vibration, bee count, battery… and which values you want HiveHub to store.</p></div>
+      <div class="card"><div class="ico">🔌</div><h3>How it talks</h3><p>An advertising <strong>beacon</strong> or a <strong>GATT</strong> device you connect to. Not sure? Step 2 tells you which.</p></div>
+      <div class="card"><div class="ico">📥</div><h3>The nRF Connect capture</h3><p>From Step 2 below — paste the text or attach a screenshot.</p></div>
+      <div class="card"><div class="ico">⚖️</div><h3>Two known readings</h3><p>e.g. empty vs. a known weight, or two temperatures. Paired captures make decoding far easier.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="capture">
+  <div class="wrap">
+    <h2>Step 2 — Capture the data with nRF Connect</h2>
+    <p class="sub">
+      <a href="https://www.nordicsemi.com/Products/Development-tools/nRF-Connect-for-mobile">nRF Connect for Mobile</a>
+      is a free Bluetooth Low Energy scanner from Nordic Semiconductor
+      (<a href="https://play.google.com/store/apps/details?id=no.nordicsemi.android.mcp">Android</a> ·
+      <a href="https://apps.apple.com/app/nrf-connect-for-mobile/id1054362403">iOS</a>). It shows exactly
+      what your device broadcasts and exposes — precisely what HiveHub's firmware needs. Every existing
+      HiveHub decoder was confirmed against real nRF Connect captures.
+    </p>
+    <p>Install it, enable Bluetooth and location/nearby-devices permission, put the device next to your phone, and follow the path that matches it.</p>
+
+    <div class="steps" style="margin-bottom:1.6rem">
+      <div class="step"><div class="n">A</div><div>
+        <h3>Find the device &amp; its MAC</h3>
+        <p>Open the <strong>Scanner</strong> tab and <strong>Scan</strong>. Spot your device by name, or by
+           <strong>RSSI</strong> — hold it against the phone and it should be the strongest (least negative,
+           e.g. −40 dBm) entry.</p>
+        <p>Note the <strong>MAC address</strong> (six hex pairs, e.g. <code>AA:BB:CC:DD:EE:FF</code>). HiveHub always
+           needs this. <span class="muted">On iOS the real MAC is hidden behind a random UUID — capture it anyway
+           and mention it came from iOS.</span></p>
+      </div></div>
+    </div>
+
+    <div class="path-cols">
+      <div class="card">
+        <h3>📡 It's an advertising beacon</h3>
+        <p class="muted" style="margin-bottom:.7rem">Broadcasts readings with no connection (like HolyIot, RuuviTag).</p>
+        <ol style="padding-left:1.1rem; color:var(--ink-soft)">
+          <li>Expand the device's entry to reveal the <strong>raw advertising data</strong>.</li>
+          <li>Copy the <strong>Manufacturer data</strong> and/or <strong>Service data</strong> hex — that's the payload. The first two bytes of manufacturer data are the <strong>Company ID</strong>; note it too.</li>
+          <li>If it rotates through several <strong>different frames</strong>, watch for ~30 s and capture <strong>each distinct payload</strong>.</li>
+          <li><strong>Change a real value</strong> (warm it, breathe on it, add weight) and re-capture — the bytes that move reveal the scaling.</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>🔗 It's a GATT device</h3>
+        <p class="muted" style="margin-bottom:.7rem">You connect and subscribe (like HiveHeart, HiveScale).</p>
+        <ol style="padding-left:1.1rem; color:var(--ink-soft)">
+          <li>Tap <strong>CONNECT</strong>. nRF Connect lists the <strong>Services</strong> and their <strong>Characteristics</strong>, each with a UUID.</li>
+          <li>Note the <strong>Service UUID</strong> and <strong>Characteristic UUID</strong> for anything with sensor data — live readings almost always have <strong>Notify</strong> or <strong>Indicate</strong>.</li>
+          <li>Tap ↓ to <strong>Read</strong>, or ↓↓ to <strong>subscribe</strong> to notifications. The <strong>Value</strong> field shows the raw hex bytes.</li>
+          <li><strong>Change a real measurement</strong> and capture the new bytes so the byte positions can be decoded.</li>
+        </ol>
+      </div>
+    </div>
+
+    <h3 style="margin-top:1.6rem">What a good capture looks like</h3>
+    <div class="capture-example">
+<pre class="mono">Device:        Acme BeeScale 3000
+MAC:           AA:BB:CC:DD:EE:FF   (Android)
+Type:          GATT (connect + notify)
+Service UUID:  0000abcd-0000-1000-8000-00805f9b34fb
+Char UUID:     0000abce-0000-1000-8000-00805f9b34fb  (Notify)
+
+Empty scale:   04 00 1a 2c 00 00 e3 07 ...
++5.00 kg:      04 00 1a 2c f4 01 e3 07 ...   (bytes 4–5 changed)
+Temp ~22 °C:   ... (byte 6 = 0x16 = 22?)</pre>
+    </div>
+    <div class="note info">
+      Even a rougher capture than this is genuinely useful — attach whatever nRF Connect
+      shows you and note what the real reading was, and the rest can be worked out from there.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Step 3 — What happens next</h2>
+    <p class="sub">
+      Once the issue and capture are in, the payload can be decoded and a driver added to the firmware
+      BLE bridge. New devices are then exposed in the on-device provisioning portal and the
+      <a href="configurator.html">config tool</a> like the existing ones — just pair and go. Follow your issue for progress.
+    </p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/MacNite/HiveHub/issues/new">🐛 Request support on GitHub</a>
+      <a class="btn ghost" href="https://github.com/MacNite/HiveHub/blob/main/docs/device-not-supported-yet.md">Read the full docs</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap" style="display:flex; gap:1rem; justify-content:space-between; width:100%; flex-wrap:wrap">
+    <span>🐝 HiveHub — MIT © 2026 Maximilian Nitschke</span>
+    <span><a href="index.html">Home</a> · <a href="hardware-helper.html">Hardware helper</a> · <a href="configurator.html">Config tool</a> · <a href="https://github.com/MacNite/HiveHub">GitHub</a></span>
+  </div>
+</footer>
+
+<script src="assets/theme.js"></script>
+</body>
+</html>
