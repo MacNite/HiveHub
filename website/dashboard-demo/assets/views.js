@@ -26,9 +26,13 @@ let activeCharts = [];
 // leaves a chart, so a slid position survives a data reload.
 let cursorT = null;
 
-// Selected/hovered category index for spectrum charts (x-axis is a fixed set
-// of bands rather than time), shared the same way cursorT is.
-let cursorBand = null;
+// Hovered category index per spectrum "group". A group is the set of charts
+// that share the same x-axis categories (all mic 5-band charts form one group;
+// all HiveHeart 16-range charts form another). Keying by group means hovering a
+// mic band moves the cursor only on the other mic charts, never onto the
+// HiveHeart spectrum whose categories (frequency ranges) are unrelated. Persists
+// across re-renders the same way cursorT does.
+let cursorBandByGroup = Object.create(null);
 
 // Expected send cadence for the active device (ms). Charts use this only as a
 // fallback expected spacing for series too short to infer their own cadence;
@@ -49,7 +53,8 @@ export function clearCharts() { activeCharts = []; }
 export function drawCharts() {
   for (const c of activeCharts) {
     if (c.kind === "spectrum") {
-      drawSpectrumChart(c.canvas, c.categories, c.snapshots, { ...c.opts, cursorIndex: cursorBand, bandStats: c.bandStats });
+      const cb = cursorBandByGroup[c.group];
+      drawSpectrumChart(c.canvas, c.categories, c.snapshots, { ...c.opts, cursorIndex: cb == null ? null : cb, bandStats: c.bandStats });
       updateSpectrumReadout(c);
       continue;
     }
@@ -69,6 +74,7 @@ function updateReadout(c) {
 
 function updateSpectrumReadout(c) {
   if (!c.hint) return;
+  const cursorBand = cursorBandByGroup[c.group];
   if (cursorBand == null) { c.hint.textContent = "Drag to inspect"; return; }
   const idx = Math.min(c.categories.length - 1, Math.max(0, cursorBand));
   const unit = c.opts.unit ? " " + c.opts.unit : "";
@@ -109,7 +115,7 @@ function setCursorBandFromEvent(canvas, e) {
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const frac = scale.n <= 1 ? 0 : Math.min(1, Math.max(0, (x - scale.padL) / scale.plotW));
-  cursorBand = Math.round(frac * (scale.n - 1));
+  cursorBandByGroup[canvas._spectrumGroup] = Math.round(frac * (scale.n - 1));
   if (!cursorRaf) {
     cursorRaf = requestAnimationFrame(() => { cursorRaf = 0; drawCharts(); });
   }
@@ -145,7 +151,7 @@ function attachSpectrumCursor(canvas) {
   });
   canvas.addEventListener("pointerleave", (e) => {
     if (e.pointerType !== "mouse") return;
-    cursorBand = null;
+    delete cursorBandByGroup[canvas._spectrumGroup];
     drawCharts();
   });
 }
@@ -195,7 +201,11 @@ function spectrumChartCard(title, sub, categories, snapshots, bandStats, color, 
       el("span", { class: "swatch", style: "background:var(--chart-latest)" }), "Latest"),
     hint);
   const rangeNote = oldest && newest ? ` (${fmtDateTime(oldest.t)} – ${fmtDateTime(newest.t)})` : "";
-  const chart = { canvas, kind: "spectrum", categories, snapshots, bandStats, opts: { ...opts, color }, hint };
+  // Charts sharing the same categories (all mic charts, or all HiveHeart charts)
+  // share a hover cursor; different category sets are independent groups.
+  const group = categories.join("|");
+  canvas._spectrumGroup = group;
+  const chart = { canvas, kind: "spectrum", group, categories, snapshots, bandStats, opts: { ...opts, color }, hint };
   activeCharts.push(chart);
   if (snapshots.length) attachSpectrumCursor(canvas);
   return el("div", { class: "card chart-card" },
