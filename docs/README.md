@@ -33,6 +33,7 @@ hardware list, firmware/server setup, and API summary, start with the
 - [ruuvitag-ble-sensor.md](ruuvitag-ble-sensor.md) — RuuviTag four-in-one beacon on the same scan bridge.
 - [beehivemonitoring-gatt.md](beehivemonitoring-gatt.md) — beehivemonitoring.com HiveHeart (in-hive) and HiveScale (weight) over GATT.
 - [hivetraffic-bee-counter.md](hivetraffic-bee-counter.md) — HiveTraffic wireless entrance bee counter (BLE/GATT).
+- [device-not-supported-yet.md](device-not-supported-yet.md) — **my device isn't in the list yet**: how to request support as a GitHub issue and capture the integration data with nRF Connect.
 
 ## Firmware behaviour
 

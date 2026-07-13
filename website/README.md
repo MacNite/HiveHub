@@ -25,6 +25,10 @@ A small, dependency-free static site for HiveHub:
 - **`hardware-helper.html`** — a questionnaire that turns power / scale-count /
   BLE-device answers into a recommended build profile to carry into the build
   guide and config tool.
+- **`device-support.html`** — the *"my device isn't supported yet"* guide:
+  request support for a new wireless device as a GitHub issue, and capture the
+  integration data (MAC, advertising payload or GATT service/characteristic) with
+  nRF Connect. Mirrors [`docs/device-not-supported-yet.md`](../docs/device-not-supported-yet.md).
 - **`dashboard-demo/`** — a backend-free, click-through demo of the built-in
   HiveHub dashboard (`server/dashboard/`) running on generated sample data. This
   is what the site's **"Dashboard demo"** links point at. Its shared CSS/JS are
