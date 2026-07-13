@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>HiveHub — ESP32 data collector for up to 18 beehives</title>
-<meta name="description" content="HiveHub is an open-source ESP32 data collector for up to 18 beehives: weight, temperature, sound, vibration and power monitoring with a self-hosted FastAPI backend." />
+<title>HiveHub — ESP32 data collector for up to 16 beehives</title>
+<meta name="description" content="HiveHub is an open-source ESP32 data collector for up to 16 beehives: weight, temperature, sound, vibration and power monitoring with a self-hosted FastAPI backend." />
 <meta name="color-scheme" content="light dark" />
 <!-- Set the theme before the stylesheet paints, so there's no light flash. -->
 <script>
@@ -43,12 +43,12 @@
 <a id="top"></a>
 <section class="hero" style="border-top:none">
   <div class="wrap">
-    <span class="badge">⚠ Work in progress — PCBs are not yet field-tested</span>
-    <h1>Collect data from up to 18 beehives.<br>Self-hosted. Open source.</h1>
+    <span class="badge">✅ All published PCBs are tested and working</span>
+    <h1>Collect data from up to 16 beehives.<br>Self-hosted. Open source.</h1>
     <p class="lead">
       HiveHub is an ESP32-based data collector for beehive sensors and scales. It
       tracks weight, temperature, humidity, in-hive sound and vibration, and power
-      state for up to 18 hives per ESP32, and sends everything to your own
+      state for up to 16 hives per ESP32, and sends everything to your own
       FastAPI + PostgreSQL backend.
     </p>
     <div class="cta">
@@ -63,15 +63,15 @@
 <section id="features">
   <div class="wrap">
     <h2>What it measures</h2>
-    <p class="sub">Up to 18 hives per ESP32. Every sensor below is optional and
+    <p class="sub">Up to 16 hives per ESP32. Every sensor below is optional and
        compiled in per device — start with weight and add the rest as you build.</p>
     <div class="grid">
-      <div class="card"><div class="ico">⚖️</div><h3>Up to 18 scales</h3><p>NAU7802 load-cell channels (I2C, with an optional mux — plus HX711 on the legacy board) give each colony its own scale — up to 18 hives per ESP32.</p></div>
+      <div class="card"><div class="ico">⚖️</div><h3>Up to 16 scales</h3><p>NAU7802 load-cell channels (I2C, with an optional TCA9548A mux on the breakout PCB) give each colony its own scale — up to 16 hives per ESP32.</p></div>
       <div class="card"><div class="ico">🌡️</div><h3>Per-hive temperature</h3><p>DS18B20 probes on a shared 1-Wire bus, or an in-hive BLE sensor as an alternative source.</p></div>
       <div class="card"><div class="ico">🔊</div><h3>In-hive sound</h3><p>Stereo INMP441 I2S microphones with per-band FFT energy to catch piping and stress.</p></div>
       <div class="card"><div class="ico">📳</div><h3>Comb vibration</h3><p>An in-hive BLE sensor (e.g. HiveInside) captures the ~20 Hz pre-swarm signal microphones miss.</p></div>
       <div class="card"><div class="ico">💧</div><h3>Ambient T &amp; humidity</h3><p>An SHT4x on I2C records weather context alongside the hive readings.</p></div>
-      <div class="card"><div class="ico">🛰️</div><h3>Off-grid power telemetry</h3><p>Optional INA219 solar and MAX17048 LiPo fuel-gauge data for unattended deployments.</p></div>
+      <div class="card"><div class="ico">🛰️</div><h3>Off-grid power telemetry</h3><p>Optional MAX17048 LiPo fuel-gauge data (voltage, state-of-charge, alerts) for unattended deployments.</p></div>
       <div class="card"><div class="ico">📶</div><h3>BLE in-hive sensor</h3><p>Pair a HolyIot 25015 beacon (temp / humidity / pressure / accel) — no extra wiring.</p></div>
       <div class="card"><div class="ico">💾</div><h3>SD cache &amp; backup</h3><p>Local buffering when uploads fail, plus an append-only persistent measurement backup.</p></div>
       <div class="card"><div class="ico">🐝</div><h3>BeeCounter ready</h3><p>Optional entrance traffic counting of incoming and outgoing bees over I2C.</p></div>
@@ -89,13 +89,13 @@
     <p class="sub">A mains-or-solar ESP32 board plus off-the-shelf modules on pin headers —
        no SMD soldering required for the core build. All published PCBs are tested and working.</p>
     <div class="grid">
-      <div class="card"><h3>Core (recommended)</h3><p>Seeed XIAO <strong>ESP32-C6</strong> · <strong>NAU7802</strong> I2C load-cell channels (scale to 18 hives) · DS18B20 probes · SHT4x · DS3231 RTC · microSD module · setup button · BLE in-hive sensors. Legacy 30-pin ESP32 builds with HX711 + INMP441 mics remain supported.</p></div>
-      <div class="card"><h3>Optional off-grid</h3><p>INA219 solar telemetry · MAX17048 LiPo gauge · CN3791 solar charger · TPS63020 buck-boost · TP4056 · LiPo + solar panel.</p></div>
-      <div class="card"><h3>Boards</h3><p>KiCad <strong>ESP32-C6 Scale Module</strong> (recommended, central board) and the <strong>NAU7802 breakout</strong> for up to 16 wired scales — all tested and working, fabrication outputs included. A Power Module and the legacy 30-pin Scale Module round out the set.</p></div>
+      <div class="card"><h3>Core (recommended)</h3><p>Seeed XIAO <strong>ESP32-C6</strong> on the <strong>Scale Module V0.4</strong> with off-the-shelf modules on pin headers: <strong>NAU7802</strong> load-cell ADC · <strong>MAX17048</strong> battery gauge · <strong>TPS63020</strong> buck-boost · <strong>TP4056</strong> USB-C charger · DS3231 RTC · microSD · SHT40 · DS18B20 probes · setup button · BLE in-hive sensors.</p></div>
+      <div class="card"><h3>Optional: up to 16 scales</h3><p>The <strong>NAU7802 breakout PCB</strong> adds a <strong>TCA9548A</strong> I2C mux with up to <strong>8× NAU7802</strong> — 16 scales in total per HiveHub.</p></div>
+      <div class="card"><h3>Optional off-grid</h3><p>CN3791 MPPT solar charger · 6 V solar panel · LiPo or 18650 pack — the MAX17048 reports the battery state with every measurement.</p></div>
     </div>
     <p style="margin-top:1.5rem">
-      Full pin mapping, wiring diagrams and the BOM live in the
-      <a href="https://github.com/MacNite/HiveHub#hardware">repository README</a> and
+      The full build guide with BOM, prices, wiring and setup lives on the
+      <a href="build.html">Build your own</a> page; pin maps are in
       <a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md</a>.
     </p>
   </div>
@@ -105,7 +105,8 @@
   <div class="wrap">
     <h2>Set up your own HiveHub</h2>
     <p class="sub">Five steps from clone to live data. The firmware is a PlatformIO project;
-       the backend is a Docker Compose stack.</p>
+       the backend is a Docker Compose stack. Building the hardware too? Start with the
+       <a href="build.html">full build guide</a>.</p>
     <div class="steps">
 
       <div class="step"><div class="n">1</div><div>
@@ -156,7 +157,7 @@ pio device monitor   # 115200 baud</pre>
         <p><strong>HivePal (multi-user app):</strong> claim the device from
            <a href="https://github.com/martinhrvn/hive-pal">HivePal</a> with
            <code>POST /api/v1/app/devices/claim</code> for accounts, sharing and mobile access.</p>
-        <p class="muted">Field configuration without reflashing: press the setup button (GPIO27) to open the
+        <p class="muted">Field configuration without reflashing: press the setup button to open the
            <code>HiveHub-Setup-XXXX</code> Wi-Fi provisioning portal at <code>http://192.168.4.1</code>.</p>
       </div></div>
 
@@ -174,7 +175,7 @@ pio device monitor   # 115200 baud</pre>
       <div class="card"><h3>📳 Accelerometer</h3><p>Per-hive vibration monitoring and the ~20 Hz swarm signal.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
       <div class="card"><h3>📶 BLE sensor</h3><p>Pairing the HolyIot 25015 in-hive beacon.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/holyiot-ble-sensor.md">docs/holyiot-ble-sensor.md →</a></p></div>
       <div class="card"><h3>🧠 Insights</h3><p>The rule-based colony detector catalogue and its sources.</p><p><a href="insights.html">How insights work →</a></p></div>
-      <div class="card"><h3>🛰️ Off-grid notes</h3><p>Solar (INA219) and LiPo (MAX17048) power-telemetry behaviour.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/offgrid-firmware-notes.md">docs/offgrid-firmware-notes.md →</a></p></div>
+      <div class="card"><h3>🛰️ Off-grid notes</h3><p>LiPo (MAX17048) power-telemetry behaviour and the wake/deep-sleep cycle.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/offgrid-firmware-notes.md">docs/offgrid-firmware-notes.md →</a></p></div>
     </div>
   </div>
 </section>

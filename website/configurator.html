@@ -185,22 +185,6 @@
             </div>
           </div>
 
-          <!-- INA219 solar -->
-          <div class="sensor" data-sensor="ina219">
-            <span class="tag">Off-grid · I2C</span>
-            <label class="toggle">
-              <input type="checkbox" data-toggle />
-              <span><span class="t-title">☀️ INA219 solar monitor</span>
-              <span class="t-desc">Solar / load voltage, current and power telemetry.</span></span>
-            </label>
-            <div class="opts">
-              <div class="field" style="max-width:240px">
-                <label>I2C address</label>
-                <select data-opt="addr"><option selected>0x40</option><option>0x41</option><option>0x44</option><option>0x45</option></select>
-              </div>
-            </div>
-          </div>
-
           <!-- MAX17048 battery -->
           <div class="sensor" data-sensor="max17048">
             <span class="tag">Off-grid · I2C</span>
@@ -219,7 +203,7 @@
         </fieldset>
 
         <fieldset>
-          <legend>Hives &amp; sensors <span class="hint" style="font-weight:400">— up to 18, matches the on-device provisioning portal</span></legend>
+          <legend>Hives &amp; sensors <span class="hint" style="font-weight:400">— up to 16, matches the on-device provisioning portal</span></legend>
           <p class="muted" style="margin:.2rem 0 .6rem; font-size:.9rem">
             Add a hive, choose its single scale source, then optionally one in-hive sensor: a
             wired DS18B20 probe or one wireless BLE/GATT sensor. Pre-seeding this here is
@@ -230,7 +214,7 @@
           <p class="muted" id="hive-empty" style="font-size:.85rem;margin:.4rem 0 0">No hives yet — add one below.</p>
           <button type="button" class="btn ghost small" id="add-hive" style="margin-top:.6rem">➕ Add hive</button>
           <p class="muted" id="hive-full" style="display:none;font-size:.82rem;margin:.5rem 0 0">
-            Maximum of 18 hives reached.</p>
+            Maximum number of hives reached.</p>
 
           <!-- Shared in-hive BLE scan + collision-avoidance options (only when a hive uses a beacon/GATT sensor) -->
           <div id="inhive-global" style="display:none; margin-top:1rem">

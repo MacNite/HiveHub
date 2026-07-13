@@ -10,13 +10,21 @@ A small, dependency-free static site for HiveHub:
   research the thresholds are based on. Mirrors `docs/insights.md` and
   `docs/insights-sources-tldr.md`.
 - **`configurator.html`** — an in-browser tool that builds a firmware
-  `secrets.h` from a form (device identity, Wi-Fi, up to 18 hives with their
+  `secrets.h` from a form (device identity, Wi-Fi, up to 16 hives with their
   scale/sensor mapping, off-grid power modules) and lets you copy or download
   it. Everything runs client-side; no values are sent anywhere.
-- **`build.html`** — a "Build your own" landing page. Currently a **placeholder**
-  for a future parts/BOM configurator (choose hive count + sensors → tailored
-  bill of materials) alongside assembly and setup tutorials. For now it links to
-  the existing hardware BOM, wiring, multi-hive guide, PCB design and config tool.
+- **`build.html`** — the complete **"Build your own" guide**: the bill of
+  materials with rough price estimates (rendered table + downloadable
+  `assets/hivehub-bom.csv`), PCB ordering, assembly & wiring notes (power
+  jumper, mux rule, I2C pull-up/brownout warning, collapsed hand-wiring pin
+  reference), a condensed VS Code + PlatformIO firmware walkthrough,
+  backend deployment and scale calibration. All steps are downloadable as
+  `assets/hivehub-build-guide.pdf` (regenerate it after content changes —
+  print `build.html` to PDF, e.g.
+  `chromium --headless --print-to-pdf=assets/hivehub-build-guide.pdf build.html`).
+- **`hardware-helper.html`** — a questionnaire that turns power / scale-count /
+  BLE-device answers into a recommended build profile to carry into the build
+  guide and config tool.
 - **`dashboard-demo/`** — a backend-free, click-through demo of the built-in
   HiveHub dashboard (`server/dashboard/`) running on generated sample data. This
   is what the site's **"Dashboard demo"** links point at. Its shared CSS/JS are
@@ -65,11 +73,10 @@ layout:
 
 | Sensor / module | Macro(s) it writes |
 |---|---|
-| Hives *(up to 18)* | `HIVE_COUNT` + one `HIVE_<n>_JSON` blob per hive (scale channel, DS18B20 ROM or BLE/GATT sensor) |
+| Hives *(up to 16)* | `HIVE_COUNT` + one `HIVE_<n>_JSON` blob per hive (scale channel, DS18B20 ROM or BLE/GATT sensor) |
 | INMP441 microphones | `ENABLE_INMP441_MICS`, pins, sample rate/frames |
 | LIS3DH / LIS2DH12 accelerometers | `ENABLE_LIS3DH_ACCEL`, addresses, range, ODR, sample count |
 | In-hive BLE bridge + GATT | `ENABLE_BLE_SCAN`, scan seconds, active scan, company id, `HIVEINSIDE_USE_GATT`, `ENABLE_BEEHIVE_GATT`, `ENABLE_WIRELESS_BEECOUNTER`, `BLE_OVERRIDE_*` — all derived from what the hives above use |
-| INA219 solar monitor | `ENABLE_INA219_SOLAR`, I2C address |
 | MAX17048 LiPo fuel gauge | `ENABLE_MAX17048_BATTERY`, alert percent |
 
 > The INMP441 mics default to **off** (toggle on if fitted). The wired
@@ -81,7 +88,7 @@ layout:
 
 ### Hives & sensors
 
-Use **➕ Add hive** to add up to 18 hives (2 by default, matching the
+Use **➕ Add hive** to add up to 16 hives (2 by default, matching the
 historical starting point). Each hive card has:
 
 - a **Scale** dropdown: no scale, an HX711 pin pair (classic board only), a

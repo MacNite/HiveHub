@@ -105,7 +105,7 @@ Submit a measurement from a device. On the first measurement from a new `device_
 
 **Auth:** `X-API-Key` (per-device key — registered on first contact, enforced thereafter)
 
-> **Multi-hive payload (firmware v0.20.0+).** Devices now report up to 18 hives in
+> **Multi-hive payload (firmware v0.20.0+).** Devices now report up to 16 hives in
 > a `hives` array (see below); the flat `scale_1/2_*` / `hive_1/2_*` fields are the
 > legacy two-hive form and remain accepted. The server stores per-hive data in the
 > `hive_readings` table, mirrors hives 1–2 onto the legacy columns, and on read
@@ -136,7 +136,7 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | Field | Type | Required | Description |
 |---|---|---:|---|
 | `device_id` | string | Yes | Unique device identifier |
-| `hives` | array | No | Per-hive readings (up to 18); see the multi-hive note above |
+| `hives` | array | No | Per-hive readings (up to 16); see the multi-hive note above |
 | `hive_count` | int | No | Number of hives the device has configured |
 | `claim_code` | string | No | Pairing code; the firmware sends it only until its first successful upload, after which it is omitted to limit exposure |
 | `timestamp` | ISO datetime | No | Measurement time; server receive time is used if omitted |
@@ -153,9 +153,9 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | `battery_soc_percent` | number | No | LiPo state-of-charge percentage |
 | `battery_alert` | boolean | No | MAX17048 alert state |
 | `battery_monitor_ok` | boolean | No | Whether MAX17048 was detected/read successfully |
-| `solar_monitor_ok` | boolean | No | Whether INA219 was detected/read successfully |
-| `solar_bus_voltage_v` | number | No | INA219 bus voltage |
-| `solar_shunt_voltage_mv` | number | No | INA219 shunt voltage |
+| `solar_monitor_ok` | boolean | No | Legacy INA219 solar monitor detected/read successfully (no longer part of the recommended build) |
+| `solar_bus_voltage_v` | number | No | Legacy INA219 bus voltage |
+| `solar_shunt_voltage_mv` | number | No | Legacy INA219 shunt voltage |
 | `solar_load_voltage_v` | number | No | Calculated load voltage |
 | `solar_current_ma` | number | No | Solar/load current |
 | `solar_power_mw` | number | No | Solar/load power |
@@ -366,13 +366,13 @@ server**. The provisioning AP is offline, so a tare/span done there (and a
 "Save and reboot" that carries one) only sets a pending flag in NVS. On the first
 cycle with WiFi after the reboot, the device `PATCH`es its live calibration so the
 backend no longer holds only defaults: hives 1–2 in the `scale1/2_offset` +
-`factor` fields, and **hives 3–18 in the `hive_scales` array** (below). That
+`factor` fields, and **hives 3+ in the `hive_scales` array** (below). That
 `PATCH` bumps `config_version`; the device records the returned version as its
 last-applied one, so the config fetch in the same cycle does not bridge those
 values straight back.
 
 The GET response includes a `hive_scales` array carrying the stored calibration
-for hives 3–18 (hives 1–2 stay in the `scale1/2_*` fields):
+for hives 3+ (hives 1–2 stay in the `scale1/2_*` fields):
 
 ```json
 "hive_scales": [

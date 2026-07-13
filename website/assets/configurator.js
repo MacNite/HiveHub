@@ -391,14 +391,6 @@
 
     buildHives(p);
 
-    // INA219 solar
-    p("// INA219 solar / load power telemetry (off-grid).");
-    p(def("ENABLE_INA219_SOLAR", enabled("ina219") ? "1" : "0"));
-    if (enabled("ina219")) {
-      p(def("INA219_I2C_ADDRESS", opt("ina219", "addr")));
-    }
-    p("");
-
     // MAX17048 battery
     p("// MAX17048 LiPo fuel gauge telemetry (off-grid).");
     p(def("ENABLE_MAX17048_BATTERY", enabled("max17048") ? "1" : "0"));
@@ -453,7 +445,7 @@
     var anyBeecounter = HIVES.some(function (h) { return h.bl && h.bl.t === "beecounter"; });
 
     p("// ==============================");
-    p("// HIVES (up to 18 — matches the on-device provisioning portal's registry)");
+    p("// HIVES (up to 16 — matches the on-device provisioning portal's registry)");
     p("// ==============================");
     p("// Each HIVE_i_JSON pre-seeds hive i's scale source and in-hive sensor on");
     p("// FIRST BOOT, in the exact blob shape the portal itself saves to NVS (see");

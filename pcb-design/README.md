@@ -4,11 +4,15 @@
 
 ## Recommended setup
 
-- Use the **ESP32-C6 Scale Module (V0.4)** as your main HiveHub controller. It collects data from up to 18 BLE sensors and reads **2 scales through its on-board NAU7802**.
-- Use the **NAU7802 breakout PCB (v0.2)** *without* an MCU to attach up to **16 wired scales** to a HiveHub (8× NAU7802 behind the on-board TCA9548A mux).
+- Use the **XIAO ESP32-C6 on the Scale Module (V0.4)** as your main HiveHub controller, populated with the recommended module set: **NAU7802** (2 scales), **MAX17048** battery gauge, **TPS63020** buck-boost, **TP4056** USB-C charger, **DS3231 RTC**, **micro-SD module** and **SHT40**. It also collects data from up to 16 BLE in-hive sensors.
+- **Optional, for 3+ scales:** add the **NAU7802 breakout PCB (v0.2)** *without* an MCU — its **TCA9548A** I2C multiplexer carries up to **8× NAU7802** for up to **16 wired scales** in total. When the breakout/mux is used, install **no NAU7802 on the Scale Module** (all NAU7802s share I2C address `0x2A` and would collide).
 - You can also populate the NAU7802 breakout PCB *with* a XIAO MCU and run it as a **standalone BLE scale sensor** with up to 16 scales. Do **not** use the breakout with an MCU as a HiveHub itself — it has no RTC and no SD card.
 - The **ESP32 30-pin Scale Module** is **no longer recommended** — it is obsolete and will be discontinued soon.
 - The **Power Module** still works, but it will **probably be discontinued soon** in favour of powering the C6 Scale Module directly.
+
+> **Power jumper:** the Scale Module's 1×3 power-selection header chooses the
+> supply path — jumper in the **top position when powered from a battery**
+> (via the TPS63020), **bottom position when powered from a 5 V power supply**.
 
 ## Boards in this directory
 
@@ -183,9 +187,21 @@ The board is powered via J10 (Power In, 5 V) or through J19 (Power Module Header
 | NAU7802 | `0x2A` (fixed — hence the TCA9548A mux at `0x70` on the breakout) |
 | DS3231 RTC | `0x68` |
 | SHT40 | `0x44` |
+| MAX17048 | `0x36` |
 | BeeCounter 1 / 2 | `0x30` / `0x31` |
 
-4.7 kΩ pull-up resistors for SDA/SCL are on the boards. Do not add additional pull-ups on plugged-in modules unless the total effective pull-up resistance stays reasonable — if multiple I2C modules with built-in pull-ups are installed, verify the combined resistance.
+### I2C pull-ups — avoid bus brownouts
+
+The plugged-in modules bring their own SDA/SCL pull-ups, and they stack **in
+parallel** on the shared bus: **NAU7802, MAX17048 and TCA9548A mux modules**
+generally carry **10 kΩ** pull-ups, while **RTC (DS3231) modules and wired SHT40
+breakouts** often carry **4.7 kΩ**. Too many in parallel pull the bus so hard
+that devices can no longer drive the lines low — the bus "browns out" and
+devices ACK intermittently or drop off.
+
+- **Remove the 4.7 kΩ pull-up resistors from the RTC module** before installing it.
+- **Do not populate additional pull-up resistors on the PCB** — leave the
+  pull-up footprints empty. The modules' own 10 kΩ pull-ups are sufficient.
 
 ---
 
@@ -194,12 +210,13 @@ The board is powered via J10 (Power In, 5 V) or through J19 (Power Module Header
 Fabrication outputs (Gerbers + drill files, plus a ready-to-upload `.zip`) are in each board's `fabrication/` subdirectory. Before ordering:
 
 - Confirm all module header footprints match the physical modules you are using (pin pitch, row spacing).
-- Verify pull-up resistor values on the I2C bus.
+- Leave the I2C pull-up footprints unpopulated (see the I2C pull-up note above).
 - For the 30-pin board only: verify the INMP441 L/R pin routing as described above.
 
 ## Assembly notes
 
 - Plug modules into headers — do not solder modules directly to the board.
+- Remove the 4.7 kΩ I2C pull-ups from the DS3231 RTC module before plugging it in (see the I2C pull-up note above).
 - Install the DS3231 coin cell before sealing the enclosure.
 - Route load-cell wiring away from the SD module and any switching supplies.
 - Label each scale's wiring at both the load-cell combinator and the PCB terminals.

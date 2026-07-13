@@ -1,9 +1,9 @@
 # HiveHub off-grid power telemetry
 
 Off-grid builds add **power telemetry** to the normal HiveHub measurement
-cycle: solar/load monitoring with an INA219 and LiPo fuel-gauge monitoring with a
-MAX17048. Both are optional I2C modules and are disabled by default. Enable them
-per device in `firmware/include/secrets.h`.
+cycle: LiPo fuel-gauge monitoring with a **MAX17048** (the module used on the
+ESP32-C6 Scale Module V0.4). It is an optional I2C module and disabled by
+default. Enable it per device in `firmware/include/secrets.h`.
 
 > **Connectivity has moved.** Earlier firmware supported a SIM7080G LTE/NB-IoT
 > modem for cellular transport. That has been removed — the ESP32 firmware is now
@@ -20,51 +20,22 @@ per device in `firmware/include/secrets.h`.
 Use numeric `0` / `1` values because the firmware uses preprocessor `#if` checks.
 
 ```cpp
-#define ENABLE_INA219_SOLAR      1
 #define ENABLE_MAX17048_BATTERY  1
 ```
 
 | Flag | Default | Effect |
 |---|---|---|
-| `ENABLE_INA219_SOLAR` | `0` | Compiles in INA219 support and adds solar/load telemetry fields |
 | `ENABLE_MAX17048_BATTERY` | `0` | Compiles in MAX17048 support and adds LiPo telemetry fields |
 
-When you enable a flag, also uncomment the matching library in
-`firmware/platformio.ini`:
+The matching library (`sparkfun/SparkFun MAX1704x Fuel Gauge Arduino Library`)
+is listed in `firmware/platformio.ini`.
 
-- `adafruit/Adafruit INA219` for `ENABLE_INA219_SOLAR`
-- `sparkfun/SparkFun MAX1704x Fuel Gauge Arduino Library` for `ENABLE_MAX17048_BATTERY`
-
----
-
-## Solar telemetry with INA219
-
-Enable:
-
-```cpp
-#define ENABLE_INA219_SOLAR 1
-#define INA219_I2C_ADDRESS  0x40
-```
-
-Wiring uses the shared I2C bus:
-
-| INA219 pin | ESP32 pin |
-|---|---|
-| VCC | 3.3 V |
-| GND | GND |
-| SDA | GPIO21 |
-| SCL | GPIO22 |
-
-Measurement fields:
-
-| Field | Description |
-|---|---|
-| `solar_monitor_ok` | INA219 detected and readable |
-| `solar_bus_voltage_v` | Bus voltage in volts |
-| `solar_shunt_voltage_mv` | Shunt voltage in millivolts |
-| `solar_load_voltage_v` | Calculated bus + shunt voltage |
-| `solar_current_ma` | Current in milliamps |
-| `solar_power_mw` | Power in milliwatts |
+> **Legacy: INA219 solar telemetry.** Earlier builds could add an INA219 for
+> solar/load voltage-current-power telemetry (`ENABLE_INA219_SOLAR`,
+> `solar_*` measurement fields). The flag and the backend columns still exist
+> for old devices, but the INA219 is no longer part of the recommended setup
+> or the BOM — the MAX17048 covers battery state, which is what matters for
+> an unattended deployment.
 
 ---
 
@@ -114,15 +85,15 @@ These fields are returned by `/api/v1/measurements/latest` and the HivePal app m
 Normal operation is one wake cycle:
 
 1. Wake from deep sleep or reset.
-2. Power up sensors and HX711 modules.
+2. Power up sensors and scale ADCs.
 3. Measure weights, temperatures, acoustic levels, and optional power telemetry.
 4. Connect over Wi-Fi.
 5. Upload the measurement and retry cached rows.
 6. Poll config and commands.
-7. Power down HX711 and SD where supported.
+7. Power down the scale ADCs and SD where supported.
 8. Enter deep sleep until the next send interval.
 
-The INA219 and MAX17048 sit on the shared I2C bus and are read in step 3 when their flags are enabled.
+The MAX17048 sits on the shared I2C bus and is read in step 3 when its flag is enabled.
 
 ---
 
