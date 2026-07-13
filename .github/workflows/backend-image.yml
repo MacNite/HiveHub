@@ -2,7 +2,7 @@ name: Build backend Docker image
 
 on:
   push:
-    branches: [main, "claude/**"]
+    branches: [main, "claude/**","feature/**"]
     paths:
       - "server/**"
       - ".github/workflows/backend-image.yml"
