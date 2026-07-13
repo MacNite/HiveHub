@@ -256,7 +256,9 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   }
   if (empty) empty.remove();
 
-  const padL = 48, padR = 14, padT = 12, padB = 26;
+  const padL = 48, padR = 14, padB = 26;
+  // Extra top room for the HiveHeart semantic-band heading row, when present.
+  const padT = 12 + (opts.semanticBands && opts.semanticBands.length ? 14 : 0);
   const plotW = cssW - padL - padR;
   const plotH = cssH - padT - padB;
   const n = categories.length;
@@ -286,6 +288,27 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
 
   ctx.font = FONT;
   ctx.textBaseline = "middle";
+
+  // Semantic acoustic-band annotations (HiveHeart spectrum only): faint
+  // alternating background stripes with a heading centered above each conceptual
+  // band. They overlap several HiveHeart frequency ranges, so they are visual
+  // groupings only, never mapped one-to-one onto a bin. `from`/`to` are fractional
+  // bin indices (see hiveheartSemanticSpans in views.js).
+  if (opts.semanticBands && opts.semanticBands.length) {
+    const clampFi = (fi) => Math.max(0, Math.min(n - 1, fi));
+    ctx.textAlign = "center";
+    opts.semanticBands.forEach((band, bi) => {
+      const x0 = xOf(clampFi(band.from)), x1 = xOf(clampFi(band.to));
+      if (bi % 2 === 0) {
+        ctx.fillStyle = withAlpha("#808080", 0.1);
+        ctx.fillRect(x0, padT, x1 - x0, plotH);
+      }
+      if (band.label && x1 - x0 > ctx.measureText(band.label).width + 6) {
+        ctx.fillStyle = axis;
+        ctx.fillText(band.label, (x0 + x1) / 2, 7);
+      }
+    });
+  }
 
   // Y gridlines + labels
   const yTicks = niceTicks(yMin, yMax, 5);
@@ -363,6 +386,26 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
       if (typeof v !== "number" || !Number.isFinite(v)) return;
       ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2); ctx.fill();
     });
+  }
+
+  // Reported peak-frequency marker (HiveHeart `frequency_hz`): a dashed vertical
+  // guide at the frequency HiveHeart independently reports, positioned by
+  // fractional bin index so it lines up with the plotted ranges.
+  if (opts.marker && Number.isFinite(opts.marker.index) && n > 1) {
+    const mx = xOf(Math.max(0, Math.min(n - 1, opts.marker.index)));
+    const col = "#d6336c";
+    ctx.save();
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath(); ctx.moveTo(mx, padT); ctx.lineTo(mx, cssH - padB); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(mx, padT, 3, 0, Math.PI * 2); ctx.fill();
+    if (opts.marker.label) {
+      const near = mx > cssW - padR - 46;
+      ctx.textAlign = near ? "right" : "left";
+      ctx.fillText(opts.marker.label, near ? mx - 5 : mx + 5, padT + 7);
+    }
+    ctx.restore();
   }
 
   // Interactive cursor: dashed vertical guide at the hovered band, plus a

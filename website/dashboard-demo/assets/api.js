@@ -125,6 +125,8 @@ function point(dev, t, i) {
     const hhActivity = 0.6 + 0.4 * Math.sin(dayPhase); // busier by day
     m.hiveheart_2_fft_bins = HH_FFT_SHAPE.map((base, b) =>
       Math.max(0, Math.min(15, Math.round(base * hhActivity + 1.2 * noise(seed + 40 + b)))));
+    // HiveHeart's independently-reported peak frequency (Hz), ~colony hum band.
+    m.hiveheart_2_frequency_hz = 180 + 60 * Math.sin(dayPhase) + 10 * noise(seed + 60);
   }
   if (dev.solar) {
     m.solar_power_mw = solarP;

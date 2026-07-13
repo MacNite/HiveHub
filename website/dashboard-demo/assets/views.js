@@ -199,6 +199,9 @@ function spectrumChartCard(title, sub, categories, snapshots, bandStats, color, 
     el("span", { class: "spectrum-gradient", style: `background:linear-gradient(90deg, ${withAlpha(color, 0.15)}, ${color})` }),
     el("span", { class: "lg" },
       el("span", { class: "swatch", style: "background:var(--chart-latest)" }), "Latest"),
+    // Marker key (HiveHeart peak frequency) — colour matches drawSpectrumChart.
+    opts.marker ? el("span", { class: "lg" },
+      el("span", { class: "swatch", style: "background:#d6336c" }), "Peak freq") : null,
     hint);
   const rangeNote = oldest && newest ? ` (${fmtDateTime(oldest.t)} – ${fmtDateTime(newest.t)})` : "";
   // Charts sharing the same categories (all mic charts, or all HiveHeart charts)
@@ -678,6 +681,56 @@ const HIVEHEART_FFT_RANGES = [
 const HIVEHEART_FFT_LABELS = HIVEHEART_FFT_RANGES.map(([lo, hi]) => `${lo}–${hi}`);
 const HIVEHEART_FFT_BIN_COUNT = 16;
 
+// Conceptual acoustic bands shown as grouped headings over the HiveHeart x-axis.
+// Display only: each spans several HiveHeart ranges (and boundaries fall mid-bin),
+// so they are annotations, never a 1:1 bin→band mapping (see insights.py). HiveHeart
+// tops out at 1500 Hz, so there is no High (1500–3000 Hz) band.
+const HIVEHEART_SEMANTIC_BANDS = [
+  ["Sub-bass", 0, 150], ["Hum", 150, 300], ["Piping", 300, 550], ["Stress", 550, 1500],
+];
+
+// Map a frequency (Hz) to a fractional HiveHeart bin index (0..15) so a marker or
+// band boundary lines up with the plotted bins. Bin i occupies index [i-0.5, i+0.5];
+// a frequency inside range i interpolates within that slot. Frequencies in the
+// 845–853 Hz gap land on the boundary between the adjacent bins; out-of-range
+// clamps to the first/last bin; null when not finite.
+function hiveheartFreqToIndex(hz) {
+  if (!Number.isFinite(hz)) return null;
+  const R = HIVEHEART_FFT_RANGES;
+  if (hz <= R[0][0]) return 0;
+  if (hz >= R[R.length - 1][1]) return R.length - 1;
+  for (let i = 0; i < R.length; i++) {
+    const [lo, hi] = R[i];
+    if (hz >= lo && hz <= hi) return (i - 0.5) + (hi > lo ? (hz - lo) / (hi - lo) : 0.5);
+  }
+  for (let i = 0; i < R.length - 1; i++) {
+    if (hz > R[i][1] && hz < R[i + 1][0]) return i + 0.5; // in the inter-bin gap
+  }
+  return null;
+}
+
+// The semantic bands as {label, from, to} fractional-index spans for the chart.
+function hiveheartSemanticSpans() {
+  return HIVEHEART_SEMANTIC_BANDS.map(([label, lo, hi]) => ({
+    label,
+    from: hiveheartFreqToIndex(lo) ?? 0,
+    to: hiveheartFreqToIndex(hi) ?? (HIVEHEART_FFT_BIN_COUNT - 1),
+  }));
+}
+
+// The most recent finite HiveHeart peak frequency (Hz) reported for this hive —
+// the independent frequency_hz value, drawn as a marker on the spectrum.
+function latestHiveheartFreq(ref) {
+  const key = `hiveheart_${ref.hive}_frequency_hz`;
+  const rows = ref.latest ? [ref.latest, ...ref.measurements] : ref.measurements;
+  for (const m of rows) {
+    if (m == null || m[key] == null || m[key] === "") continue;
+    const y = Number(m[key]);
+    if (Number.isFinite(y)) return y;
+  }
+  return null;
+}
+
 // Coerce a measurement's decoded HiveHeart fft_bins into a 16-number array, or
 // null when absent/malformed (legacy rows, or a hive with no HiveHeart sensor).
 function hiveheartBins(m, key) {
@@ -752,10 +805,16 @@ function renderFrequency(root, state) {
       if (snaps.length) {
         const key = `hiveheart_${ref.hive}_fft_bins`;
         const bandStats = hiveheartBandMinMax(ref.measurements, key);
+        const opts = {
+          unit: "level", yDigits: 0, yMin: 0, yMax: 15, xUnit: "Hz",
+          semanticBands: hiveheartSemanticSpans(),
+        };
+        const freqHz = latestHiveheartFreq(ref);
+        const markerIndex = hiveheartFreqToIndex(freqHz);
+        if (markerIndex != null) opts.marker = { index: markerIndex, label: `${Math.round(freqHz)} Hz` };
         charts.push(spectrumChartCard(`HiveHeart spectrum — ${refLabel(state, ref)}`,
-          "HiveHeart in-hive FFT — 16 frequency ranges (Hz), relative level 0–15 (not dBFS); bold line is the latest reading, fainter lines are earlier ones. Sub-bass/Hum/Piping/Stress are approximate and span several ranges",
-          HIVEHEART_FFT_LABELS, snaps, bandStats, paletteColor(i),
-          { unit: "level", yDigits: 0, yMin: 0, yMax: 15, xUnit: "Hz" }));
+          "HiveHeart in-hive FFT — 16 frequency ranges (Hz), relative level 0–15 (not dBFS); bold line is the latest reading, fainter lines are earlier ones. The dashed pink marker is HiveHeart's reported peak frequency; the Sub-bass/Hum/Piping/Stress headings are approximate and span several ranges",
+          HIVEHEART_FFT_LABELS, snaps, bandStats, paletteColor(i), opts));
       } else {
         charts.push(el("div", { class: "card" },
           el("h2", {}, `HiveHeart spectrum — ${refLabel(state, ref)}`),
