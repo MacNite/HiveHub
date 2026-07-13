@@ -73,9 +73,13 @@ function updateSpectrumReadout(c) {
   const idx = Math.min(c.categories.length - 1, Math.max(0, cursorBand));
   const unit = c.opts.unit ? " " + c.opts.unit : "";
   const digits = c.opts.yDigits ?? 1;
+  // Append an x-axis unit (e.g. "Hz" for HiveHeart's frequency ranges) to the
+  // hovered category so the full range reads clearly even when the axis ticks
+  // are thinned; mic bands leave xUnit unset.
+  const cat = c.opts.xUnit ? `${c.categories[idx]} ${c.opts.xUnit}` : c.categories[idx];
   const stats = c.bandStats[idx];
-  if (!stats) { c.hint.textContent = `${c.categories[idx]}: ${DASH}`; return; }
-  c.hint.textContent = `${c.categories[idx]}: ${fmt(stats.min, digits)} to ${fmt(stats.max, digits)}${unit}`;
+  if (!stats) { c.hint.textContent = `${cat}: ${DASH}`; return; }
+  c.hint.textContent = `${cat}: ${fmt(stats.min, digits)} to ${fmt(stats.max, digits)}${unit}`;
 }
 
 // Turn a pointer event's x position into a timestamp using the chart's last
@@ -650,23 +654,106 @@ function bandMinMax(measurements, keysList) {
   });
 }
 
+// ── HiveHeart in-hive FFT spectrum ───────────────────────────────────────────
+// The 16 HiveHeart frequency ranges (Hz). Mirrors server/hiveheart_fft.py
+// FFT_RANGES_HZ — keep in sync with the backend. Note the known 845–853 Hz gap
+// between bins 9 and 10 (preserved verbatim per the vendor table; see the TODO
+// in hiveheart_fft.py). HiveHeart values are RELATIVE levels 0–15, NOT dBFS, so
+// they are charted on their own 0–15 axis, never overlaid on the mic spectrum.
+const HIVEHEART_FFT_RANGES = [
+  [0, 93], [94, 187], [188, 281], [282, 375], [376, 479], [480, 562],
+  [563, 656], [657, 750], [751, 844], [854, 937], [938, 1031], [1032, 1125],
+  [1126, 1218], [1219, 1312], [1313, 1406], [1407, 1500],
+];
+const HIVEHEART_FFT_LABELS = HIVEHEART_FFT_RANGES.map(([lo, hi]) => `${lo}–${hi}`);
+const HIVEHEART_FFT_BIN_COUNT = 16;
+
+// Coerce a measurement's decoded HiveHeart fft_bins into a 16-number array, or
+// null when absent/malformed (legacy rows, or a hive with no HiveHeart sensor).
+function hiveheartBins(m, key) {
+  const v = m && m[key];
+  if (!Array.isArray(v) || v.length !== HIVEHEART_FFT_BIN_COUNT) return null;
+  const out = v.map((x) => (typeof x === "number" ? x : Number(x)));
+  return out.every((x) => Number.isFinite(x)) ? out : null;
+}
+
+// Oldest→newest {t, values[16]} snapshots for a hive's HiveHeart spectrum,
+// downsampled to at most SPECTRUM_MAX_SNAPSHOTS (mirrors spectrumSnapshots).
+function hiveheartSnapshots(measurements, key) {
+  const rows = [];
+  for (let i = measurements.length - 1; i >= 0; i--) {
+    const m = measurements[i];
+    const bins = hiveheartBins(m, key);
+    if (!bins) continue;
+    const t = new Date(m.measured_at).getTime();
+    if (Number.isNaN(t)) continue;
+    rows.push({ t, values: bins });
+  }
+  if (rows.length <= SPECTRUM_MAX_SNAPSHOTS) return rows;
+  const step = (rows.length - 1) / (SPECTRUM_MAX_SNAPSHOTS - 1);
+  const out = [];
+  for (let i = 0; i < SPECTRUM_MAX_SNAPSHOTS; i++) out.push(rows[Math.round(i * step)]);
+  return out;
+}
+
+// Per-range {min,max} across the full selected range for the hover readout.
+function hiveheartBandMinMax(measurements, key) {
+  const stats = HIVEHEART_FFT_RANGES.map(() => ({ min: Infinity, max: -Infinity }));
+  for (const m of measurements) {
+    const bins = hiveheartBins(m, key);
+    if (!bins) continue;
+    bins.forEach((y, i) => {
+      if (y < stats[i].min) stats[i].min = y;
+      if (y > stats[i].max) stats[i].max = y;
+    });
+  }
+  return stats.map((s) => (s.min === Infinity ? null : s));
+}
+
 function renderFrequency(root, state) {
   const refs = selectedRefs(state);
   const categories = BANDS.map(([, label]) => label);
   const charts = [];
+  let micCharts = 0;
   refs.forEach((ref, i) => {
     const keysList = BANDS.map(([k]) => micKeys(ref.hive, `band_${k}_dbfs`));
     const snapshots = spectrumSnapshots(ref.measurements, keysList);
     if (snapshots.length) {
+      micCharts++;
       const bandStats = bandMinMax(ref.measurements, keysList);
       charts.push(spectrumChartCard(`Frequency bands — ${refLabel(state, ref)}`,
         "FFT energy by band, like a spectrum analyzer — the bold line is the latest reading, fainter lines are earlier ones",
         categories, snapshots, bandStats, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
     }
   });
-  if (!charts.length) {
+  if (!micCharts) {
     charts.push(el("div", { class: "card" }, el("p", { class: "muted-text" }, "No frequency-band data reported by this device.")));
   }
+
+  // HiveHeart in-hive spectrum. Rendered as a separate 16-range diagram on its
+  // own 0–15 relative-level axis (HiveHeart levels are not dBFS). Only shown when
+  // at least one selected hive reports HiveHeart FFT, then a card per hive so a
+  // hive without data gets a clear empty state without cluttering non-HiveHeart
+  // setups.
+  const hhSnaps = refs.map((ref) => hiveheartSnapshots(ref.measurements, `hiveheart_${ref.hive}_fft_bins`));
+  if (hhSnaps.some((s) => s.length)) {
+    refs.forEach((ref, i) => {
+      const snaps = hhSnaps[i];
+      if (snaps.length) {
+        const key = `hiveheart_${ref.hive}_fft_bins`;
+        const bandStats = hiveheartBandMinMax(ref.measurements, key);
+        charts.push(spectrumChartCard(`HiveHeart spectrum — ${refLabel(state, ref)}`,
+          "HiveHeart in-hive FFT — 16 frequency ranges (Hz), relative level 0–15 (not dBFS); bold line is the latest reading, fainter lines are earlier ones. Sub-bass/Hum/Piping/Stress are approximate and span several ranges",
+          HIVEHEART_FFT_LABELS, snaps, bandStats, paletteColor(i),
+          { unit: "level", yDigits: 0, yMin: 0, yMax: 15, xUnit: "Hz" }));
+      } else {
+        charts.push(el("div", { class: "card" },
+          el("h2", {}, `HiveHeart spectrum — ${refLabel(state, ref)}`),
+          el("p", { class: "muted-text" }, "No HiveHeart FFT data for this hive.")));
+      }
+    });
+  }
+
   root.append(tsView("Frequency bands", "FFT energy by acoustic band", state, { charts }));
 }
 

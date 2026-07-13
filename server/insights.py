@@ -103,6 +103,14 @@ from typing import Any, Iterable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from hiveheart_fft import (
+    decode_fft,
+    dominant_range,
+    semantic_bands,
+    spectral_centroid_hz,
+    total_activity,
+)
+
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -118,6 +126,7 @@ AlertCategory = Literal[
     "decline",
     "winter",
     "harvest",
+    "acoustic",
 ]
 ChannelRef = Literal[1, 2]
 
@@ -265,6 +274,33 @@ WINTER_CLEANSING_FLIGHT_OUT = 50.0
 # genuinely "active" foraging traffic, used to cross-check the weight-based
 # foraging classifier.
 FORAGING_ACTIVE_OUT_PER_HOUR = 100.0
+
+# ── HiveHeart FFT thresholds (relative levels 0–15, NOT dBFS) ────────────────
+# The beehivemonitoring.com HiveHeart reports a packed 16-band FFT of *relative*
+# levels (0–15), decoded by server/hiveheart_fft.py. These are NOT calibrated
+# acoustics, so every rule below compares a hive against ITS OWN rolling baseline
+# rather than any absolute threshold, and stays informational/low-severity until
+# the levels are validated against real field data. Never compare these values to
+# the microphone dBFS bands. Recalibrate all constants once field data exists.
+#
+# History is required before any alert: a recent window and a longer baseline
+# window, each with a minimum number of decoded spectra.
+HIVEHEART_RECENT_HOURS = 24
+HIVEHEART_BASELINE_DAYS = 7
+HIVEHEART_MIN_RECENT_SAMPLES = 4
+HIVEHEART_MIN_BASELINE_SAMPLES = 12
+# Ignore near-silent spectra so decoder noise on a quiet hive can't trip a rule
+# (mean total relative activity across the 16 bins, out of a 0–240 theoretical
+# max).
+HIVEHEART_MIN_ACTIVITY = 4.0
+# A "meaningful" shift in the relative-level-weighted spectral centroid (Hz) of
+# the recent window vs the baseline. Deliberately coarse (roughly one HiveHeart
+# bin width) — this is a change detector, not a tuned classifier.
+HIVEHEART_CENTROID_SHIFT_HZ = 120.0
+# A "meaningful" rise in mean total relative activity: recent >= this multiple of
+# baseline (and above the activity floor). Broad-spectrum loudening is coarse but
+# real; kept at "info" severity.
+HIVEHEART_ACTIVITY_RISE_MULT = 1.6
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +455,60 @@ def _mic_band_snapshot(
         "stress":   _latest_band(measurements, f"mic_{side}_band_stress_dbfs"),
         "high":     _latest_band(measurements, f"mic_{side}_band_high_dbfs"),
     }
+
+
+# ---------------------------------------------------------------------------
+# HiveHeart FFT helpers (relative-level spectrum, not dBFS)
+# ---------------------------------------------------------------------------
+
+HiveHeartBins = tuple[datetime, list[int]]
+
+
+def _hiveheart_bins_from_row(m: dict[str, Any], channel: int) -> Optional[list[int]]:
+    """Decoded 16-bin HiveHeart spectrum for one hive from a measurement row.
+
+    Prefers the already-decoded ``hiveheart_{ch}_fft_bins`` the read layer
+    attaches; falls back to decoding the raw ``hiveheart_{ch}_fft`` array (or the
+    nested ``hives[].hiveheart.fft``). Returns None when absent or malformed.
+    """
+    bins = m.get(f"hiveheart_{channel}_fft_bins")
+    if isinstance(bins, list) and len(bins) == 16:
+        return bins
+    raw = m.get(f"hiveheart_{channel}_fft")
+    decoded = decode_fft(raw)
+    if decoded is not None:
+        return decoded
+    for h in (m.get("hives") or []):
+        if h.get("index") != channel:
+            continue
+        hh = h.get("hiveheart")
+        if isinstance(hh, dict):
+            hb = hh.get("fft_bins")
+            if isinstance(hb, list) and len(hb) == 16:
+                return hb
+            return decode_fft(hh.get("fft"))
+    return None
+
+
+def _hiveheart_fft_series(
+    measurements: Iterable[dict[str, Any]], channel: int
+) -> list[HiveHeartBins]:
+    """Time-ordered (timestamp, 16-bin) HiveHeart spectra for one hive.
+
+    Malformed / missing spectra are skipped so a corrupt row never derails the
+    detector (mirrors the safe-omit contract of hiveheart_fft.decode_fft).
+    """
+    out: list[HiveHeartBins] = []
+    for m in measurements:
+        ts = _as_datetime(m.get("measured_at"))
+        if ts is None:
+            continue
+        bins = _hiveheart_bins_from_row(m, channel)
+        if bins is None:
+            continue
+        out.append((ts, bins))
+    out.sort(key=lambda p: p[0])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1795,6 +1885,105 @@ def detect_harvest_window(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+def detect_hiveheart_spectrum_shift(
+    fft_series: list[HiveHeartBins],
+    channel: int,
+    now: datetime,
+) -> Optional[Alert]:
+    """Informational HiveHeart FFT change detector (relative levels, not dBFS).
+
+    Compares a recent window of decoded HiveHeart spectra against the hive's own
+    longer baseline and flags a meaningful shift in either the relative-level
+    spectral centroid or the total relative activity. There are no calibrated
+    absolute thresholds for these packed 0–15 levels, so this stays low-severity
+    ("info"): it says "this colony's in-hive sound changed", never a direct
+    acoustic diagnosis, and never compares against the microphone dBFS bands.
+    """
+    if len(fft_series) < HIVEHEART_MIN_RECENT_SAMPLES + HIVEHEART_MIN_BASELINE_SAMPLES:
+        return None
+    recent_cut = now - timedelta(hours=HIVEHEART_RECENT_HOURS)
+    baseline_cut = now - timedelta(days=HIVEHEART_BASELINE_DAYS)
+    recent = [(t, b) for t, b in fft_series if t > recent_cut]
+    baseline = [(t, b) for t, b in fft_series if baseline_cut < t <= recent_cut]
+    if len(recent) < HIVEHEART_MIN_RECENT_SAMPLES or len(baseline) < HIVEHEART_MIN_BASELINE_SAMPLES:
+        return None
+
+    def _mean_of(rows, fn):
+        vals = [fn(b) for _, b in rows]
+        return _safe_mean([v for v in vals if v is not None])
+
+    recent_activity = _mean_of(recent, total_activity)
+    baseline_activity = _mean_of(baseline, total_activity)
+    recent_centroid = _mean_of(recent, spectral_centroid_hz)
+    baseline_centroid = _mean_of(baseline, spectral_centroid_hz)
+
+    # Require the hive to be acoustically "awake" recently; a silent HiveHeart
+    # carries no meaningful spectrum to compare against its baseline.
+    if recent_activity is None or recent_activity < HIVEHEART_MIN_ACTIVITY:
+        return None
+
+    reasons: list[str] = []
+    evidence: dict[str, Any] = {
+        "recent_activity": round(recent_activity, 2),
+        "baseline_activity": round(baseline_activity, 2) if baseline_activity is not None else None,
+        "recent_centroid_hz": round(recent_centroid, 1) if recent_centroid is not None else None,
+        "baseline_centroid_hz": round(baseline_centroid, 1) if baseline_centroid is not None else None,
+        "recent_samples": len(recent),
+        "baseline_samples": len(baseline),
+    }
+
+    if recent_centroid is not None and baseline_centroid is not None:
+        centroid_shift = recent_centroid - baseline_centroid
+        if abs(centroid_shift) >= HIVEHEART_CENTROID_SHIFT_HZ:
+            direction = "up" if centroid_shift > 0 else "down"
+            reasons.append(
+                f"spectral centroid shifted {direction} by {abs(centroid_shift):.0f} Hz "
+                f"({baseline_centroid:.0f}->{recent_centroid:.0f} Hz)"
+            )
+            evidence["centroid_shift_hz"] = round(centroid_shift, 1)
+
+    if (
+        baseline_activity is not None
+        and baseline_activity >= HIVEHEART_MIN_ACTIVITY
+        and recent_activity >= baseline_activity * HIVEHEART_ACTIVITY_RISE_MULT
+    ):
+        reasons.append(
+            f"total relative activity rose {recent_activity / baseline_activity:.1f}x "
+            f"({baseline_activity:.0f}->{recent_activity:.0f})"
+        )
+        evidence["activity_rise_mult"] = round(recent_activity / baseline_activity, 2)
+
+    if not reasons:
+        return None
+
+    # Context: which frequencies dominate now, and the overlap-weighted bands.
+    latest_bins = recent[-1][1]
+    dom = dominant_range(latest_bins)
+    if dom:
+        evidence["dominant_range_hz"] = [dom["lower_hz"], dom["upper_hz"]]
+    bands = semantic_bands(latest_bins)
+    if bands is not None:
+        evidence["semantic_bands"] = {k: round(v, 2) for k, v in bands.items()}
+
+    return Alert(
+        id=f"hiveheart-spectrum-shift-ch{channel}",
+        category="acoustic",
+        severity="info",
+        channel=channel,
+        title=f"HiveHeart spectrum shift (hive {channel})",
+        description=(
+            "In-hive HiveHeart sound changed vs this colony's 7-day baseline: "
+            + "; ".join(reasons)
+            + ". Relative levels (0-15), not calibrated dB — informational only."
+        ),
+        window_start=recent[0][0],
+        window_end=now,
+        confidence=0.4,
+        evidence=evidence,
+        source="HiveHeart FFT baseline comparison (relative levels; uncalibrated)",
+    )
+
+
 def compute_insights(
     measurements: list[dict[str, Any]],
     now: Optional[datetime] = None,
@@ -1832,10 +2021,11 @@ def compute_insights(
         bee_out = _extract_counter_series(measurements, channel, "out")
         accel_swarm = _accel_band_series(measurements, channel, "swarm")
         accel_rms = _accel_rms_series(measurements, channel)
+        hiveheart_fft = _hiveheart_fft_series(measurements, channel)
 
         if (
             not weight and not hive_temp and not bee_in and not bee_out
-            and not accel_swarm and not accel_rms
+            and not accel_swarm and not accel_rms and not hiveheart_fft
         ):
             continue
 
@@ -1867,6 +2057,7 @@ def compute_insights(
                 hive_temp, ambient, weight, channel, now, bee_out
             ),
             lambda: detect_harvest_window(weight, channel, now),
+            lambda: detect_hiveheart_spectrum_shift(hiveheart_fft, channel, now),
         ):
             try:
                 alert = detector()

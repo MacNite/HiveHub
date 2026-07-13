@@ -44,6 +44,12 @@ function noise(seed) {
 
 const DAY = 86400000;
 
+// Base HiveHeart FFT profile (16 decoded relative levels, 0–15), shaped like a
+// colony spectrum: energy concentrated in the low hum ranges (~188–375 Hz) and
+// tapering toward the top of the 1.5 kHz band. Scaled by daytime activity and
+// jittered per point in the demo series (see point()).
+const HH_FFT_SHAPE = [6, 9, 12, 10, 7, 5, 4, 3, 2, 2, 2, 1, 1, 1, 1, 1];
+
 function point(dev, t, i) {
   const dayPhase = 2 * Math.PI * ((t % DAY) / DAY); // 0..2π over a day
   const monthSwell = Math.sin((2 * Math.PI * t) / (DAY * 30));
@@ -114,6 +120,11 @@ function point(dev, t, i) {
     m.bee_counter_2_interval_out = Math.round(traffic * 0.78 + 4 * noise(seed + 19) + 3);
     // Hive 2 carries a wireless acoustic sensor (HiveHeart) on its own cell.
     m.hiveheart_2_battery_v = 3.68 - 0.02 * days + 0.015 * Math.sin(dayPhase) + 0.01 * noise(seed + 32);
+    // Decoded HiveHeart 16-band FFT (relative levels 0–15), matching the
+    // hiveheart_N_fft_bins the backend derives from the raw 8-byte array.
+    const hhActivity = 0.6 + 0.4 * Math.sin(dayPhase); // busier by day
+    m.hiveheart_2_fft_bins = HH_FFT_SHAPE.map((base, b) =>
+      Math.max(0, Math.min(15, Math.round(base * hhActivity + 1.2 * noise(seed + 40 + b)))));
   }
   if (dev.solar) {
     m.solar_power_mw = solarP;
