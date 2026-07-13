@@ -2,6 +2,7 @@
 readings, temperature compensation and serialization."""
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import psycopg
@@ -1396,30 +1397,64 @@ def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
         put(f"bee_counter_{n}_interval_out", c.get("interval_out"))
 
 
+_HIVEHEART_FLAT_FFT_RE = re.compile(r"^hiveheart_(\d+)_fft$")
+
+
 def _attach_hiveheart_fft_bins(m: dict) -> None:
-    """Decode each hive's raw HiveHeart FFT into 16 relative levels and expose it.
+    """Decode the raw HiveHeart FFT into 16 relative levels and expose it.
 
     The raw 8-byte array stays canonical (``hives[].hiveheart.fft`` /
     ``hiveheart_N_fft``). This adds the decoded ``fft_bins`` in both the nested and
     the flat shapes so old flat records and new nested records return the same
     public API shape. Malformed / missing FFT data yields no ``fft_bins`` (the raw
     value is left untouched) rather than raising — see hiveheart_fft.decode_fft.
+
+    Two carriers are handled so the bins appear regardless of how the firmware
+    delivered the FFT:
+
+    1. Nested ``hives[].hiveheart.fft`` — the canonical multi-hive path.
+    2. Flat ``hiveheart_N_fft`` — the flat compatibility field (surfaced from
+       ``raw_json`` by the SELECT, or synthesized). The device sends both, but
+       when a measurement has hive_readings rows whose nested hive carries no
+       ``hiveheart`` (older/edge firmware, or a HiveHeart that only populated the
+       flat field), the nested pass alone would drop the FFT. The flat pass
+       recovers it and mirrors the bins back onto the matching hive so the nested
+       shape stays consistent too.
     """
+    hives_by_index: dict[int, dict] = {}
     for h in m.get("hives") or []:
+        idx = h.get("index")
+        if idx is not None:
+            hives_by_index[idx] = h
         hh = h.get("hiveheart")
         if not isinstance(hh, dict):
             continue
-        raw = hh.get("fft")
-        if raw is None:
-            continue
-        bins = decode_fft(raw)
+        bins = decode_fft(hh.get("fft"))
         if bins is None:
             continue
         hh["fft_bins"] = bins
-        n = h.get("index")
-        if n:
-            m[f"hiveheart_{n}_fft"] = raw
-            m[f"hiveheart_{n}_fft_bins"] = bins
+        if idx:
+            m[f"hiveheart_{idx}_fft"] = hh.get("fft")
+            m[f"hiveheart_{idx}_fft_bins"] = bins
+
+    # Flat-field fallback: decode any hiveheart_N_fft that the nested pass didn't
+    # already resolve, and mirror it onto the matching hive when one exists.
+    for key in [k for k in m if isinstance(k, str) and _HIVEHEART_FLAT_FFT_RE.match(k)]:
+        n = int(_HIVEHEART_FLAT_FFT_RE.match(key).group(1))
+        if m.get(f"hiveheart_{n}_fft_bins") is not None:
+            continue
+        bins = decode_fft(m.get(key))
+        if bins is None:
+            continue
+        m[f"hiveheart_{n}_fft_bins"] = bins
+        hive = hives_by_index.get(n)
+        if hive is not None:
+            hh = hive.get("hiveheart")
+            if not isinstance(hh, dict):
+                hh = {}
+                hive["hiveheart"] = hh
+            hh.setdefault("fft", m.get(key))
+            hh["fft_bins"] = bins
 
 
 def attach_hive_readings(measurements: list[dict]) -> list[dict]:

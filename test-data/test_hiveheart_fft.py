@@ -163,6 +163,18 @@ check("nested generates flat hiveheart_2_fft_bins alias", nested["hiveheart_2_ff
 check("flat and nested agree on decoded bins",
       flat["hives"][0]["hiveheart"]["fft_bins"] == nested["hives"][0]["hiveheart"]["fft_bins"])
 
+# Flat FFT carried alongside hive_readings that have NO nested hiveheart: the
+# flat-field fallback must still decode the bins (regression — this shape dropped
+# the FFT before the fallback was added) and mirror them onto the hive.
+flat_with_hives = _reconstruct({
+    "id": 7,
+    "hiveheart_1_fft": list(SAMPLE_RAW),
+    "hives": [{"index": 1, "temp_c": 24.0}],  # nested hive present, no hiveheart
+})
+check("flat-with-hives exposes hiveheart_1_fft_bins", flat_with_hives.get("hiveheart_1_fft_bins") == SAMPLE_BINS)
+check("flat-with-hives mirrors bins onto the hive",
+      (flat_with_hives["hives"][0].get("hiveheart") or {}).get("fft_bins") == SAMPLE_BINS)
+
 # Malformed historical values must be safely omitted, not crash the endpoint.
 malformed = _reconstruct({"id": None, "hiveheart_1_fft": [1, 2, 3]})
 check("malformed historical fft omits fft_bins", "hiveheart_1_fft_bins" not in malformed)
