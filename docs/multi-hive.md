@@ -188,12 +188,12 @@ read, insights and temperature-compensation paths keep working unchanged.
 
 ## Known limitations
 
-- Connection-based **HiveHeart / wireless HiveScale** GATT sensors are read for
-  **any hive** (`beehive_gatt.cpp` walks the whole registry), same as
-  the passive beacons. **HiveTraffic** wireless bee counters are still read for
-  **hives 1–2 only** (`bee_counter_client.cpp` uses the legacy two-slot
-  `trafficMac0/1` globals) — a pairing stored on hive 3+ is saved but not yet
-  polled.
+- Connection-based **HiveHeart / wireless HiveScale** GATT sensors and
+  **HiveTraffic** wireless bee counters are all read for **any hive**
+  (`beehive_gatt.cpp` and `bee_counter_client.cpp::bleRunCycleRegistry` each
+  walk the whole registry), same as the passive beacons. Only the **wired I2C
+  BeeCounter** stays limited to hives 1–2, since it has just two fixed I2C
+  addresses (`0x30` / `0x31`).
 - Server-side **temperature compensation** is applied to hives 1–2; hives 3+
   use raw weight for insights.
 - **Scale calibration** is synced for all hives (firmware 0.23.7+): hives 1–2 via

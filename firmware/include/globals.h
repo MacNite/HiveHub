@@ -116,13 +116,11 @@ extern String scaleMac0;
 extern String scaleMac1;
 #endif
 
-#if ENABLE_WIRELESS_BEECOUNTER
-// Paired HiveTraffic (wireless entrance bee counter) GATT MACs ("" when
-// unpaired). Slot 0 -> counter 1, slot 1 -> counter 2. Stored under the
-// portal's counter_mac{0,1} keys; seeded from WBEECNT_n_MAC in secrets.h.
-extern String trafficMac0;
-extern String trafficMac1;
-#endif
+// HiveTraffic (wireless entrance bee counter) MACs are no longer bridged into
+// per-slot globals: bee_counter_client.cpp reads them straight from the hive
+// registry (gHives[].ble "beecounter" pairings), so a counter works on any hive
+// up to MAX_HIVES. Paired in the portal, seeded via HIVE_i_JSON, or via the
+// legacy WBEECNT_n_MAC / counter_mac{0,1} keys (migrated into the registry).
 
 // ---- Scale calibration ----------------------------------------------------
 extern long scale1Offset;

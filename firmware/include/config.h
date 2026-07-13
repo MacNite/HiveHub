@@ -475,9 +475,13 @@
 // IN/OUT totals into the same bee_counter_{slot}_* fields the wired I2C
 // BeeCounter uses. The wire format is totals-only: the backend differences
 // consecutive totals into per-interval counts (see
-// 2026-easy-bee-counter/docs/ble-mode.md), so no CMD_LATCH reset is written. A
-// hive with a paired MAC uses BLE; one without falls back to the wired I2C
-// BeeCounter. All HiveTraffic devices share one service/characteristic UUID.
+// 2026-easy-bee-counter/docs/ble-mode.md), so no CMD_LATCH reset is written.
+// The wireless counter is read straight from the hive registry, so it can be
+// paired to ANY hive up to MAX_HIVES (like HiveHeart/HiveScale). The wired I2C
+// BeeCounter has two fixed I2C addresses and so stays limited to hives 1–2: a
+// hive with a paired MAC uses BLE; hive 1 or 2 without one falls back to the
+// wired I2C BeeCounter. All HiveTraffic devices share one service/characteristic
+// UUID.
 #ifndef BEECOUNTER_GATT_SERVICE_UUID
 #define BEECOUNTER_GATT_SERVICE_UUID "8e8b0101-7a1c-4b9e-9a2f-1d6e0b9c1a01"
 #endif

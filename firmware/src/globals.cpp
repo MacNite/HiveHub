@@ -66,11 +66,6 @@ String scaleMac0;
 String scaleMac1;
 #endif
 
-#if ENABLE_WIRELESS_BEECOUNTER
-String trafficMac0;
-String trafficMac1;
-#endif
-
 long scale1Offset = 0;
 long scale2Offset = 0;
 float scale1Factor = -7050.0f;

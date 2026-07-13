@@ -54,7 +54,7 @@
     ["hiveinside_nrf54", "HiveInside (nRF54LM20A) — beacon"],
     ["hiveinside", "Legacy HiveInside (ESP32-C6) — GATT"],
     ["hiveheart", "HiveHeart — GATT (beehivemonitoring.com)"],
-    ["beecounter", "HiveTraffic counter — GATT (polled on hives 1-2 only)"]
+    ["beecounter", "HiveTraffic counter — GATT (any hive)"]
   ];
   // Passively-scanned beacon types (one shared scan window, no GATT connection).
   // The nRF54 HiveInside advertises continuously, so it joins the beacon set;
@@ -474,8 +474,9 @@
     p(def("ENABLE_BEEHIVE_GATT", anyBeehive ? "1" : "0"));
     p("");
 
-    p("// HiveTraffic wireless entrance bee counter (GATT). Currently only polled");
-    p("// on hives 1-2 regardless of which hive(s) a counter is paired to.");
+    p("// HiveTraffic wireless entrance bee counter (GATT). Read from the hive");
+    p("// registry, so a counter works on any hive it is paired to (the wired I2C");
+    p("// BeeCounter is the one still limited to hives 1-2).");
     p(def("ENABLE_WIRELESS_BEECOUNTER", anyBeecounter ? "1" : "0"));
     p("");
 

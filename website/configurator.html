@@ -223,8 +223,8 @@
               cycle, so any number of them costs the same scan. GATT sensors (HiveInside GATT,
               HiveHeart, wireless HiveScale, HiveTraffic) connect serially and are capped at
               <code>MAX_GATT_READS_PER_CYCLE</code> per wake — see <code>docs/multi-hive.md</code>.
-              <strong>HiveTraffic wireless bee counters are currently only polled on hives 1 and 2</strong>
-              regardless of which hive you pair one to.</div>
+              <strong>HiveTraffic wireless bee counters can be paired to any hive.</strong>
+              Only the wired I2C BeeCounter stays limited to hives 1 and 2 (two fixed I2C addresses).</div>
             <div class="field row">
               <div><label>Scan seconds / cycle</label><input type="number" id="ble_scan" value="6" min="1" /></div>
               <div><label>HolyIot Company ID (16-bit)</label><input type="text" id="ble_company" value="0xFFFF" /></div>
