@@ -331,6 +331,10 @@ function buildState() {
       deleteUser: (id) => api.deleteUser(id),
       changePassword: (cur, next) => api.changePassword(cur, next),
       updateEmail: (email) => api.updateEmail(email),
+      // Insight-alert notifications: channel config for the "Alert notifications"
+      // card + a test-send that surfaces the read-only demo notice.
+      notificationsConfig: () => api.notificationsConfig(),
+      testNotification: () => api.testNotification(),
     },
   };
 }

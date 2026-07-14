@@ -16,6 +16,10 @@ change the time range without installing the server.
   selector/render wiring, but with the login/auth flow removed (the demo has no
   backend to sign in to). When the real `app.js` changes, port the relevant
   bits by hand.
+- `assets/push.js` — **demo-specific stub** of the Web Push helpers. The demo
+  has no service worker or backend, so it reports push as supported-but-off and
+  the toggle surfaces the same "read-only demo" notice as the other write
+  controls. Keep it in sync with the exports of `server/dashboard/assets/push.js`.
 - `assets/{style.css,charts.js,format.js,views.js}` — **verbatim copies**
   of `server/dashboard/assets/*`.
 
@@ -29,8 +33,8 @@ cp server/dashboard/assets/{style.css,charts.js,format.js,views.js} \
    website/dashboard-demo/assets/
 ```
 
-`index.html`, `assets/api.js` and `assets/app.js` are demo-specific — don't
-overwrite those.
+`index.html`, `assets/api.js`, `assets/app.js` and `assets/push.js` are
+demo-specific — don't overwrite those.
 
 ## Preview locally
 
