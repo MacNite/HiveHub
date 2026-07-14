@@ -113,14 +113,17 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap);
 void writeSnapshotToHive(JsonObject hive, const Snapshot& snap);
 
 #if ENABLE_WIRELESS_BEECOUNTER
-// HiveTraffic (wireless bee counter) GATT-client read. Brings the BLE stack up
-// once, connects to each non-empty MAC, reads the JSON measurement
-// characteristic (BEECOUNTER_GATT_*), parses the lifetime totals into the
-// matching totals-only Snapshot, then tears the stack down — same lifecycle as
-// bhgatt::runCycle. An empty MAC leaves that slot !present. No CMD_LATCH is
-// written: the wire format is totals-only and the backend differences them.
-void bleRunCycle(const String& mac0, const String& mac1,
-                 Snapshot& slot1, Snapshot& slot2);
+// HiveTraffic (wireless bee counter) GATT-client read, registry-driven. Brings
+// the BLE stack up once, then for every hive in hivecfg::gHives[] that carries a
+// "beecounter" pairing connects to its MAC, reads the JSON measurement
+// characteristic (BEECOUNTER_GATT_*), parses the lifetime totals into a
+// totals-only Snapshot stored at out[h] (the same array position as gHives[h]),
+// then tears the stack down — the same lifecycle and any-hive model as
+// bhgatt::runCycle. A hive without a pairing (or with an empty MAC) leaves
+// out[h] !present. At most MAX_GATT_READS_PER_CYCLE devices are read per cycle;
+// `cap` is the length of `out` (pass MAX_HIVES). No CMD_LATCH is written: the
+// wire format is totals-only and the backend differences the totals.
+void bleRunCycleRegistry(Snapshot* out, uint8_t cap);
 #endif
 
 // CRC-32 (IEEE 802.3, poly 0xEDB88320) over a buffer, finalized. Matches the

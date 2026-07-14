@@ -5,6 +5,7 @@
 #if ENABLE_WIRELESS_BEECOUNTER
 #include <NimBLEDevice.h>
 #include "config.h"
+#include "hive_config.h"
 #endif
 
 namespace beecnt {
@@ -451,7 +452,7 @@ bool readTrafficSlot(const String& mac, Snapshot& out) {
 
     // HiveTraffic stays connectable; close the link deterministically and wait
     // for it to drop before freeing the client so nothing is left for the
-    // deinit() in bleRunCycle() to trip over.
+    // deinit() in bleRunCycleRegistry() to trip over.
     if (client->isConnected()) client->disconnect();
     uint32_t deadline = millis() + BEECOUNTER_GATT_DISCONNECT_TIMEOUT_MS;
     while (client->isConnected() && (int32_t)(deadline - millis()) > 0) delay(20);
@@ -461,15 +462,36 @@ bool readTrafficSlot(const String& mac, Snapshot& out) {
 
 }  // namespace
 
-void bleRunCycle(const String& mac0, const String& mac1,
-                 Snapshot& slot1, Snapshot& slot2) {
-    slot1 = Snapshot{};
-    slot2 = Snapshot{};
-    if (mac0.length() == 0 && mac1.length() == 0) return;
+void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
+    for (uint8_t h = 0; h < cap; h++) out[h] = Snapshot{};
+
+    // Nothing to do unless at least one hive has a paired HiveTraffic counter.
+    bool anyPaired = false;
+    for (uint8_t h = 0; h < hivecfg::gHiveCount && h < cap; h++) {
+        const hivecfg::Hive& hive = hivecfg::gHives[h];
+        for (uint8_t b = 0; b < hive.bleCount; b++)
+            if (hive.ble[b].type == "beecounter" && hive.ble[b].mac.length()) anyPaired = true;
+    }
+    if (!anyPaired) return;
 
     NimBLEDevice::init("");
-    if (mac0.length()) (void)readTrafficSlot(mac0, slot1);
-    if (mac1.length()) (void)readTrafficSlot(mac1, slot2);
+    uint8_t readAttempts = 0;
+    for (uint8_t h = 0; h < hivecfg::gHiveCount && h < cap; h++) {
+        const hivecfg::Hive& hive = hivecfg::gHives[h];
+        for (uint8_t b = 0; b < hive.bleCount; b++) {
+            const hivecfg::BlePairing& p = hive.ble[b];
+            if (p.type != "beecounter" || p.mac.length() == 0) continue;
+
+            if (readAttempts >= MAX_GATT_READS_PER_CYCLE) {
+                Serial.printf("[TRAFFIC] GATT read budget exhausted (%u); skipping hive %u %s\n",
+                              (unsigned)MAX_GATT_READS_PER_CYCLE, hive.index, p.mac.c_str());
+                break;
+            }
+            readAttempts++;
+            (void)readTrafficSlot(p.mac, out[h]);
+            break;  // at most one HiveTraffic counter per hive
+        }
+    }
     // deinit(false), not (true): on the ESP32-C6 deinit(true) panics in
     // ~NimBLEScan() once a scan has run this boot, because the scan singleton is
     // deleted after nimble_port_deinit() zeroes npl_funcs. See the detailed note

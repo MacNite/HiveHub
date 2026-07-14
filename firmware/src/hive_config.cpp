@@ -204,10 +204,10 @@ static void migrateLegacy(Preferences& p) {
 }
 
 // Populate the pre-0.20 per-slot globals from the registry's first two hives for
-// legacy two-slot code paths that still consume them (beacon compatibility and
-// HiveTraffic bee counter). The beehivemonitoring.com HiveHeart/HiveScale GATT
-// client reads the dynamic registry directly, so those sensors can be mapped to
-// any hive up to MAX_HIVES.
+// legacy two-slot code paths that still consume them (beacon compatibility). The
+// beehivemonitoring.com HiveHeart/HiveScale GATT client and the HiveTraffic bee
+// counter both read the dynamic registry directly, so those sensors can be
+// mapped to any hive up to MAX_HIVES.
 static void bridgeLegacyGlobals() {
   auto find = [](const Hive& h, const char* type) -> String {
     for (uint8_t b = 0; b < h.bleCount; b++)
@@ -222,12 +222,11 @@ static void bridgeLegacyGlobals() {
     }
     return String("");
   };
-  String beacon[2] = {"", ""}, heart[2] = {"", ""}, wscale[2] = {"", ""}, cnt[2] = {"", ""};
+  String beacon[2] = {"", ""}, heart[2] = {"", ""}, wscale[2] = {"", ""};
   for (uint8_t h = 0; h < gHiveCount && h < 2; h++) {
     beacon[h] = firstBeacon(gHives[h]);
     heart[h]  = find(gHives[h], "hiveheart");
     wscale[h] = find(gHives[h], "hivescale");
-    cnt[h]    = find(gHives[h], "beecounter");
   }
 #if ENABLE_BLE_SCAN
   bleSensorMac0 = beacon[0]; bleSensorMac1 = beacon[1];
@@ -236,9 +235,8 @@ static void bridgeLegacyGlobals() {
   heartMac0 = heart[0]; heartMac1 = heart[1];
   scaleMac0 = wscale[0]; scaleMac1 = wscale[1];
 #endif
-#if ENABLE_WIRELESS_BEECOUNTER
-  trafficMac0 = cnt[0]; trafficMac1 = cnt[1];
-#endif
+  // HiveTraffic bee counters are read straight from the registry by
+  // bee_counter_client.cpp (any hive up to MAX_HIVES), so no per-slot bridge.
 }
 
 // ── Secrets.h pre-seed (HIVE_COUNT / HIVE_i_JSON) ──────────────────────────

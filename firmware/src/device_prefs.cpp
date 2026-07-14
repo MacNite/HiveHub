@@ -178,11 +178,10 @@ void loadConfigFromPrefs() {
   scaleMac1 = prefs.getString("scale_mac1", "");
 #endif
 
-#if ENABLE_WIRELESS_BEECOUNTER
-  // HiveTraffic (wireless bee counter) MACs share the portal's counter_mac keys.
-  trafficMac0 = prefs.getString("counter_mac0", "");
-  trafficMac1 = prefs.getString("counter_mac1", "");
-#endif
+  // HiveTraffic (wireless bee counter) MACs live in the hive registry
+  // (gHives[].ble "beecounter" pairings) and are read there by
+  // bee_counter_client.cpp, so no per-slot globals are loaded here. The legacy
+  // counter_mac{0,1} keys are still migrated into the registry by hive_config.
 
   prefs.end();
 

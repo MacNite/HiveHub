@@ -7,9 +7,17 @@ client**, connects to each paired HiveTraffic MAC, reads one JSON measurement
 characteristic and folds the counts into the same `bee_counter_{slot}_*` fields
 the wired counter uses.
 
-It is a drop-in alternative to the I2C counter: **a slot with a paired
-HiveTraffic MAC is read over BLE; a slot without one falls back to the wired I2C
-BeeCounter.** Both can coexist (e.g. counter 1 wired, counter 2 wireless).
+It is a drop-in alternative to the I2C counter: **a hive with a paired
+HiveTraffic MAC is read over BLE; a hive without one falls back to the wired I2C
+BeeCounter.** Both can coexist (e.g. hive 1 wired, hive 2 wireless).
+
+**Any hive can have a HiveTraffic counter.** The wireless counter is resolved
+from the dynamic hive registry (`bee_counter_client.cpp::bleRunCycleRegistry`
+walks `hivecfg::gHives[]` for `beecounter` pairings), exactly like the
+HiveHeart / HiveScale GATT client, so it works on any hive up to `MAX_HIVES`.
+The *wired* I2C BeeCounter is the only variant still limited to hives 1–2,
+because it has just two fixed I2C addresses (`0x30` / `0x31`). Connection-based
+reads share the `MAX_GATT_READS_PER_CYCLE` per-cycle budget.
 
 ## Enabling
 
@@ -17,11 +25,14 @@ Build with `ENABLE_WIRELESS_BEECOUNTER=1` (the
 [configurator](../website/configurator.html) emits this when you add a
 *HiveTraffic* wireless sensor), then pair each counter's MAC:
 
-* in the **provisioning portal** — add a wireless sensor, pick *HiveTraffic*, map
-  it to counter 1 or 2, and enter/copy its MAC; or
-* seed it in `secrets.h` via `WBEECNT_1_MAC` / `WBEECNT_2_MAC`.
+* in the **provisioning portal** — add an in-hive sensor to any hive, pick
+  *HiveTraffic counter*, and enter/copy its MAC; or
+* seed it in `secrets.h` via a `HIVE_i_JSON` blob's `bl` entry
+  (`{"t":"beecounter","m":"AA:BB:CC:DD:EE:FF"}`) for any hive, or via the legacy
+  `WBEECNT_1_MAC` / `WBEECNT_2_MAC` macros for hives 1–2.
 
-MACs are stored under the portal's `counter_mac{0,1}` keys.
+Portal pairings live in the hive registry; the legacy `WBEECNT_n_MAC` seeds and
+`counter_mac{0,1}` keys are migrated into the registry on first boot.
 
 ## GATT contract
 

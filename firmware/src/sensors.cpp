@@ -291,19 +291,22 @@ String createMeasurementJson() {
   if (wiredMicUsed) micResult = readMicSamples();
 #endif
 
-  // ── BeeCounter (entrance gates) — hives 1–2, wired I2C or HiveTraffic BLE ──
-  beecnt::Snapshot beeSnap1, beeSnap2;
+  // ── BeeCounter (entrance gates) ────────────────────────────────────────────
+  //   Wireless HiveTraffic is read over BLE for ANY hive that carries a
+  //   "beecounter" pairing in the registry (like HiveHeart/HiveScale), indexed
+  //   by registry position. The wired I2C BeeCounter has two fixed I2C addresses
+  //   (0x30/0x31), so it stays limited to hives 1–2 and only fills a hive that
+  //   has no wireless snapshot.
+  beecnt::Snapshot beeSnaps[MAX_HIVES];
 #if ENABLE_WIRELESS_BEECOUNTER
-  const bool trafficSlot1 = trafficMac0.length() > 0;
-  const bool trafficSlot2 = trafficMac1.length() > 0;
-  if (trafficSlot1 || trafficSlot2)
-    beecnt::bleRunCycle(trafficMac0, trafficMac1, beeSnap1, beeSnap2);
-#else
-  const bool trafficSlot1 = false;
-  const bool trafficSlot2 = false;
+  beecnt::bleRunCycleRegistry(beeSnaps, MAX_HIVES);
 #endif
-  if (!trafficSlot1) (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_1, beeSnap1);
-  if (!trafficSlot2) (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_2, beeSnap2);
+  for (uint8_t h = 0; h < hivecfg::gHiveCount && h < MAX_HIVES; h++) {
+    if (beeSnaps[h].present) continue;
+    const uint8_t idx = hivecfg::gHives[h].index;
+    if (idx == 1)      (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_1, beeSnaps[h]);
+    else if (idx == 2) (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_2, beeSnaps[h]);
+  }
 
   // ── Assemble the upload document ───────────────────────────────────────────
   JsonDocument doc;
@@ -481,9 +484,12 @@ String createMeasurementJson() {
     if (bhHeart) writeBeehiveHeartToHive(ho, *bhHeart);
     if (bhScale) writeBeehiveScaleToHive(ho, *bhScale);
 #endif
-    // BeeCounter entrance gates (hives 1–2).
-    if (hive.index == 1) beecnt::writeSnapshotToHive(ho, beeSnap1);
-    else if (hive.index == 2) beecnt::writeSnapshotToHive(ho, beeSnap2);
+    // BeeCounter entrance gates: wireless HiveTraffic on any hive, wired I2C on
+    // hives 1–2. beeSnaps is indexed by registry position, matching this loop.
+    // Hives 1–2 always emit a bee_counter object (ok:false when absent) to
+    // preserve the wired path's long-standing output.
+    if (beeSnaps[h].present || hive.index == 1 || hive.index == 2)
+      beecnt::writeSnapshotToHive(ho, beeSnaps[h]);
   }
 
   String output;

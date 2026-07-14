@@ -109,7 +109,7 @@ historical starting point). Each hive card has:
 | RuuviTag 4-in-1 | BLE beacon | ✅ supported, any hive |
 | HiveInside ESP32-C6 | GATT | ✅ supported, any hive |
 | HiveHeart *(beehivemonitoring.com)* | GATT | ✅ supported, any hive |
-| HiveTraffic *(entrance bee counter)* | GATT | ✅ supported, **hives 1-2 only** today |
+| HiveTraffic *(entrance bee counter)* | GATT | ✅ supported, any hive (the wired I2C BeeCounter is the one limited to hives 1-2) |
 
 A hive can combine a wireless HiveScale (as its scale source) with a separate
 in-hive sensor — the tool emits both into that hive's `bl` array, matching
