@@ -2,7 +2,11 @@
 //
 // drawLineChart(canvas, series, opts)
 //   series: [{ label, color, points: [{ t: epochMillis, y: number }] }]
-//   opts:   { unit, yDigits, cursorT, sendIntervalMs }
+//   opts:   { unit, yDigits, cursorT, sendIntervalMs, yMin, yMax }
+//
+// opts.yMin / opts.yMax pin one or both ends of the y-axis (user-edited axis
+// fields — see openYEdit in views.js); unset ends keep the auto-fitted range.
+// A pinned axis labels its exact ends and clips series to the plot area.
 //
 // Segments spanning a data gap — a jump far larger than a series' own typical
 // point spacing — are drawn dashed to mark stretches with missing data.
@@ -88,6 +92,10 @@ export function drawLineChart(canvas, series, opts = {}) {
   ctx.clearRect(0, 0, cssW, cssH);
 
   if (!hasData) {
+    // Clear the stale pixel mappings so pointer handlers (cursor scrub, y-axis
+    // editing) go quiet instead of acting on the previous draw's geometry.
+    canvas._xScale = null;
+    canvas._yEdit = null;
     if (!empty) {
       empty = document.createElement("div");
       empty.className = "chart-empty";
@@ -114,10 +122,18 @@ export function drawLineChart(canvas, series, opts = {}) {
   if (tMin === tMax) tMax = tMin + 1;
   const pad = (yMax - yMin) * 0.08 || 1;
   yMin -= pad; yMax += pad;
+  // Manual y-range: a pinned end overrides the auto-fitted one; a range that
+  // would collapse or invert falls back to a 1-unit span so yOf stays finite.
+  const pinned = opts.yMin != null || opts.yMax != null;
+  if (opts.yMin != null) yMin = opts.yMin;
+  if (opts.yMax != null) yMax = opts.yMax;
+  if (!(yMax > yMin)) yMax = yMin + 1;
 
   const xOf = (t) => padL + ((t - tMin) / (tMax - tMin)) * plotW;
   const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
   canvas._xScale = { padL, plotW, tMin, tMax };
+  // Geometry for the click-to-edit y-axis fields (see yEditZone in views.js).
+  canvas._yEdit = { padL, padT, plotH, yMin, yMax };
 
   const axis = themeColor("--chart-axis", AXIS);
   const grid = themeColor("--chart-grid", GRID);
@@ -125,8 +141,13 @@ export function drawLineChart(canvas, series, opts = {}) {
   ctx.font = FONT;
   ctx.textBaseline = "middle";
 
-  // Y gridlines + labels
-  const yTicks = niceTicks(yMin, yMax, 5);
+  // Y gridlines + labels. A pinned axis labels its exact ends (dropping nice
+  // ticks that would crowd them) so the user's entered min/max read back.
+  let yTicks = niceTicks(yMin, yMax, 5);
+  if (pinned) {
+    const span = yMax - yMin;
+    yTicks = [yMin, ...yTicks.filter((t) => t - yMin > span * 0.06 && yMax - t > span * 0.06), yMax];
+  }
   ctx.strokeStyle = grid;
   ctx.fillStyle = axis;
   ctx.lineWidth = 1;
@@ -161,6 +182,10 @@ export function drawLineChart(canvas, series, opts = {}) {
   // Consecutive same-style segments are batched into one path so joins stay
   // smooth within a run.
   const gapFactor = 1.5; // dash once a segment runs >1.5x the typical spacing
+  // Clip series (and cursor markers) to the plot area: a manually pinned
+  // y-range can put data outside it, which must not paint over axis labels.
+  ctx.save();
+  ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
   ctx.lineWidth = 1.8;
   ctx.lineJoin = "round";
   for (const s of series) {
@@ -208,6 +233,7 @@ export function drawLineChart(canvas, series, opts = {}) {
       ctx.stroke();
     }
   }
+  ctx.restore(); // end plot-area clip
 }
 
 // FFT-style spectrum chart: x-axis is a fixed set of categories (e.g. frequency
@@ -221,7 +247,11 @@ export function drawLineChart(canvas, series, opts = {}) {
 //   categories: [label, ...]
 //   snapshots:  [{ t: epochMillis, values: [number|null, ...] }] oldest→newest,
 //               values aligned 1:1 with categories
-//   opts:       { unit, yDigits, color, cursorIndex, bandStats }
+//   opts:       { unit, yDigits, color, cursorIndex, bandStats, yMin, yMax,
+//                 hideOlder, hideLatest }
+//
+// opts.hideOlder / opts.hideLatest suppress the faded history lines or the
+// bold latest line (legend toggles in views.js) without touching the data.
 //
 // When opts.cursorIndex (a category index) is set, draws a vertical guide at
 // that band plus a bracket spanning bandStats[cursorIndex].min..max — the
@@ -246,6 +276,8 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   ctx.clearRect(0, 0, cssW, cssH);
 
   if (!hasData) {
+    canvas._catScale = null;
+    canvas._yEdit = null;
     if (!empty) {
       empty = document.createElement("div");
       empty.className = "chart-empty";
@@ -275,13 +307,17 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   yMin -= pad; yMax += pad;
   // Fixed-scale override: a chart on a bounded scale (e.g. HiveHeart's 0–15
   // relative levels) passes yMin/yMax so its axis is stable and never shares
-  // the auto-fitted dBFS range of the microphone spectrum.
+  // the auto-fitted dBFS range of the microphone spectrum. A user-edited axis
+  // field (views.js) arrives through the same options.
+  const pinned = opts.yMin != null || opts.yMax != null;
   if (opts.yMin != null) yMin = opts.yMin;
   if (opts.yMax != null) yMax = opts.yMax;
+  if (!(yMax > yMin)) yMax = yMin + 1;
 
   const xOf = (i) => (n <= 1 ? padL + plotW / 2 : padL + (i / (n - 1)) * plotW);
   const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
   canvas._catScale = { padL, plotW, n };
+  canvas._yEdit = { padL, padT, plotH, yMin, yMax };
 
   const axis = themeColor("--chart-axis", AXIS);
   const grid = themeColor("--chart-grid", GRID);
@@ -310,8 +346,13 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
     });
   }
 
-  // Y gridlines + labels
-  const yTicks = niceTicks(yMin, yMax, 5);
+  // Y gridlines + labels (a pinned axis labels its exact ends, as in
+  // drawLineChart, so a fixed or user-entered range reads back precisely)
+  let yTicks = niceTicks(yMin, yMax, 5);
+  if (pinned) {
+    const span = yMax - yMin;
+    yTicks = [yMin, ...yTicks.filter((t) => t - yMin > span * 0.06 && yMax - t > span * 0.06), yMax];
+  }
   ctx.strokeStyle = grid;
   ctx.fillStyle = axis;
   ctx.lineWidth = 1;
@@ -350,8 +391,12 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   // glance. The latest snapshot is excluded here and drawn separately below in
   // solid black so the current spectrum is unmistakable regardless of hue.
   const base = opts.color || "#f2a900";
-  const older = snapshots.slice(0, -1);
+  const older = opts.hideOlder ? [] : snapshots.slice(0, -1);
   const count = older.length;
+  // Clip snapshot lines to the plot area — a manually shrunk y-range must not
+  // let them paint over the axis labels or band headings.
+  ctx.save();
+  ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
   ctx.lineJoin = "round";
   older.forEach((s, idx) => {
     const age = count <= 1 ? 1 : idx / (count - 1); // 0 = oldest, 1 = most recent of the older ones
@@ -369,7 +414,7 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
 
   // Latest snapshot: solid high-contrast line + dots, drawn last so it's on top.
   const latestColor = themeColor("--chart-latest", LATEST_COLOR);
-  const latest = snapshots[snapshots.length - 1];
+  const latest = opts.hideLatest ? null : snapshots[snapshots.length - 1];
   if (latest) {
     ctx.strokeStyle = latestColor;
     ctx.lineWidth = 2.4;
@@ -387,6 +432,7 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
       ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2); ctx.fill();
     });
   }
+  ctx.restore(); // end plot-area clip
 
   // Reported peak-frequency marker (HiveHeart `frequency_hz`): a dashed vertical
   // guide at the frequency HiveHeart independently reports, positioned by
@@ -423,11 +469,14 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
     const stats = opts.bandStats && opts.bandStats[idx];
     if (stats) {
       const yLo = yOf(stats.min), yHi = yOf(stats.max);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
       ctx.strokeStyle = themeColor("--chart-cursor-strong", "rgba(31,36,33,0.5)");
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(cx, yLo); ctx.lineTo(cx, yHi); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx - 5, yLo); ctx.lineTo(cx + 5, yLo); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx - 5, yHi); ctx.lineTo(cx + 5, yHi); ctx.stroke();
+      ctx.restore();
     }
   }
 }

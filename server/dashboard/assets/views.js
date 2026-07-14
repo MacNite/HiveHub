@@ -21,6 +21,17 @@ function versionFromFilename(name) {
 // ── chart manager: views register charts; app.js redraws them after mount ────
 let activeCharts = [];
 
+// Per-chart user preferences: series hidden via legend clicks and a manually
+// pinned y-range (click a y-axis end label to edit it). Keyed by chart title so
+// they survive the constant re-renders (view switches, the 60s auto-refresh,
+// selection changes); entries for charts no longer on screen are harmless.
+const chartPrefs = new Map();
+function prefsFor(title) {
+  let p = chartPrefs.get(title);
+  if (!p) { p = { hidden: new Set(), yMin: null, yMax: null }; chartPrefs.set(title, p); }
+  return p;
+}
+
 // Selected/hovered timestamp (epoch millis), shared across every chart on the
 // current view so scrubbing one diagram lines up the readout on all of them.
 // Persists across re-renders (view switches, auto-refresh) until the mouse
@@ -53,24 +64,48 @@ export function configureCharts(state) {
 export function clearCharts() { activeCharts = []; }
 export function drawCharts() {
   for (const c of activeCharts) {
+    const p = c.prefs;
     if (c.kind === "spectrum") {
       const cb = cursorBandByGroup[c.group];
-      drawSpectrumChart(c.canvas, c.categories, c.snapshots, { ...c.opts, cursorIndex: cb == null ? null : cb, bandStats: c.bandStats });
+      drawSpectrumChart(c.canvas, c.categories, c.snapshots, {
+        ...c.opts,
+        cursorIndex: cb == null ? null : cb,
+        bandStats: c.bandStats,
+        // A user-pinned range wins over a chart's fixed scale (e.g. HiveHeart 0–15).
+        yMin: p.yMin ?? c.opts.yMin,
+        yMax: p.yMax ?? c.opts.yMax,
+        hideOlder: p.hidden.has("older"),
+        hideLatest: p.hidden.has("latest"),
+      });
       updateSpectrumReadout(c);
+      updateChartTools(c);
       continue;
     }
-    drawLineChart(c.canvas, c.series, { ...c.opts, cursorT });
+    drawLineChart(c.canvas, c.series.filter((s) => !p.hidden.has(s.label)),
+      { ...c.opts, cursorT, yMin: p.yMin, yMax: p.yMax });
     updateReadout(c);
+    updateChartTools(c);
   }
 }
 
 function updateReadout(c) {
-  for (const { valueEl, series } of c.legendItems) {
-    if (cursorT == null) { valueEl.textContent = ""; continue; }
+  for (const { valueEl, series, item } of c.legendItems) {
+    const off = c.prefs.hidden.has(series.label);
+    item.classList.toggle("off", off);
+    if (off || cursorT == null) { valueEl.textContent = ""; continue; }
     const p = valueAt(series.points, cursorT);
     valueEl.textContent = p ? `: ${fmt(p.y, c.opts.yDigits ?? 1, c.opts.unit ? " " + c.opts.unit : "")}` : ": " + DASH;
   }
   if (c.hint) c.hint.textContent = cursorT == null ? "Drag to inspect" : fmtDateTime(cursorT);
+}
+
+// Refresh the legend-row toolbox: the reset button only shows while a manual
+// y-range is pinned, and spectrum legend toggles mirror their hidden state.
+function updateChartTools(c) {
+  if (c.resetBtn) c.resetBtn.hidden = c.prefs.yMin == null && c.prefs.yMax == null;
+  if (c.toggleItems) {
+    for (const { key, item } of c.toggleItems) item.classList.toggle("off", c.prefs.hidden.has(key));
+  }
 }
 
 function updateSpectrumReadout(c) {
@@ -122,15 +157,176 @@ function setCursorBandFromEvent(canvas, e) {
   }
 }
 
+// ── editable y-axis (click an end label to pin the range) ───────────────────
+// Hit-test a pointer event against the two editable y-axis fields: the strip
+// left of the plot, top ≈ the max label, bottom ≈ the min label. Uses the
+// pixel geometry stashed on the canvas by the last draw; null when the event
+// is elsewhere (or the chart is empty, which clears the stash).
+function yEditZone(canvas, e) {
+  const z = canvas._yEdit;
+  if (!z) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  if (x > z.padL || y < z.padT - 12 || y > z.padT + z.plotH + 12) return null;
+  if (y < z.padT + z.plotH * 0.35) return "max";
+  if (y > z.padT + z.plotH * 0.65) return "min";
+  return null;
+}
+
+// Inline editor for one end of a chart's y-axis: a small number input overlaid
+// on the clicked end label. Enter or clicking away applies, Escape cancels; a
+// value that would invert the axis (min ≥ max) is ignored. The pinned range
+// lives in chartPrefs, so it survives re-renders until "Reset y-axis".
+function openYEdit(chart, which) {
+  const canvas = chart.canvas;
+  const z = canvas._yEdit;
+  if (!z) return;
+  const wrap = canvas.parentElement;
+  const prev = wrap.querySelector(".y-edit-input");
+  if (prev) prev.remove();
+  const digits = Math.max(chart.opts.yDigits ?? 1, 1);
+  const cur = which === "max" ? z.yMax : z.yMin;
+  const input = el("input", {
+    type: "number", step: "any", class: "y-edit-input",
+    "aria-label": which === "max" ? "Y-axis maximum" : "Y-axis minimum",
+  });
+  input.value = String(Number(cur.toFixed(digits)));
+  input.style.top = `${Math.max(0, (which === "max" ? z.padT : z.padT + z.plotH) - 12)}px`;
+  input.style.width = `${z.padL + 12}px`;
+  let done = false;
+  const close = (apply) => {
+    if (done) return;
+    done = true;
+    if (apply) {
+      const v = parseFloat(input.value);
+      const valid = Number.isFinite(v) && (which === "max" ? v > z.yMin : v < z.yMax);
+      if (valid) chart.prefs[which === "max" ? "yMax" : "yMin"] = v;
+    }
+    input.remove();
+    drawCharts();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); close(true); }
+    else if (e.key === "Escape") close(false);
+  });
+  input.addEventListener("blur", () => close(true));
+  wrap.append(input);
+  // Focus after the opening click's mousedown/mouseup defaults have run —
+  // focusing synchronously would be undone by the canvas mousedown, whose
+  // default focus change blurs (and thus closes) the editor immediately.
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+
+// ── CSV export ───────────────────────────────────────────────────────────────
+function csvField(v) {
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadCsv(filename, rows) {
+  const blob = new Blob([rows.map((r) => r.map(csvField).join(",")).join("\r\n")],
+    { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function csvName(title) {
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `hivehub-${slug || "chart"}.csv`;
+}
+
+// Export what the chart currently shows. Line charts: one row per distinct
+// timestamp (union across the visible series), one column per visible series,
+// cells empty where a series has no reading at that time. Spectrum charts: one
+// row per drawn snapshot, one column per band, honouring the Older/Latest
+// legend toggles.
+function downloadChartCsv(chart, title) {
+  let rows;
+  if (chart.kind === "spectrum") {
+    const cats = chart.categories.map((c) => (chart.opts.xUnit ? `${c} ${chart.opts.xUnit}` : c));
+    let snaps = chart.snapshots;
+    if (chart.prefs.hidden.has("older")) snaps = snaps.slice(-1);
+    if (chart.prefs.hidden.has("latest")) snaps = snaps.slice(0, -1);
+    rows = [["timestamp", ...cats],
+      ...snaps.map((s) => [new Date(s.t).toISOString(), ...s.values.map((v) => (v == null ? "" : v))])];
+  } else {
+    const visible = chart.series.filter((s) => !chart.prefs.hidden.has(s.label));
+    const unit = chart.opts.unit ? ` (${chart.opts.unit})` : "";
+    const byT = new Map();
+    visible.forEach((s, i) => {
+      for (const p of s.points) {
+        let row = byT.get(p.t);
+        if (!row) { row = new Array(visible.length).fill(""); byT.set(p.t, row); }
+        row[i] = p.y;
+      }
+    });
+    rows = [["timestamp", ...visible.map((s) => s.label + unit)],
+      ...[...byT.entries()].sort((a, b) => a[0] - b[0])
+        .map(([t, vals]) => [new Date(t).toISOString(), ...vals])];
+  }
+  downloadCsv(csvName(title), rows);
+}
+
+// The per-chart toolbox on the legend row, left of the drag hint: CSV export
+// and — only while a manual y-range is pinned — "Reset y-axis".
+function chartTools(chart, title, hint) {
+  const csvBtn = el("button", {
+    class: "chart-tool-btn", type: "button",
+    title: "Download the data currently shown in this chart as CSV",
+  }, "⤓ CSV");
+  csvBtn.addEventListener("click", () => downloadChartCsv(chart, title));
+  const resetBtn = el("button", {
+    class: "chart-tool-btn", type: "button", hidden: true,
+    title: "Clear the manual y-axis range and re-fit automatically",
+  }, "Reset y-axis");
+  resetBtn.addEventListener("click", () => {
+    chart.prefs.yMin = null;
+    chart.prefs.yMax = null;
+    drawCharts();
+  });
+  chart.resetBtn = resetBtn;
+  return el("span", { class: "chart-tools" }, csvBtn, resetBtn, hint);
+}
+
+// Make a legend entry toggle something on click (or Enter/Space): used for
+// per-series visibility on line charts and Older/Latest on spectrum charts.
+function makeLegendToggle(item, prefs, key, what) {
+  item.classList.add("clickable");
+  item.setAttribute("role", "button");
+  item.setAttribute("tabindex", "0");
+  item.title = `Show/hide ${what}`;
+  const toggle = () => {
+    if (prefs.hidden.has(key)) prefs.hidden.delete(key);
+    else prefs.hidden.add(key);
+    drawCharts();
+  };
+  item.addEventListener("click", toggle);
+  item.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+  });
+}
+
 // Mouse hover scrubs live and clears on leave; touch drags (pointermove only
 // fires while the finger is down) and the selection stays pinned after lift so
-// the tapped/slid value remains readable.
-function attachChartCursor(canvas) {
+// the tapped/slid value remains readable. A pointerdown on a y-axis end label
+// opens the inline range editor instead of scrubbing.
+function attachChartCursor(chart) {
+  const canvas = chart.canvas;
   canvas.addEventListener("pointerdown", (e) => {
+    const zone = yEditZone(canvas, e);
+    if (zone) { e.preventDefault(); openYEdit(chart, zone); return; }
     try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
     setCursorFromEvent(canvas, e);
   });
-  canvas.addEventListener("pointermove", (e) => setCursorFromEvent(canvas, e));
+  canvas.addEventListener("pointermove", (e) => {
+    const zone = yEditZone(canvas, e);
+    canvas.style.cursor = zone ? "text" : "";
+    if (!zone) setCursorFromEvent(canvas, e);
+  });
   canvas.addEventListener("pointerup", (e) => {
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
   });
@@ -141,12 +337,19 @@ function attachChartCursor(canvas) {
   });
 }
 
-function attachSpectrumCursor(canvas) {
+function attachSpectrumCursor(chart) {
+  const canvas = chart.canvas;
   canvas.addEventListener("pointerdown", (e) => {
+    const zone = yEditZone(canvas, e);
+    if (zone) { e.preventDefault(); openYEdit(chart, zone); return; }
     try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
     setCursorBandFromEvent(canvas, e);
   });
-  canvas.addEventListener("pointermove", (e) => setCursorBandFromEvent(canvas, e));
+  canvas.addEventListener("pointermove", (e) => {
+    const zone = yEditZone(canvas, e);
+    canvas.style.cursor = zone ? "text" : "";
+    if (!zone) setCursorBandFromEvent(canvas, e);
+  });
   canvas.addEventListener("pointerup", (e) => {
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
   });
@@ -160,23 +363,23 @@ function attachSpectrumCursor(canvas) {
 function chartCard(title, sub, series, opts = {}) {
   const canvas = el("canvas");
   const wrap = el("div", { class: "chart-wrap" }, canvas);
+  const prefs = prefsFor(title);
   const legendItems = series.map((s) => {
     const valueEl = el("span", { class: "lg-value" });
-    return {
-      series: s,
-      valueEl,
-      item: el("span", { class: "lg" },
-        el("span", { class: "swatch", style: `background:${s.color}` }), s.label, valueEl),
-    };
+    const item = el("span", { class: "lg" },
+      el("span", { class: "swatch", style: `background:${s.color}` }), s.label, valueEl);
+    makeLegendToggle(item, prefs, s.label, `the “${s.label}” series`);
+    return { series: s, valueEl, item };
   });
   const hint = el("span", { class: "chart-hint" }, "Drag to inspect");
-  const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item), series.length ? hint : null);
   // Dash segments that span a data gap (see drawLineChart). sendIntervalMs is
   // only a fallback cadence; the test adapts to each series' own spacing, so
   // even coarse charts (e.g. daily-max) flag only genuinely missing stretches.
-  const chart = { canvas, series, opts: { ...opts, sendIntervalMs }, legendItems, hint };
+  const chart = { canvas, series, opts: { ...opts, sendIntervalMs }, legendItems, hint, prefs };
+  const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item),
+    series.length ? chartTools(chart, title, hint) : null);
   activeCharts.push(chart);
-  if (series.length) attachChartCursor(canvas);
+  if (series.length) attachChartCursor(chart);
   return el("div", { class: "card chart-card" },
     el("h2", {}, title),
     sub ? el("p", { class: "card-sub" }, sub) : null,
@@ -193,25 +396,36 @@ function chartCard(title, sub, series, opts = {}) {
 function spectrumChartCard(title, sub, categories, snapshots, bandStats, color, opts = {}) {
   const canvas = el("canvas");
   const wrap = el("div", { class: "chart-wrap" }, canvas);
+  const prefs = prefsFor(title);
   const oldest = snapshots[0], newest = snapshots[snapshots.length - 1];
   const hint = el("span", { class: "chart-hint" }, "Drag to inspect");
-  const legend = el("div", { class: "chart-legend" },
-    el("span", { class: "lg" }, "Older"),
-    el("span", { class: "spectrum-gradient", style: `background:linear-gradient(90deg, ${withAlpha(color, 0.15)}, ${color})` }),
-    el("span", { class: "lg" },
-      el("span", { class: "swatch", style: "background:var(--chart-latest)" }), "Latest"),
-    // Marker key (HiveHeart peak frequency) — colour matches drawSpectrumChart.
-    opts.marker ? el("span", { class: "lg" },
-      el("span", { class: "swatch", style: "background:#d6336c" }), "Peak freq") : null,
-    hint);
+  // "Older" and "Latest" act as legend toggles, like the series entries on a
+  // line chart: Older hides the faded history lines, Latest the bold newest one.
+  const olderItem = el("span", { class: "lg" }, "Older",
+    el("span", { class: "spectrum-gradient", style: `background:linear-gradient(90deg, ${withAlpha(color, 0.15)}, ${color})` }));
+  makeLegendToggle(olderItem, prefs, "older", "the older snapshots");
+  const latestItem = el("span", { class: "lg" },
+    el("span", { class: "swatch", style: "background:var(--chart-latest)" }), "Latest");
+  makeLegendToggle(latestItem, prefs, "latest", "the latest snapshot");
   const rangeNote = oldest && newest ? ` (${fmtDateTime(oldest.t)} – ${fmtDateTime(newest.t)})` : "";
   // Charts sharing the same categories (all mic charts, or all HiveHeart charts)
   // share a hover cursor; different category sets are independent groups.
   const group = categories.join("|");
   canvas._spectrumGroup = group;
-  const chart = { canvas, kind: "spectrum", group, categories, snapshots, bandStats, opts: { ...opts, color }, hint };
+  const chart = {
+    canvas, kind: "spectrum", group, categories, snapshots, bandStats,
+    opts: { ...opts, color }, hint, prefs,
+    toggleItems: [{ key: "older", item: olderItem }, { key: "latest", item: latestItem }],
+  };
+  const legend = el("div", { class: "chart-legend" },
+    olderItem,
+    latestItem,
+    // Marker key (HiveHeart peak frequency) — colour matches drawSpectrumChart.
+    opts.marker ? el("span", { class: "lg" },
+      el("span", { class: "swatch", style: "background:#d6336c" }), "Peak freq") : null,
+    chartTools(chart, title, hint));
   activeCharts.push(chart);
-  if (snapshots.length) attachSpectrumCursor(canvas);
+  if (snapshots.length) attachSpectrumCursor(chart);
   return el("div", { class: "card chart-card" },
     el("h2", {}, title),
     sub ? el("p", { class: "card-sub" }, sub + rangeNote) : null,
