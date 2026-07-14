@@ -12,6 +12,7 @@
 
 #if ENABLE_BLE_SCAN
 #include "ble_sensor.h"
+#include <algorithm>
 #endif
 
 #if ENABLE_BEEHIVE_GATT
@@ -309,13 +310,90 @@ void handleSdDownloadAll() {
 }
 
 #if ENABLE_BLE_SCAN
+// Results of the most recent portal BLE discovery scan. Filled once when the
+// portal starts (before the AP comes up) and again on every /ble/scan or
+// /ble/scan.json request, so the setup page can offer discovered sensors in a
+// dropdown instead of forcing the user onto a separate page — navigating away
+// used to throw away every unsaved hive/MAC entry.
+static std::vector<blesensor::Discovered> gPortalBleDevices;
+static bool gPortalBleScanned = false;
+
+// Cap how many discovered devices the setup page embeds: busy environments see
+// dozens of unrelated phones/earbuds and the page is one big String in RAM.
+static const size_t PORTAL_BLE_MAX_LISTED = 30;
+
+// Blocking discovery scan (~HOLYIOT_BLE_SCAN_SECONDS). Safe while the AP is up;
+// ESP32 BLE + SoftAP coexist, though throughput dips during the scan. Sorts the
+// results so recognised in-hive sensors come first, then named devices, then
+// everything else by signal strength.
+static void portalRunBleScan() {
+  Serial.printf("[SETUP] BLE discovery scan (%us) for the sensor dropdowns\n",
+                (unsigned)HOLYIOT_BLE_SCAN_SECONDS);
+  gPortalBleDevices = blesensor::discover(HOLYIOT_BLE_SCAN_SECONDS);
+  gPortalBleScanned = true;
+  std::sort(gPortalBleDevices.begin(), gPortalBleDevices.end(),
+            [](const blesensor::Discovered& a, const blesensor::Discovered& b) {
+              bool as = a.type != blesensor::SensorType::None;
+              bool bs = b.type != blesensor::SensorType::None;
+              if (as != bs) return as;
+              bool an = a.name.length() > 0, bn = b.name.length() > 0;
+              if (an != bn) return an;
+              return a.rssi_dbm > b.rssi_dbm;
+            });
+  Serial.printf("[SETUP] BLE scan found %u device(s)\n", (unsigned)gPortalBleDevices.size());
+}
+
+// Map a recognised advertisement format to the portal's sensor-type vocabulary
+// (the SENSOR_TYPES keys in the setup-page script) so picking a device from the
+// dropdown can pre-select its type. Devices that advertise no known in-hive
+// format (including GATT-mode sensors, which carry no measurement payload) map
+// to "" and leave the type dropdown untouched.
+static const char* portalBleTypeKey(blesensor::SensorType t) {
+  switch (t) {
+    case blesensor::SensorType::HolyIot:    return "holyiot";
+    case blesensor::SensorType::Ruuvi:      return "ruuvitag";
+    case blesensor::SensorType::HiveInside: return "hiveinside_nrf54";
+    default:                                return "";
+  }
+}
+
+// The cached scan as a strict JSON array — used both inline on the setup page
+// (var DETECTED_BLE=...) and as the /ble/scan.json response body. Names come
+// from untrusted advertisements, so every string goes through jsonQuote; the
+// page inserts them into the DOM via textContent, never innerHTML.
+static String detectedBleJson() {
+  String js = "[";
+  size_t n = gPortalBleDevices.size();
+  if (n > PORTAL_BLE_MAX_LISTED) n = PORTAL_BLE_MAX_LISTED;
+  for (size_t i = 0; i < n; i++) {
+    const blesensor::Discovered& d = gPortalBleDevices[i];
+    if (i) js += ",";
+    js += "{\"m\":" + jsonQuote(d.mac) + ",\"n\":" + jsonQuote(d.name);
+    js += ",\"r\":" + String(d.rssi_dbm);
+    js += ",\"t\":\"" + String(portalBleTypeKey(d.type)) + "\"";
+    js += ",\"tn\":" + jsonQuote(String(blesensor::sensorTypeName(d.type))) + "}";
+  }
+  js += "]";
+  return js;
+}
+
+// GET /ble/scan.json — re-scan and return the device list as JSON. The setup
+// page's "Rescan BLE" button fetches this and repopulates its dropdowns in
+// place, so unsaved hive entries survive (unlike navigating to /ble/scan).
+static void handleBleScanJson() {
+  sendNoCacheHeaders();
+  portalRunBleScan();
+  setupServer.send(200, "application/json", detectedBleJson());
+}
+
 // Blocking BLE discovery page: scans for a few seconds and lists nearby devices
-// so the user can copy a MAC into the pairing fields. Runs while the AP is up;
-// ESP32 BLE + SoftAP coexist, though throughput dips during the scan.
+// for troubleshooting (full list, RSSI, detected format). Pairing itself is
+// done with the dropdowns on the setup page, which this scan also refreshes.
 void handleBleScan() {
   sendNoCacheHeaders();
 
-  std::vector<blesensor::Discovered> found = blesensor::discover(HOLYIOT_BLE_SCAN_SECONDS);
+  portalRunBleScan();
+  const std::vector<blesensor::Discovered>& found = gPortalBleDevices;
 
   String html;
   html += "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
@@ -332,7 +410,7 @@ void handleBleScan() {
           "@media(prefers-color-scheme:dark){:root{--bg:#161618;--card:#1f1f23;--fg:#ececf1;--muted:#9aa0aa;--border:#33343a;--link:#f5b54a}code{background:#2a2a30}}"
           "</style>";
   html += "</head><body><div class='wrap'><h1>Nearby BLE devices</h1>";
-  html += "<p>All nearby BLE devices are listed. HolyIot 25015, RuuviTag and HiveInside sensors show their type in the last column. GATT sensors (HiveHeart, wireless HiveScale) also appear — copy their MAC and paste it into the GATT pairing fields on the <a href='/'>setup page</a>.</p>";
+  html += "<p>All nearby BLE devices are listed. HolyIot 25015, RuuviTag and HiveInside sensors show their type in the last column. GATT sensors (HiveHeart, wireless HiveScale) also appear. This scan has updated the sensor dropdowns on the <a href='/'>setup page</a> — but note that opening this page reloads the portal, so use the setup page's own <b>Rescan BLE</b> button if you have unsaved entries there.</p>";
 
   if (found.empty()) {
     html += "<p>No BLE devices were seen during the scan. Make sure the sensor is powered and in range, then <a href='/ble/scan'>scan again</a>.</p>";
@@ -705,9 +783,19 @@ void handleSetupRoot() {
   // blob per hive in exactly the shape hivecfg::hiveFromJson() parses.
   html += "<fieldset><legend>Hives &amp; sensors</legend>";
   html += "<p>Add a hive, choose its single scale source, then optionally add exactly one in-hive sensor: either one BLE beacon/GATT sensor or one wired DS18B20 probe. An I2C scan ran when this page loaded; ";
-  html += "use <a href='/ble/scan'>Scan BLE</a> to find wireless sensors and <a href='/i2c/scan'>I2C scan details</a> to verify wiring. ";
+  html += "see <a href='/i2c/scan'>I2C scan details</a> to verify wiring. ";
+#if ENABLE_BLE_SCAN
+  html += "A BLE scan ran when the portal started: discovered sensors can be picked from the dropdown next to each MAC field, and the field stays editable for sensors that are currently powered off. ";
+#endif
   html += "BLE HiveScale from Beehivemonitoring remains a scale source and can still have its own MAC field. ";
   html += "Connection-based GATT sensors are read serially and capped at " + String(MAX_GATT_READS_PER_CYCLE) + " per wake cycle.</p>";
+#if ENABLE_BLE_SCAN
+  html += "<p><button type='button' class='button' id='blerescan'>&#128260; Rescan BLE sensors</button> <span id='blemsg' class='meta'>";
+  if (gPortalBleScanned) {
+    html += "Startup scan found " + String((unsigned)gPortalBleDevices.size()) + " device(s).";
+  }
+  html += "</span></p>";
+#endif
   html += "<div id='hives'></div>";
   html += "<p id='hempty' class='meta'>No hives yet. Add one to begin.</p>";
   html += "<p><button type='button' class='button primary' id='addhive'>&#10133; Add hive</button> ";
@@ -717,6 +805,12 @@ void handleSetupRoot() {
 
   html += "<script>var DETECTED_SCALES=" + detectedScalesJs() + ";";
   html += "var DETECTED_PROBES=" + detectedProbesJs() + ";";
+#if ENABLE_BLE_SCAN
+  html += "var BLE_SCAN=1;var BLE_SCAN_SECONDS=" + String((unsigned)HOLYIOT_BLE_SCAN_SECONDS) + ";";
+  html += "var DETECTED_BLE=" + detectedBleJson() + ";";
+#else
+  html += "var BLE_SCAN=0;var BLE_SCAN_SECONDS=0;var DETECTED_BLE=[];";
+#endif
   html += "var INITIAL_HIVES=" + initialHivesJs() + ";";
   html += "var MAX_HIVES=" + String(MAX_HIVES) + ";var MAX_BLE=" + String(hivecfg::MAX_BLE_PER_HIVE) + ";var MAX_INHIVE_BLE=" + String(hivecfg::MAX_INHIVE_BLE_PER_HIVE) + ";";
   // Fallback channel used when the bus probe found no NAU7802 but the user still
@@ -735,6 +829,10 @@ var SENSOR_TYPES=[["holyiot","HolyIot 25015 — beacon"],["ruuvitag","RuuviTag �
 var host=document.getElementById("hives"),form=document.getElementById("cfgform"),dsList=document.getElementById("dsprobeopts");
 if(dsList)dsList.innerHTML=(DETECTED_PROBES||[]).map(function(r){return "<option value='"+r+"'>";}).join("");
 function clone(o){return JSON.parse(JSON.stringify(o));}
+function normMac(m){return (m||"").trim().toUpperCase();}
+function bleByMac(m){m=normMac(m);if(!m)return null;for(var i=0;i<DETECTED_BLE.length;i++)if(normMac(DETECTED_BLE[i].m)==m)return DETECTED_BLE[i];return null;}
+function bleOptLabel(d){var l=d.n?d.n+" — ":"";l+=d.m;if(d.tn)l+=" · "+d.tn;l+=" · "+d.r+" dBm";return l;}
+function fillBleSelect(sel,cur){sel.innerHTML="";var oc=document.createElement("option");oc.value="";oc.textContent=DETECTED_BLE.length?"Custom MAC…":"No BLE devices found — enter MAC manually";sel.appendChild(oc);var curN=normMac(cur),hit=false;DETECTED_BLE.forEach(function(d){var o=document.createElement("option");o.value=d.m;o.textContent=bleOptLabel(d);if(curN&&normMac(d.m)==curN){o.selected=true;hit=true;}sel.appendChild(o);});if(!hit)oc.selected=true;}
 function scaleKey(o){return o.b=="nau"?("nau:"+o.mux+":"+o.adc):("hx:"+o.hx);}
 function labelScale(o,nauCount){if(o.b=="hx")return "HX711 ("+(Number(o.hx)+1)+")";var loc=o.mux>=0?("mux ch "+o.mux+" CH"+o.adc):("main bus CH"+o.adc);return nauCount>1?"NAU7802 — "+loc:"NAU7802";}
 function allWiredScales(){var seen={},out=[],nau=0;DETECTED_SCALES.forEach(function(o){if(o.b=="nau")nau++;});var addDefaultNau=!nau&&DEFAULT_NAU_SCALE;if(addDefaultNau)nau=1;
@@ -764,10 +862,11 @@ c.innerHTML="<legend>Hive "+h.i+"</legend>"+
 host.appendChild(c);
 var nm=c.querySelector("[data-hn]");nm.value=h.n||"";nm.addEventListener("input",function(){h.n=this.value;});
 var sw=c.querySelector("[data-scale-wrap]"),sr=document.createElement("p");sr.className="wnote";
-sr.innerHTML="<select data-scale>"+scaleOpts(h)+"</select>"+(h.sk=="ble"?" <input data-sm placeholder='AA:BB:CC:DD:EE:FF'>":"");
+sr.innerHTML="<select data-scale>"+scaleOpts(h)+"</select>"+(h.sk=="ble"?((BLE_SCAN?" <select data-bsel></select>":"")+" <input data-sm placeholder='AA:BB:CC:DD:EE:FF'>"):"");
 sw.appendChild(sr);
 var ss=sr.querySelector("[data-scale]");ss.value=h.sk||"none";ss.addEventListener("change",function(){setScaleChoice(h,ss.value);render();});
 var sm=sr.querySelector("[data-sm]");if(sm){sm.value=h.wm||"";sm.addEventListener("input",function(){h.wm=this.value;});}
+var sbs=sr.querySelector("[data-bsel]");if(sm&&sbs){fillBleSelect(sbs,h.wm);sbs.addEventListener("change",function(){if(!sbs.value)return void sm.focus();h.wm=sbs.value;sm.value=sbs.value;});sm.addEventListener("input",function(){fillBleSelect(sbs,sm.value);});}
 var sn=c.querySelector("[data-sensors]");
 if(h.ds!==null){var row=document.createElement("p");row.className="wnote";
 row.innerHTML="<b>Wired DS18B20</b> <input data-ds list='dsprobeopts' pattern='[0-9A-Fa-f]{16}' title='16 hex characters' placeholder='16-char ROM address'> <button type='button' class='button' data-rm>Remove</button>";
@@ -775,10 +874,11 @@ sn.appendChild(row);
 var dss=row.querySelector("[data-ds]");dss.value=h.ds||"";dss.addEventListener("input",function(){h.ds=dss.value.trim();});
 row.querySelector("[data-rm]").addEventListener("click",function(){h.ds=null;render();});}
 h.bl.slice(0,MAX_INHIVE_BLE).forEach(function(b,bi){var row=document.createElement("p");row.className="wnote";
-row.innerHTML="<select data-bt>"+typeOpts(b.t)+"</select> <input data-bm placeholder='AA:BB:CC:DD:EE:FF'> <button type='button' class='button' data-rm>Remove</button>";
+row.innerHTML="<select data-bt>"+typeOpts(b.t)+"</select>"+(BLE_SCAN?" <select data-bsel></select>":"")+" <input data-bm placeholder='AA:BB:CC:DD:EE:FF'> <button type='button' class='button' data-rm>Remove</button>";
 sn.appendChild(row);
 var bt=row.querySelector("[data-bt]");bt.value=b.t;bt.addEventListener("change",function(){b.t=bt.value;});
 var mi=row.querySelector("[data-bm]");mi.value=b.m||"";mi.addEventListener("input",function(){b.m=this.value;});
+var bs=row.querySelector("[data-bsel]");if(bs){fillBleSelect(bs,b.m);bs.addEventListener("change",function(){if(!bs.value)return void mi.focus();b.m=bs.value;mi.value=bs.value;var d=bleByMac(bs.value);if(d&&d.t){b.t=d.t;bt.value=d.t;}});mi.addEventListener("input",function(){fillBleSelect(bs,mi.value);});}
 row.querySelector("[data-rm]").addEventListener("click",function(){h.bl.splice(bi,1);render();});});
 var addBle=c.querySelector("[data-addble]"),addDs=c.querySelector("[data-addds]");
 addBle.disabled=hasInhiveSensor(h);addDs.disabled=hasInhiveSensor(h);
@@ -800,6 +900,9 @@ if(h.sk=="ble"&&h.wm&&h.wm.length)bl.push({t:"hivescale",m:h.wm});
 o.bl=bl;
 return o;});
 document.getElementById("hives_json").value=JSON.stringify(out);});
+var rb=document.getElementById("blerescan");
+if(rb)rb.addEventListener("click",function(){var m=document.getElementById("blemsg");rb.disabled=true;m.textContent="Scanning for "+BLE_SCAN_SECONDS+" s…";
+fetch("/ble/scan.json").then(function(r){return r.json();}).then(function(d){DETECTED_BLE=d;m.textContent=d.length+" device(s) found.";render();}).catch(function(){m.textContent="Scan failed — try again.";}).finally(function(){rb.disabled=false;});});
 render();
 })();</script>)HVJS";
   html += "</fieldset>";
@@ -944,6 +1047,15 @@ void startProvisioningPortal() {
   if (provisioningActive) return;
 
   Serial.println("[SETUP] Starting provisioning AP");
+
+#if ENABLE_BLE_SCAN
+  // Discover nearby BLE sensors once BEFORE the AP comes up, so the setup
+  // page's sensor dropdowns are populated on first load. Costs a few seconds
+  // of portal startup; the page's "Rescan BLE" button repeats it on demand
+  // (via /ble/scan.json) without losing unsaved form entries.
+  portalRunBleScan();
+#endif
+
   WiFi.disconnect(true, true);
   delay(200);
   WiFi.mode(WIFI_AP);
@@ -970,6 +1082,7 @@ void startProvisioningPortal() {
   setupServer.on("/sd/download-all", HTTP_GET, handleSdDownloadAll);
 #if ENABLE_BLE_SCAN
   setupServer.on("/ble/scan", HTTP_GET, handleBleScan);
+  setupServer.on("/ble/scan.json", HTTP_GET, handleBleScanJson);
 #endif
   setupServer.on("/i2c/scan", HTTP_GET, handleI2cScan);
   setupServer.on("/calibrate", HTTP_GET, handleCalibratePage);

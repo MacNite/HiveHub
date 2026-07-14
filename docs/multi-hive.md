@@ -80,15 +80,21 @@ header there.)
 The setup portal (AP mode → `http://192.168.4.1/`) is now organised **by hive**:
 
 1. An **I2C scan** runs when the page loads, enumerating NAU7802 channels (main
-   bus + each mux channel) and DS18B20 ROMs. Use **Scan BLE** for wireless
-   sensors and **I2C scan details** to verify wiring.
+   bus + each mux channel) and DS18B20 ROMs; see **I2C scan details** to verify
+   wiring. A **BLE scan** runs once when the portal starts, so every MAC field
+   comes with a dropdown of the discovered devices (name + MAC + detected sensor
+   type + RSSI). Picking a device fills the MAC field (and pre-selects the
+   sensor type when it was recognised); the field stays editable for sensors
+   that are currently powered off. The **🔄 Rescan BLE sensors** button on the
+   setup page refreshes the dropdowns in place **without losing unsaved hive
+   entries** (unlike navigating to the standalone `/ble/scan` page).
 2. **➕ Add hive** creates a hive card.
 3. Inside each hive: choose exactly one **Scale** source from the dropdown. The
    portal offers HX711 (1), HX711 (2), detected NAU7802 channels, and **BLE
    HiveScale from Beehivemonitoring**; when the BLE HiveScale option is selected,
-   a MAC-address field appears for pairing. The **In-hive sensor** section allows
-   exactly one non-scale sensor per hive: **➕ Add BLE sensor** or **➕ Add
-   DS18B20**.
+   a MAC-address field (with the same device dropdown) appears for pairing. The
+   **In-hive sensor** section allows exactly one non-scale sensor per hive:
+   **➕ Add BLE sensor** or **➕ Add DS18B20**.
 4. **Save and reboot** writes one compact JSON blob per hive to NVS
    (`h0_cfg`..`h17_cfg` + `hive_count`).
 
