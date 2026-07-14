@@ -41,6 +41,14 @@ int main() {
   eqi("energy", h.energy, 0);
   eqi("peak", h.peak, 0);
   eqi("fft_present", h.fft_present ? 1 : 0, 1);
+  // Raw FFT is payload bytes 12–19, preserved verbatim (the server decodes the
+  // packed nibbles). Assert all 8 bytes from the real capture above.
+  const uint8_t want_fft[8] = { 0x6E, 0xFB, 0x7B, 0x53, 0x44, 0x34, 0x63, 0x24 };
+  for (int i = 0; i < 8; i++) {
+    char label[16];
+    std::snprintf(label, sizeof(label), "fft[%d]", i);
+    eqi(label, h.fft[i], want_fft[i]);
+  }
 
   // Scale 1 capture (15 bytes).
   const uint8_t scale[] = {

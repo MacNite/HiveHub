@@ -26,9 +26,13 @@ let activeCharts = [];
 // leaves a chart, so a slid position survives a data reload.
 let cursorT = null;
 
-// Selected/hovered category index for spectrum charts (x-axis is a fixed set
-// of bands rather than time), shared the same way cursorT is.
-let cursorBand = null;
+// Hovered category index per spectrum "group". A group is the set of charts
+// that share the same x-axis categories (all mic 5-band charts form one group;
+// all HiveHeart 16-range charts form another). Keying by group means hovering a
+// mic band moves the cursor only on the other mic charts, never onto the
+// HiveHeart spectrum whose categories (frequency ranges) are unrelated. Persists
+// across re-renders the same way cursorT does.
+let cursorBandByGroup = Object.create(null);
 
 // Expected send cadence for the active device (ms). Charts use this only as a
 // fallback expected spacing for series too short to infer their own cadence;
@@ -49,7 +53,8 @@ export function clearCharts() { activeCharts = []; }
 export function drawCharts() {
   for (const c of activeCharts) {
     if (c.kind === "spectrum") {
-      drawSpectrumChart(c.canvas, c.categories, c.snapshots, { ...c.opts, cursorIndex: cursorBand, bandStats: c.bandStats });
+      const cb = cursorBandByGroup[c.group];
+      drawSpectrumChart(c.canvas, c.categories, c.snapshots, { ...c.opts, cursorIndex: cb == null ? null : cb, bandStats: c.bandStats });
       updateSpectrumReadout(c);
       continue;
     }
@@ -69,13 +74,18 @@ function updateReadout(c) {
 
 function updateSpectrumReadout(c) {
   if (!c.hint) return;
+  const cursorBand = cursorBandByGroup[c.group];
   if (cursorBand == null) { c.hint.textContent = "Drag to inspect"; return; }
   const idx = Math.min(c.categories.length - 1, Math.max(0, cursorBand));
   const unit = c.opts.unit ? " " + c.opts.unit : "";
   const digits = c.opts.yDigits ?? 1;
+  // Append an x-axis unit (e.g. "Hz" for HiveHeart's frequency ranges) to the
+  // hovered category so the full range reads clearly even when the axis ticks
+  // are thinned; mic bands leave xUnit unset.
+  const cat = c.opts.xUnit ? `${c.categories[idx]} ${c.opts.xUnit}` : c.categories[idx];
   const stats = c.bandStats[idx];
-  if (!stats) { c.hint.textContent = `${c.categories[idx]}: ${DASH}`; return; }
-  c.hint.textContent = `${c.categories[idx]}: ${fmt(stats.min, digits)} to ${fmt(stats.max, digits)}${unit}`;
+  if (!stats) { c.hint.textContent = `${cat}: ${DASH}`; return; }
+  c.hint.textContent = `${cat}: ${fmt(stats.min, digits)} to ${fmt(stats.max, digits)}${unit}`;
 }
 
 // Turn a pointer event's x position into a timestamp using the chart's last
@@ -105,7 +115,7 @@ function setCursorBandFromEvent(canvas, e) {
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const frac = scale.n <= 1 ? 0 : Math.min(1, Math.max(0, (x - scale.padL) / scale.plotW));
-  cursorBand = Math.round(frac * (scale.n - 1));
+  cursorBandByGroup[canvas._spectrumGroup] = Math.round(frac * (scale.n - 1));
   if (!cursorRaf) {
     cursorRaf = requestAnimationFrame(() => { cursorRaf = 0; drawCharts(); });
   }
@@ -141,7 +151,7 @@ function attachSpectrumCursor(canvas) {
   });
   canvas.addEventListener("pointerleave", (e) => {
     if (e.pointerType !== "mouse") return;
-    cursorBand = null;
+    delete cursorBandByGroup[canvas._spectrumGroup];
     drawCharts();
   });
 }
@@ -189,9 +199,16 @@ function spectrumChartCard(title, sub, categories, snapshots, bandStats, color, 
     el("span", { class: "spectrum-gradient", style: `background:linear-gradient(90deg, ${withAlpha(color, 0.15)}, ${color})` }),
     el("span", { class: "lg" },
       el("span", { class: "swatch", style: "background:var(--chart-latest)" }), "Latest"),
+    // Marker key (HiveHeart peak frequency) — colour matches drawSpectrumChart.
+    opts.marker ? el("span", { class: "lg" },
+      el("span", { class: "swatch", style: "background:#d6336c" }), "Peak freq") : null,
     hint);
   const rangeNote = oldest && newest ? ` (${fmtDateTime(oldest.t)} – ${fmtDateTime(newest.t)})` : "";
-  const chart = { canvas, kind: "spectrum", categories, snapshots, bandStats, opts: { ...opts, color }, hint };
+  // Charts sharing the same categories (all mic charts, or all HiveHeart charts)
+  // share a hover cursor; different category sets are independent groups.
+  const group = categories.join("|");
+  canvas._spectrumGroup = group;
+  const chart = { canvas, kind: "spectrum", group, categories, snapshots, bandStats, opts: { ...opts, color }, hint };
   activeCharts.push(chart);
   if (snapshots.length) attachSpectrumCursor(canvas);
   return el("div", { class: "card chart-card" },
@@ -650,23 +667,162 @@ function bandMinMax(measurements, keysList) {
   });
 }
 
+// ── HiveHeart in-hive FFT spectrum ───────────────────────────────────────────
+// The 16 HiveHeart frequency ranges (Hz). Mirrors server/hiveheart_fft.py
+// FFT_RANGES_HZ — keep in sync with the backend. Note the known 845–853 Hz gap
+// between bins 9 and 10 (preserved verbatim per the vendor table; see the TODO
+// in hiveheart_fft.py). HiveHeart values are RELATIVE levels 0–15, NOT dBFS, so
+// they are charted on their own 0–15 axis, never overlaid on the mic spectrum.
+const HIVEHEART_FFT_RANGES = [
+  [0, 93], [94, 187], [188, 281], [282, 375], [376, 479], [480, 562],
+  [563, 656], [657, 750], [751, 844], [854, 937], [938, 1031], [1032, 1125],
+  [1126, 1218], [1219, 1312], [1313, 1406], [1407, 1500],
+];
+const HIVEHEART_FFT_LABELS = HIVEHEART_FFT_RANGES.map(([lo, hi]) => `${lo}–${hi}`);
+const HIVEHEART_FFT_BIN_COUNT = 16;
+
+// Conceptual acoustic bands shown as grouped headings over the HiveHeart x-axis.
+// Display only: each spans several HiveHeart ranges (and boundaries fall mid-bin),
+// so they are annotations, never a 1:1 bin→band mapping (see insights.py). HiveHeart
+// tops out at 1500 Hz, so there is no High (1500–3000 Hz) band.
+const HIVEHEART_SEMANTIC_BANDS = [
+  ["Sub-bass", 0, 150], ["Hum", 150, 300], ["Piping", 300, 550], ["Stress", 550, 1500],
+];
+
+// Map a frequency (Hz) to a fractional HiveHeart bin index (0..15) so a marker or
+// band boundary lines up with the plotted bins. Bin i occupies index [i-0.5, i+0.5];
+// a frequency inside range i interpolates within that slot. Frequencies in the
+// 845–853 Hz gap land on the boundary between the adjacent bins; out-of-range
+// clamps to the first/last bin; null when not finite.
+function hiveheartFreqToIndex(hz) {
+  if (!Number.isFinite(hz)) return null;
+  const R = HIVEHEART_FFT_RANGES;
+  if (hz <= R[0][0]) return 0;
+  if (hz >= R[R.length - 1][1]) return R.length - 1;
+  for (let i = 0; i < R.length; i++) {
+    const [lo, hi] = R[i];
+    if (hz >= lo && hz <= hi) return (i - 0.5) + (hi > lo ? (hz - lo) / (hi - lo) : 0.5);
+  }
+  for (let i = 0; i < R.length - 1; i++) {
+    if (hz > R[i][1] && hz < R[i + 1][0]) return i + 0.5; // in the inter-bin gap
+  }
+  return null;
+}
+
+// The semantic bands as {label, from, to} fractional-index spans for the chart.
+function hiveheartSemanticSpans() {
+  return HIVEHEART_SEMANTIC_BANDS.map(([label, lo, hi]) => ({
+    label,
+    from: hiveheartFreqToIndex(lo) ?? 0,
+    to: hiveheartFreqToIndex(hi) ?? (HIVEHEART_FFT_BIN_COUNT - 1),
+  }));
+}
+
+// The most recent finite HiveHeart peak frequency (Hz) reported for this hive —
+// the independent frequency_hz value, drawn as a marker on the spectrum.
+function latestHiveheartFreq(ref) {
+  const key = `hiveheart_${ref.hive}_frequency_hz`;
+  const rows = ref.latest ? [ref.latest, ...ref.measurements] : ref.measurements;
+  for (const m of rows) {
+    if (m == null || m[key] == null || m[key] === "") continue;
+    const y = Number(m[key]);
+    if (Number.isFinite(y)) return y;
+  }
+  return null;
+}
+
+// Coerce a measurement's decoded HiveHeart fft_bins into a 16-number array, or
+// null when absent/malformed (legacy rows, or a hive with no HiveHeart sensor).
+function hiveheartBins(m, key) {
+  const v = m && m[key];
+  if (!Array.isArray(v) || v.length !== HIVEHEART_FFT_BIN_COUNT) return null;
+  const out = v.map((x) => (typeof x === "number" ? x : Number(x)));
+  return out.every((x) => Number.isFinite(x)) ? out : null;
+}
+
+// Oldest→newest {t, values[16]} snapshots for a hive's HiveHeart spectrum,
+// downsampled to at most SPECTRUM_MAX_SNAPSHOTS (mirrors spectrumSnapshots).
+function hiveheartSnapshots(measurements, key) {
+  const rows = [];
+  for (let i = measurements.length - 1; i >= 0; i--) {
+    const m = measurements[i];
+    const bins = hiveheartBins(m, key);
+    if (!bins) continue;
+    const t = new Date(m.measured_at).getTime();
+    if (Number.isNaN(t)) continue;
+    rows.push({ t, values: bins });
+  }
+  if (rows.length <= SPECTRUM_MAX_SNAPSHOTS) return rows;
+  const step = (rows.length - 1) / (SPECTRUM_MAX_SNAPSHOTS - 1);
+  const out = [];
+  for (let i = 0; i < SPECTRUM_MAX_SNAPSHOTS; i++) out.push(rows[Math.round(i * step)]);
+  return out;
+}
+
+// Per-range {min,max} across the full selected range for the hover readout.
+function hiveheartBandMinMax(measurements, key) {
+  const stats = HIVEHEART_FFT_RANGES.map(() => ({ min: Infinity, max: -Infinity }));
+  for (const m of measurements) {
+    const bins = hiveheartBins(m, key);
+    if (!bins) continue;
+    bins.forEach((y, i) => {
+      if (y < stats[i].min) stats[i].min = y;
+      if (y > stats[i].max) stats[i].max = y;
+    });
+  }
+  return stats.map((s) => (s.min === Infinity ? null : s));
+}
+
 function renderFrequency(root, state) {
   const refs = selectedRefs(state);
   const categories = BANDS.map(([, label]) => label);
   const charts = [];
+  let micCharts = 0;
   refs.forEach((ref, i) => {
     const keysList = BANDS.map(([k]) => micKeys(ref.hive, `band_${k}_dbfs`));
     const snapshots = spectrumSnapshots(ref.measurements, keysList);
     if (snapshots.length) {
+      micCharts++;
       const bandStats = bandMinMax(ref.measurements, keysList);
       charts.push(spectrumChartCard(`Frequency bands — ${refLabel(state, ref)}`,
         "FFT energy by band, like a spectrum analyzer — the bold line is the latest reading, fainter lines are earlier ones",
         categories, snapshots, bandStats, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
     }
   });
-  if (!charts.length) {
+  if (!micCharts) {
     charts.push(el("div", { class: "card" }, el("p", { class: "muted-text" }, "No frequency-band data reported by this device.")));
   }
+
+  // HiveHeart in-hive spectrum. Rendered as a separate 16-range diagram on its
+  // own 0–15 relative-level axis (HiveHeart levels are not dBFS). Only shown when
+  // at least one selected hive reports HiveHeart FFT, then a card per hive so a
+  // hive without data gets a clear empty state without cluttering non-HiveHeart
+  // setups.
+  const hhSnaps = refs.map((ref) => hiveheartSnapshots(ref.measurements, `hiveheart_${ref.hive}_fft_bins`));
+  if (hhSnaps.some((s) => s.length)) {
+    refs.forEach((ref, i) => {
+      const snaps = hhSnaps[i];
+      if (snaps.length) {
+        const key = `hiveheart_${ref.hive}_fft_bins`;
+        const bandStats = hiveheartBandMinMax(ref.measurements, key);
+        const opts = {
+          unit: "level", yDigits: 0, yMin: 0, yMax: 15, xUnit: "Hz",
+          semanticBands: hiveheartSemanticSpans(),
+        };
+        const freqHz = latestHiveheartFreq(ref);
+        const markerIndex = hiveheartFreqToIndex(freqHz);
+        if (markerIndex != null) opts.marker = { index: markerIndex, label: `${Math.round(freqHz)} Hz` };
+        charts.push(spectrumChartCard(`HiveHeart spectrum — ${refLabel(state, ref)}`,
+          "HiveHeart in-hive FFT — 16 frequency ranges (Hz), relative level 0–15 (not dBFS); bold line is the latest reading, fainter lines are earlier ones. The dashed pink marker is HiveHeart's reported peak frequency; the Sub-bass/Hum/Piping/Stress headings are approximate and span several ranges",
+          HIVEHEART_FFT_LABELS, snaps, bandStats, paletteColor(i), opts));
+      } else {
+        charts.push(el("div", { class: "card" },
+          el("h2", {}, `HiveHeart spectrum — ${refLabel(state, ref)}`),
+          el("p", { class: "muted-text" }, "No HiveHeart FFT data for this hive.")));
+      }
+    });
+  }
+
   root.append(tsView("Frequency bands", "FFT energy by acoustic band", state, { charts }));
 }
 

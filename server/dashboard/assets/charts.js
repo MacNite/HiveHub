@@ -256,7 +256,9 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   }
   if (empty) empty.remove();
 
-  const padL = 48, padR = 14, padT = 12, padB = 26;
+  const padL = 48, padR = 14, padB = 26;
+  // Extra top room for the HiveHeart semantic-band heading row, when present.
+  const padT = 12 + (opts.semanticBands && opts.semanticBands.length ? 14 : 0);
   const plotW = cssW - padL - padR;
   const plotH = cssH - padT - padB;
   const n = categories.length;
@@ -271,6 +273,11 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
   }
   const pad = (yMax - yMin) * 0.12 || 1;
   yMin -= pad; yMax += pad;
+  // Fixed-scale override: a chart on a bounded scale (e.g. HiveHeart's 0–15
+  // relative levels) passes yMin/yMax so its axis is stable and never shares
+  // the auto-fitted dBFS range of the microphone spectrum.
+  if (opts.yMin != null) yMin = opts.yMin;
+  if (opts.yMax != null) yMax = opts.yMax;
 
   const xOf = (i) => (n <= 1 ? padL + plotW / 2 : padL + (i / (n - 1)) * plotW);
   const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
@@ -281,6 +288,27 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
 
   ctx.font = FONT;
   ctx.textBaseline = "middle";
+
+  // Semantic acoustic-band annotations (HiveHeart spectrum only): faint
+  // alternating background stripes with a heading centered above each conceptual
+  // band. They overlap several HiveHeart frequency ranges, so they are visual
+  // groupings only, never mapped one-to-one onto a bin. `from`/`to` are fractional
+  // bin indices (see hiveheartSemanticSpans in views.js).
+  if (opts.semanticBands && opts.semanticBands.length) {
+    const clampFi = (fi) => Math.max(0, Math.min(n - 1, fi));
+    ctx.textAlign = "center";
+    opts.semanticBands.forEach((band, bi) => {
+      const x0 = xOf(clampFi(band.from)), x1 = xOf(clampFi(band.to));
+      if (bi % 2 === 0) {
+        ctx.fillStyle = withAlpha("#808080", 0.1);
+        ctx.fillRect(x0, padT, x1 - x0, plotH);
+      }
+      if (band.label && x1 - x0 > ctx.measureText(band.label).width + 6) {
+        ctx.fillStyle = axis;
+        ctx.fillText(band.label, (x0 + x1) / 2, 7);
+      }
+    });
+  }
 
   // Y gridlines + labels
   const yTicks = niceTicks(yMin, yMax, 5);
@@ -294,15 +322,29 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
     ctx.fillText(t.toFixed(opts.yDigits ?? 1), padL - 6, y);
   }
 
-  // X gridlines + category labels (one per band, evenly spaced)
+  // X gridlines + category labels (one per band, evenly spaced). With many
+  // narrow bands (e.g. HiveHeart's 16 frequency ranges) the labels would collide,
+  // so draw every gridline but thin the labels to roughly one per ~46 px, always
+  // keeping the first and last. The full label is still available in the hover
+  // readout for every band (see updateSpectrumReadout).
   ctx.textAlign = "center";
+  const labelStride = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(plotW / 46))));
   for (let i = 0; i < n; i++) {
     const x = xOf(i);
     ctx.strokeStyle = grid;
     ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, cssH - padB); ctx.stroke();
-    ctx.fillStyle = axis;
-    ctx.fillText(categories[i], x, cssH - padB / 2);
+    const showLabel = labelStride === 1 || i % labelStride === 0 || i === n - 1;
+    if (showLabel) {
+      ctx.fillStyle = axis;
+      // Anchor the first/last labels to the plot edges so a long edge label
+      // (e.g. HiveHeart's "1407–1500") isn't clipped by the canvas border.
+      if (n > 1 && i === 0) ctx.textAlign = "left";
+      else if (n > 1 && i === n - 1) ctx.textAlign = "right";
+      else ctx.textAlign = "center";
+      ctx.fillText(categories[i], x, cssH - padB / 2);
+    }
   }
+  ctx.textAlign = "center";
 
   // Older snapshot lines, oldest→newest, faded by age so recency reads at a
   // glance. The latest snapshot is excluded here and drawn separately below in
@@ -344,6 +386,26 @@ export function drawSpectrumChart(canvas, categories, snapshots, opts = {}) {
       if (typeof v !== "number" || !Number.isFinite(v)) return;
       ctx.beginPath(); ctx.arc(xOf(i), yOf(v), 3, 0, Math.PI * 2); ctx.fill();
     });
+  }
+
+  // Reported peak-frequency marker (HiveHeart `frequency_hz`): a dashed vertical
+  // guide at the frequency HiveHeart independently reports, positioned by
+  // fractional bin index so it lines up with the plotted ranges.
+  if (opts.marker && Number.isFinite(opts.marker.index) && n > 1) {
+    const mx = xOf(Math.max(0, Math.min(n - 1, opts.marker.index)));
+    const col = "#d6336c";
+    ctx.save();
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 2]);
+    ctx.beginPath(); ctx.moveTo(mx, padT); ctx.lineTo(mx, cssH - padB); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(mx, padT, 3, 0, Math.PI * 2); ctx.fill();
+    if (opts.marker.label) {
+      const near = mx > cssW - padR - 46;
+      ctx.textAlign = near ? "right" : "left";
+      ctx.fillText(opts.marker.label, near ? mx - 5 : mx + 5, padT + 7);
+    }
+    ctx.restore();
   }
 
   // Interactive cursor: dashed vertical guide at the hovered band, plus a

@@ -6,7 +6,25 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from hiveheart_fft import FFT_RAW_LEN
 from tempcomp import DEFAULT_REF_TEMP_C, DEFAULT_TEMP_SOURCE
+
+
+def validate_fft_raw(v):
+    """Validate a HiveHeart raw FFT array: exactly 8 integers, each 0–255.
+
+    Shared by the nested ``HiveHeartIn.fft`` and the flat ``hiveheart_N_fft``
+    fields so invalid FFT data is rejected with a useful error during normal
+    ingest. ``None`` (field absent) is allowed. Returns the value unchanged.
+    """
+    if v is None:
+        return v
+    if not isinstance(v, (list, tuple)) or len(v) != FFT_RAW_LEN:
+        raise ValueError(f"fft must contain exactly {FFT_RAW_LEN} integers")
+    for b in v:
+        if isinstance(b, bool) or not isinstance(b, int) or not (0 <= b <= 255):
+            raise ValueError("fft values must be integers between 0 and 255")
+    return list(v)
 
 
 # Maximum hives a single device reports (mirrors MAX_HIVES in the firmware's
@@ -74,7 +92,14 @@ class HiveHeartIn(BaseModel):
     peak: Optional[int] = None
     battery_v: Optional[float] = None
     rssi_dbm: Optional[int] = None
-    fft: Optional[list[int]] = Field(default=None, max_length=16)
+    # Raw 8-byte packed-nibble FFT (see server/hiveheart_fft.py). Kept as the
+    # canonical representation; decoded to 16 relative levels (0–15) on read.
+    fft: Optional[list[int]] = Field(default=None)
+
+    @field_validator("fft")
+    @classmethod
+    def _check_fft(cls, v):
+        return validate_fft_raw(v)
 
 
 class HiveScaleIn(BaseModel):
@@ -304,7 +329,7 @@ class MeasurementIn(BaseModel):
     hiveheart_1_rssi_dbm:         Optional[int]   = None
     hiveheart_1_temp_c:           Optional[float] = None
     hiveheart_1_humidity_percent: Optional[float] = None
-    hiveheart_1_fft:              Optional[list[int]] = Field(default=None, max_length=16)
+    hiveheart_1_fft:              Optional[list[int]] = Field(default=None)
     hiveheart_2_frequency_hz:     Optional[float] = None
     hiveheart_2_energy:           Optional[int]   = None
     hiveheart_2_peak:             Optional[int]   = None
@@ -312,7 +337,12 @@ class MeasurementIn(BaseModel):
     hiveheart_2_rssi_dbm:         Optional[int]   = None
     hiveheart_2_temp_c:           Optional[float] = None
     hiveheart_2_humidity_percent: Optional[float] = None
-    hiveheart_2_fft:              Optional[list[int]] = Field(default=None, max_length=16)
+    hiveheart_2_fft:              Optional[list[int]] = Field(default=None)
+
+    @field_validator("hiveheart_1_fft", "hiveheart_2_fft")
+    @classmethod
+    def _check_hiveheart_fft(cls, v):
+        return validate_fft_raw(v)
 
     hivescale_1_weight_kg:        Optional[float] = None
     hivescale_1_raw_weight:       Optional[int]   = None

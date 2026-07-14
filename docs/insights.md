@@ -21,7 +21,7 @@ This document is the authoritative reference for **what is detected**,
 |---|---|
 | Computation source | `server/insights.py` (pure Python, no DB access) |
 | Trigger | Every call to the insights endpoint; cached on the frontend for 5 minutes |
-| Inputs | Weight, hive temperature, ambient temperature/humidity, FFT mic bands, BeeCounter entrance counts, and in-hive vibration (HiveInside FFT bands or a low-rate HolyIot/RuuviTag beacon magnitude) — all per channel, all optional except weight/temperature |
+| Inputs | Weight, hive temperature, ambient temperature/humidity, FFT mic bands, BeeCounter entrance counts, in-hive vibration (HiveInside FFT bands or a low-rate HolyIot/RuuviTag beacon magnitude), and the HiveHeart 16-band relative FFT — all per channel, all optional except weight/temperature |
 | Lookback | Up to 14 days, configurable via the `lookback_days` query parameter |
 | Per-channel | Each detector runs independently for scale 1 and scale 2 |
 | Output | A flat list of `Alert` objects, sorted by severity then time |
@@ -402,6 +402,38 @@ this trends the night-time mean of the broadband AC magnitude: rising in-hive
 movement over days is a coarse pre-swarm activity cue. It is deliberately
 lower-confidence than the FFT-band detector. See
 [holyiot-ble-sensor.md](holyiot-ble-sensor.md).
+
+---
+
+### 13. HiveHeart spectrum shift (relative FFT)
+
+| | |
+|---|---|
+| Function | `detect_hiveheart_spectrum_shift` |
+| Category | `acoustic` |
+| Severity | `info` |
+| Inputs | HiveHeart 16-band FFT decoded to **relative levels 0–15** (`hiveheart_{ch}_fft_bins`), per hive |
+| Rule | Compare a recent 24 h window to the hive's own prior-7-day baseline (≥ 4 recent and ≥ 12 baseline decoded spectra). Fire when the relative-level **spectral centroid** shifts by ≥ **120 Hz**, or mean **total relative activity** rises ≥ **1.6×** (both above an activity floor of 4) |
+| Confidence | 0.4 (fixed — uncalibrated) |
+| Source | HiveHeart FFT baseline comparison (relative levels; uncalibrated) |
+
+**Why it fires.** The beehivemonitoring.com HiveHeart reports a compressed
+16-band FFT of *relative* levels (0–15), not calibrated dB. Because there are no
+field-validated absolute thresholds for these values, this detector only compares
+a colony **against itself over time** — a meaningful move in where the in-hive
+sound sits (centroid) or how loud it is overall (activity). It is intentionally
+kept at `info` severity.
+
+**Constraints (important).** HiveHeart relative levels are **never** compared with
+the microphone dBFS bands, a level of 15 is **not** a calibrated acoustic
+threshold, and the rule requires sufficient per-hive history before it can fire.
+The shared feature helpers (dominant range, spectral centroid, total activity,
+and overlap-weighted semantic bands) live in `server/hiveheart_fft.py`; the
+semantic-band aggregation widens Sub-bass to 0 Hz (vs the microphone path's
+50–150 Hz) so the HiveHeart 0–93 Hz bin is captured, and uses proportional
+overlap weighting because HiveHeart bins cross the Sub-bass/Hum/Piping/Stress
+boundaries. Thresholds are first guesses — recalibrate against real field data
+before promoting above `info`.
 
 ---
 

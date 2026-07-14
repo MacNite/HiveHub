@@ -2,6 +2,7 @@
 readings, temperature compensation and serialization."""
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import psycopg
@@ -16,6 +17,7 @@ from auth import (
 from config import MIN_PLAUSIBLE_YEAR, logger
 from db import get_conn
 from devices import ensure_device_config
+from hiveheart_fft import decode_fft
 from mqtt_publisher import publisher as mqtt_publisher
 from schemas import MAX_HIVES, HiveReadingIn, MeasurementImportIn, MeasurementIn
 from sd_import import split_new_and_duplicate
@@ -786,7 +788,13 @@ MEASUREMENT_SELECT_COLUMNS = """
     NULLIF(raw_json->>'ble_2_battery_percent', '')::integer AS ble_2_battery_percent,
     NULLIF(raw_json->>'ble_2_rssi_dbm',        '')::integer AS ble_2_rssi_dbm,
     raw_json->>'ble_1_firmware_version' AS ble_1_firmware_version,
-    raw_json->>'ble_2_firmware_version' AS ble_2_firmware_version
+    raw_json->>'ble_2_firmware_version' AS ble_2_firmware_version,
+    -- Raw HiveHeart FFT (8-byte packed-nibble array). Legacy flat rows keep it in
+    -- the measurement raw_json; the `->` operator returns the JSON array so the
+    -- read path can decode it into fft_bins. Appended last so the positional
+    -- row_to_dict indices below stay stable.
+    raw_json->'hiveheart_1_fft' AS hiveheart_1_fft,
+    raw_json->'hiveheart_2_fft' AS hiveheart_2_fft
 """
 
 
@@ -850,7 +858,13 @@ CHART_MEASUREMENT_COLUMNS = """
     COALESCE(bee_counter_2_total_in, NULLIF(raw_json->>'bee_counter_2_total_in', '')::bigint) AS bee_counter_2_total_in,
     COALESCE(bee_counter_2_total_out, NULLIF(raw_json->>'bee_counter_2_total_out', '')::bigint) AS bee_counter_2_total_out,
     COALESCE(bee_counter_2_interval_in, NULLIF(raw_json->>'bee_counter_2_interval_in', '')::bigint) AS bee_counter_2_interval_in,
-    COALESCE(bee_counter_2_interval_out, NULLIF(raw_json->>'bee_counter_2_interval_out', '')::bigint) AS bee_counter_2_interval_out
+    COALESCE(bee_counter_2_interval_out, NULLIF(raw_json->>'bee_counter_2_interval_out', '')::bigint) AS bee_counter_2_interval_out,
+    -- Raw HiveHeart FFT so the dashboard Frequency Bands view can render the
+    -- HiveHeart spectrum (decoded to fft_bins on read). Legacy flat rows store it
+    -- in raw_json; nested rows carry it in hive_readings and are merged in by
+    -- attach_hive_readings, so this only needs the flat/legacy fallback.
+    raw_json->'hiveheart_1_fft' AS hiveheart_1_fft,
+    raw_json->'hiveheart_2_fft' AS hiveheart_2_fft
 """
 
 
@@ -1015,6 +1029,10 @@ def measurement_row_to_dict(r):
         "ble_2_rssi_dbm":               r[134],
         "ble_1_firmware_version":       r[135],
         "ble_2_firmware_version":       r[136],
+        # Raw HiveHeart FFT arrays from raw_json (legacy flat rows). Decoded into
+        # fft_bins by attach_hive_readings → _attach_hiveheart_fft_bins.
+        "hiveheart_1_fft":              r[137],
+        "hiveheart_2_fft":              r[138],
     }
 
 
@@ -1247,7 +1265,10 @@ def _synthesize_hives_from_flat(m: dict) -> list[dict]:
                      "energy": m.get(f"hiveheart_{n}_energy"),
                      "peak": m.get(f"hiveheart_{n}_peak"),
                      "battery_v": m.get(f"hiveheart_{n}_battery_v"),
-                     "rssi_dbm": m.get(f"hiveheart_{n}_rssi_dbm")}
+                     "rssi_dbm": m.get(f"hiveheart_{n}_rssi_dbm"),
+                     # Raw FFT extracted from the measurement raw_json by the
+                     # SELECT; decoded into fft_bins by _attach_hiveheart_fft_bins.
+                     "fft": m.get(f"hiveheart_{n}_fft")}
         hivescale = {"weight_kg": m.get(f"hivescale_{n}_weight_kg"),
                      "raw_weight": m.get(f"hivescale_{n}_raw_weight"),
                      "temp_c": m.get(f"hivescale_{n}_temp_c"),
@@ -1376,6 +1397,66 @@ def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
         put(f"bee_counter_{n}_interval_out", c.get("interval_out"))
 
 
+_HIVEHEART_FLAT_FFT_RE = re.compile(r"^hiveheart_(\d+)_fft$")
+
+
+def _attach_hiveheart_fft_bins(m: dict) -> None:
+    """Decode the raw HiveHeart FFT into 16 relative levels and expose it.
+
+    The raw 8-byte array stays canonical (``hives[].hiveheart.fft`` /
+    ``hiveheart_N_fft``). This adds the decoded ``fft_bins`` in both the nested and
+    the flat shapes so old flat records and new nested records return the same
+    public API shape. Malformed / missing FFT data yields no ``fft_bins`` (the raw
+    value is left untouched) rather than raising — see hiveheart_fft.decode_fft.
+
+    Two carriers are handled so the bins appear regardless of how the firmware
+    delivered the FFT:
+
+    1. Nested ``hives[].hiveheart.fft`` — the canonical multi-hive path.
+    2. Flat ``hiveheart_N_fft`` — the flat compatibility field (surfaced from
+       ``raw_json`` by the SELECT, or synthesized). The device sends both, but
+       when a measurement has hive_readings rows whose nested hive carries no
+       ``hiveheart`` (older/edge firmware, or a HiveHeart that only populated the
+       flat field), the nested pass alone would drop the FFT. The flat pass
+       recovers it and mirrors the bins back onto the matching hive so the nested
+       shape stays consistent too.
+    """
+    hives_by_index: dict[int, dict] = {}
+    for h in m.get("hives") or []:
+        idx = h.get("index")
+        if idx is not None:
+            hives_by_index[idx] = h
+        hh = h.get("hiveheart")
+        if not isinstance(hh, dict):
+            continue
+        bins = decode_fft(hh.get("fft"))
+        if bins is None:
+            continue
+        hh["fft_bins"] = bins
+        if idx:
+            m[f"hiveheart_{idx}_fft"] = hh.get("fft")
+            m[f"hiveheart_{idx}_fft_bins"] = bins
+
+    # Flat-field fallback: decode any hiveheart_N_fft that the nested pass didn't
+    # already resolve, and mirror it onto the matching hive when one exists.
+    for key in [k for k in m if isinstance(k, str) and _HIVEHEART_FLAT_FFT_RE.match(k)]:
+        n = int(_HIVEHEART_FLAT_FFT_RE.match(key).group(1))
+        if m.get(f"hiveheart_{n}_fft_bins") is not None:
+            continue
+        bins = decode_fft(m.get(key))
+        if bins is None:
+            continue
+        m[f"hiveheart_{n}_fft_bins"] = bins
+        hive = hives_by_index.get(n)
+        if hive is not None:
+            hh = hive.get("hiveheart")
+            if not isinstance(hh, dict):
+                hh = {}
+                hive["hiveheart"] = hh
+            hh.setdefault("fft", m.get(key))
+            hh["fft_bins"] = bins
+
+
 def attach_hive_readings(measurements: list[dict]) -> list[dict]:
     """Attach a per-hive ``hives`` array (from hive_readings, else synthesized from
     the legacy columns) to each measurement, and synthesize flat per-hive keys for
@@ -1395,6 +1476,7 @@ def attach_hive_readings(measurements: list[dict]) -> list[dict]:
         m["hives"] = hive_rows if hive_rows else _synthesize_hives_from_flat(m)
         for h in m["hives"]:
             _flatten_hive_to_measurement(m, h)
+        _attach_hiveheart_fft_bins(m)
     return measurements
 
 

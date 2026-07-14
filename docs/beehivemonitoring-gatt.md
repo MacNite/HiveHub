@@ -59,7 +59,7 @@ g++ -std=c++17 -I firmware/include test-data/test_beehive_decode.cpp -o /tmp/t &
 | frequency_hz | 7hi, 8, 9lo2 | `(b7>>4 \| b8<<4 \| (b9&3)<<12)` ÷10 |
 | energy | 9, 10 | `b9>>2 \| b10<<6` |
 | peak | 11 | raw |
-| fft | 12–19 | 8 raw bytes (raw_json only) |
+| fft | 12–19 | 8 raw bytes, packed-nibble spectrum — see [FFT encoding](#fft-encoding) |
 
 **HiveScale** (validated: V=4.10 H=44.7% T=22.6°C P=1000.0 hPa W=1.04 kg)
 
@@ -77,3 +77,56 @@ g++ -std=c++17 -I firmware/include test-data/test_beehive_decode.cpp -o /tmp/t &
 Migration `server/migrations/009_beehivemonitoring_gatt.sql` adds the
 `hiveheart_N_*` and `hivescale_N_*` columns (also applied automatically by
 `init_db()`); the raw FFT and timestamp stay in `raw_json`.
+
+## FFT encoding
+
+HiveHeart payload bytes **12–19** carry an 8-byte FFT. Each byte packs **two**
+unsigned 4-bit values, **high nibble first**, so the 8 bytes decode to **16**
+values:
+
+```
+bins.push((byte >> 4) & 0x0F)   # high nibble (first)
+bins.push(byte & 0x0F)          # low nibble  (second)
+```
+
+Decoding example:
+
+```
+[103, 244, 83, 34, 17, 17, 0, 17]
+        ->
+[6, 7, 15, 4, 5, 3, 2, 2, 1, 1, 1, 1, 0, 0, 1, 1]
+```
+
+The **raw 8-byte array stays canonical** — it is what firmware forwards and what
+the server stores in `raw_json` (never as 16 separate columns). The 16 decoded
+values are derived on read (exposed as `hiveheart_N_fft_bins` and
+`hives[].hiveheart.fft_bins`; the raw array remains available as
+`hiveheart_N_fft` / `hives[].hiveheart.fft`).
+
+The decoded values are **relative levels from 0 to 15**. They are **not** dB or
+dBFS, and must not be compared with the INMP441 microphone dBFS bands.
+
+### Frequency ranges
+
+The 16 decoded values map to these ranges, in order:
+
+| Bin | Range (Hz) | Bin | Range (Hz) |
+|---|---|---|---|
+| 1 | 0–93 | 9 | 751–844 |
+| 2 | 94–187 | 10 | 854–937 |
+| 3 | 188–281 | 11 | 938–1031 |
+| 4 | 282–375 | 12 | 1032–1125 |
+| 5 | 376–479 | 13 | 1126–1218 |
+| 6 | 480–562 | 14 | 1219–1312 |
+| 7 | 563–656 | 15 | 1313–1406 |
+| 8 | 657–750 | 16 | 1407–1500 |
+
+> **Known gap:** the supplied vendor table has a gap from **845 to 853 Hz**
+> between bins 9 and 10 (and other non-uniform steps). These boundaries are
+> preserved **verbatim** — not silently "corrected". The single source of truth
+> is `FFT_RANGES_HZ` in `server/hiveheart_fft.py`; fix them there once confirmed
+> against hardware and every consumer (backend, insights, dashboards) follows.
+
+The prominent `frequency_hz` value (bytes 7hi/8/9lo2) is reported **independently**
+by HiveHeart and may be computed differently from this compressed FFT histogram;
+do not expect it to equal the FFT's dominant-bin midpoint.
