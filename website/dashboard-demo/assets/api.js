@@ -13,16 +13,16 @@ const DEVICES = [
   {
     device_id: "demo-garden-01", display_name: "Garden Apiary 01",
     claimed_at: "2026-03-01T08:00:00Z",
-    last_firmware_version: "0.20.1",
+    last_firmware_version: "0.23.9",
     channels: { scale_1: "North hive", scale_2: "South hive" },
-    twoHives: true, solar: true, hidden: false,
+    twoHives: true, hidden: false,
   },
   {
     device_id: "demo-rooftop-02", display_name: "Rooftop 02",
     claimed_at: "2026-04-15T08:00:00Z",
-    last_firmware_version: "0.20.1",
+    last_firmware_version: "0.23.9",
     channels: { scale_1: "Rooftop hive", scale_2: null },
-    twoHives: false, solar: false, hidden: false,
+    twoHives: false, hidden: false,
   },
   {
     // A retired device, hidden from the hive picker by default — showcases the
@@ -30,9 +30,9 @@ const DEVICES = [
     // (setDeviceVisibility below mutates this in memory).
     device_id: "demo-orchard-03", display_name: "Orchard 03 (retired)",
     claimed_at: "2025-06-01T08:00:00Z",
-    last_firmware_version: "0.19.0",
+    last_firmware_version: "0.22.4",
     channels: { scale_1: "Orchard hive", scale_2: null },
-    twoHives: false, solar: false, hidden: true,
+    twoHives: false, hidden: true,
   },
 ];
 
@@ -65,7 +65,6 @@ function point(dev, t, i) {
   const days = Math.max(0, (Date.now() - t) / DAY); // 0 at newest, larger going back
   const scaleV = 3.75 - 0.02 * days + 0.02 * Math.sin(dayPhase) + 0.01 * noise(seed + 30);
   const blePct = Math.max(5, Math.min(100, 88 - 2.4 * days + 1.5 * noise(seed + 31)));
-  const solarP = dev.solar ? Math.max(0, 1500 * Math.sin(dayPhase - 1.2) + 80 * noise(seed + 4)) : null;
   const traffic = Math.max(0, 42 * Math.sin(dayPhase - 0.8));
 
   const m = {
@@ -128,11 +127,6 @@ function point(dev, t, i) {
     // HiveHeart's independently-reported peak frequency (Hz), ~colony hum band.
     m.hiveheart_2_frequency_hz = 180 + 60 * Math.sin(dayPhase) + 10 * noise(seed + 60);
   }
-  if (dev.solar) {
-    m.solar_power_mw = solarP;
-    m.solar_current_ma = solarP != null ? solarP / 5 : null;
-    m.solar_bus_voltage_v = 5.0 + 0.3 * Math.sin(dayPhase - 1.2);
-  }
   return m;
 }
 
@@ -162,7 +156,7 @@ const demoErr = () =>
 const wrap = (v) => new Promise((r) => setTimeout(() => r(v), 120)); // tiny latency for realism
 
 export const api = {
-  listDevices: () => wrap(DEVICES.map(({ twoHives, solar, ...d }) => ({
+  listDevices: () => wrap(DEVICES.map(({ twoHives, ...d }) => ({
     ...d, last_seen_at: new Date().toISOString(),
   }))),
 
@@ -219,8 +213,8 @@ export const api = {
   },
 
   firmwareStatus: (deviceId) => wrap({
-    device_id: deviceId, target: "hivescale", current_version: "0.20.1",
-    latest_version: "0.21.0", latest_is_official: true,
+    device_id: deviceId, target: "hivescale", current_version: "0.23.9",
+    latest_version: "0.23.11", latest_is_official: true,
     approved_version: null, update_available: true, pending_approval: true,
   }),
 
@@ -238,6 +232,13 @@ export const api = {
     { id: 2, username: "viewer", role: "viewer", email: null },
   ]),
 
+  // Sample notification config so the "Alert notifications" card renders both
+  // channels as configured; the actual enable/test actions stay read-only below.
+  notificationsConfig: () => wrap({
+    email_enabled: true, web_push_enabled: true,
+    min_severity: "warning", vapid_public_key: "demo",
+  }),
+
   // write actions are disabled in the demo
   uploadFirmware: demoErr,
   importSdData: demoErr,
@@ -253,4 +254,5 @@ export const api = {
   deleteUser: demoErr,
   changePassword: demoErr,
   updateEmail: demoErr,
+  testNotification: demoErr,
 };

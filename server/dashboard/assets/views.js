@@ -1080,9 +1080,10 @@ function renderBattery(root, state) {
   const battVoltSeries = seriesFrom(state.measurements, "battery_voltage", "Voltage", PALETTE[0]);
   battVoltSeries.axis = "right"; battVoltSeries.unit = "V"; battVoltSeries.digits = 2;
 
-  // The INA219 solar/current sensor is optional; only surface its cards and
-  // chart when it has actually reported data, so a device without one doesn't
-  // show empty "No data available" panels.
+  // The INA219 solar/current sensor is an optional legacy add-on (no longer part
+  // of the recommended build — the MAX17048 covers battery state); only surface
+  // its cards and chart when it has actually reported data, so a device without
+  // one doesn't show empty "No data available" panels.
   const solarPowerSeries = seriesFrom(state.measurements, "solar_power_mw", "Power mW", PALETTE[0]);
   const solarCurrentSeries = seriesFrom(state.measurements, "solar_current_ma", "Current mA", PALETTE[1]);
   const solarBusSeries = seriesFrom(state.measurements, "solar_bus_voltage_v", "Bus V", PALETTE[2]);
@@ -1109,8 +1110,8 @@ function renderBattery(root, state) {
   }
 
   const node = el("div", {});
-  node.append(viewHead("Battery & power", "Collector battery, solar and wireless-sensor batteries"));
-  const note = deviceContextNote(state, "The collector battery and solar readings below are");
+  node.append(viewHead("Battery & power", "Collector battery and wireless-sensor batteries"));
+  const note = deviceContextNote(state, "The collector battery readings below are");
   if (note) node.append(note);
   node.append(el("div", { class: "grid" }, ...cards));
   node.append(el("div", { class: "grid wide", style: "margin-top:1rem" }, ...charts));
