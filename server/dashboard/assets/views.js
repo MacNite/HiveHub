@@ -94,7 +94,11 @@ function updateReadout(c) {
     item.classList.toggle("off", off);
     if (off || cursorT == null) { valueEl.textContent = ""; continue; }
     const p = valueAt(series.points, cursorT);
-    valueEl.textContent = p ? `: ${fmt(p.y, c.opts.yDigits ?? 1, c.opts.unit ? " " + c.opts.unit : "")}` : ": " + DASH;
+    // A series may carry its own digits/unit (e.g. a secondary-axis voltage line
+    // reads in V while the primary SoC line reads in %); fall back to the chart's.
+    const digits = series.digits ?? c.opts.yDigits ?? 1;
+    const unit = series.unit != null ? series.unit : c.opts.unit;
+    valueEl.textContent = p ? `: ${fmt(p.y, digits, unit ? " " + unit : "")}` : ": " + DASH;
   }
   if (c.hint) c.hint.textContent = cursorT == null ? "Drag to inspect" : fmtDateTime(cursorT);
 }
@@ -1067,20 +1071,42 @@ function wirelessBatterySeries(state, refs, unit) {
 
 function renderBattery(root, state) {
   const m = state.latest || {};
+
+  // Battery chart: SoC on the primary (left) axis, voltage on a secondary
+  // (right) axis. Voltage barely moves (≈3.7–4.2 V), so sharing the 0–100 %
+  // scale flattens it to a useless flat line — its own axis makes it readable.
+  const socSeries = seriesFrom(state.measurements, "battery_soc_percent", "SoC %", PALETTE[2]);
+  socSeries.unit = "%"; socSeries.digits = 0;
+  const battVoltSeries = seriesFrom(state.measurements, "battery_voltage", "Voltage", PALETTE[0]);
+  battVoltSeries.axis = "right"; battVoltSeries.unit = "V"; battVoltSeries.digits = 2;
+
+  // The INA219 solar/current sensor is optional; only surface its cards and
+  // chart when it has actually reported data, so a device without one doesn't
+  // show empty "No data available" panels.
+  const solarPowerSeries = seriesFrom(state.measurements, "solar_power_mw", "Power mW", PALETTE[0]);
+  const solarCurrentSeries = seriesFrom(state.measurements, "solar_current_ma", "Current mA", PALETTE[1]);
+  const solarBusSeries = seriesFrom(state.measurements, "solar_bus_voltage_v", "Bus V", PALETTE[2]);
+  const hasSolar = solarPowerSeries.points.length > 0 || solarCurrentSeries.points.length > 0 ||
+    solarBusSeries.points.length > 0 || isNum(m.solar_power_mw) || isNum(m.solar_current_ma) || isNum(m.solar_bus_voltage_v);
+
   const cards = [
     metricCard("State of charge", fmt(m.battery_soc_percent, 0), "%", isNum(m.battery_voltage) ? `${fmt(m.battery_voltage, 2)} V` : "Battery"),
-    metricCard("Solar power", fmt(m.solar_power_mw, 0), "mW", isNum(m.solar_current_ma) ? `${fmt(m.solar_current_ma, 0)} mA` : "Solar input"),
-    metricCard("Solar bus", fmt(m.solar_bus_voltage_v, 2), "V", "Panel voltage"),
   ];
+  if (hasSolar) {
+    cards.push(
+      metricCard("Solar power", fmt(m.solar_power_mw, 0), "mW", isNum(m.solar_current_ma) ? `${fmt(m.solar_current_ma, 0)} mA` : "Solar input"),
+      metricCard("Solar bus", fmt(m.solar_bus_voltage_v, 2), "V", "Panel voltage"),
+    );
+  }
   if (m.battery_alert) cards.push(metricCard("Battery alert", "Active", "", "Low battery warning"));
   const charts = [
     chartCard("Battery", "State of charge and voltage",
-      [seriesFrom(state.measurements, "battery_soc_percent", "SoC %", PALETTE[2]),
-       seriesFrom(state.measurements, "battery_voltage", "Voltage", PALETTE[0])], { yDigits: 1 }),
-    chartCard("Solar", "Solar power input",
-      [seriesFrom(state.measurements, "solar_power_mw", "Power mW", PALETTE[0]),
-       seriesFrom(state.measurements, "solar_current_ma", "Current mA", PALETTE[1])], { yDigits: 0 }),
+      [socSeries, battVoltSeries], { yDigits: 1, y2Digits: 2 }),
   ];
+  if (hasSolar) {
+    charts.push(chartCard("Solar", "Solar power input",
+      [solarPowerSeries, solarCurrentSeries], { yDigits: 0 }));
+  }
 
   const node = el("div", {});
   node.append(viewHead("Battery & power", "Collector battery, solar and wireless-sensor batteries"));
