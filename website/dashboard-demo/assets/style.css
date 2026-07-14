@@ -346,6 +346,29 @@ select {
 .chart-hint { margin-left: auto; font-size: .78rem; color: var(--ink-faint); }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-faint); font-size: .95rem; }
 
+/* Clickable legend entries (series / Older / Latest visibility toggles) */
+.chart-legend .lg.clickable { cursor: pointer; user-select: none; }
+.chart-legend .lg.clickable:hover { color: var(--ink); }
+.chart-legend .lg.off { opacity: .45; text-decoration: line-through; }
+
+/* Per-chart toolbox on the legend row: CSV export, reset-y-axis, drag hint */
+.chart-tools { margin-left: auto; display: inline-flex; align-items: center; gap: .55rem; }
+.chart-tools .chart-hint { margin-left: 0; }
+.chart-tool-btn {
+  border: 1px solid var(--line); background: transparent; color: var(--ink-soft);
+  font: 600 .72rem var(--sans); line-height: 1; padding: .24rem .5rem;
+  border-radius: 7px; cursor: pointer;
+}
+.chart-tool-btn:hover { background: var(--comb); color: var(--ink); border-color: var(--honey); }
+
+/* Inline y-axis min/max editor (opened by clicking an axis end label) */
+.y-edit-input {
+  position: absolute; left: 0; z-index: 5; box-sizing: border-box;
+  font: 600 .74rem var(--mono); padding: .14rem .3rem;
+  border: 1px solid var(--honey); border-radius: 6px;
+  background: var(--card); color: var(--ink);
+}
+
 /* ── Tables / definition rows ────────────────────────────────── */
 .rows { display: flex; flex-direction: column; }
 .rows .row { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--line); }

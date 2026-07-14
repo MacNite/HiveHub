@@ -64,6 +64,11 @@ Related settings (all optional, see `server/.env.example`):
   FFT frequency bands, battery & solar (including the battery of each wireless
   in-hive sensor), connectivity and bee-counter traffic, plus the rule-based
   insight summary.
+- **Per-chart tools:** every diagram's legend entries are clickable to show/hide
+  that series (on spectrum charts: the *Older* / *Latest* lines); the y-axis
+  min/max labels are click-to-edit for a custom range, with a **Reset y-axis**
+  button appearing while a manual range is pinned; and a **⤓ CSV** button
+  downloads exactly the data the chart currently shows.
 - **Insights history:** the Insights view lists the persisted lifecycle of every
   alert — active *and* resolved — with an all/active/resolved filter, so you can
   see warnings that have since cleared, not just the current state.
