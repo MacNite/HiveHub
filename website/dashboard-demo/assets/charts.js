@@ -1,12 +1,16 @@
 // Minimal dependency-free canvas line chart for time series.
 //
 // drawLineChart(canvas, series, opts)
-//   series: [{ label, color, points: [{ t: epochMillis, y: number }] }]
-//   opts:   { unit, yDigits, cursorT, sendIntervalMs, yMin, yMax }
+//   series: [{ label, color, axis?, points: [{ t: epochMillis, y: number }] }]
+//   opts:   { unit, yDigits, y2Digits, cursorT, sendIntervalMs, yMin, yMax }
 //
-// opts.yMin / opts.yMax pin one or both ends of the y-axis (user-edited axis
-// fields — see openYEdit in views.js); unset ends keep the auto-fitted range.
-// A pinned axis labels its exact ends and clips series to the plot area.
+// opts.yMin / opts.yMax pin one or both ends of the primary y-axis (user-edited
+// axis fields — see openYEdit in views.js); unset ends keep the auto-fitted
+// range. A pinned axis labels its exact ends and clips series to the plot area.
+//
+// A series with axis: "right" is scaled against an independent secondary y-axis
+// drawn on the right edge (auto-fitted, labelled with opts.y2Digits), so series
+// on very different scales stay readable together. The right axis is not pinnable.
 //
 // Segments spanning a data gap — a jump far larger than a series' own typical
 // point spacing — are drawn dashed to mark stretches with missing data.
@@ -106,34 +110,61 @@ export function drawLineChart(canvas, series, opts = {}) {
   }
   if (empty) empty.remove();
 
-  const padL = 48, padR = 14, padT = 12, padB = 26;
+  // A series tagged { axis: "right" } is plotted against an independent y-axis
+  // drawn on the right edge, so a series whose values sit on a very different
+  // scale (e.g. battery voltage 3.7–4.2 V against SoC 0–100 %) keeps a usable
+  // range instead of being flattened onto the primary axis. The right axis
+  // auto-fits and is not click-to-edit; only the primary (left) axis is pinnable.
+  const rightSeries = series.filter((s) => s.axis === "right" && s.points && s.points.length);
+  const hasRight = rightSeries.length > 0;
+  const rightColor = hasRight ? rightSeries[0].color : null;
+
+  const padL = 48, padR = hasRight ? 48 : 14, padT = 12, padB = 26;
   const plotW = cssW - padL - padR;
   const plotH = cssH - padT - padB;
 
-  let tMin = Infinity, tMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+  let tMin = Infinity, tMax = -Infinity;
+  let yMin = Infinity, yMax = -Infinity;    // primary (left) axis extent
+  let yMinR = Infinity, yMaxR = -Infinity;  // secondary (right) axis extent
   for (const s of series) {
+    const right = s.axis === "right";
     for (const p of s.points) {
       if (p.t < tMin) tMin = p.t;
       if (p.t > tMax) tMax = p.t;
-      if (p.y < yMin) yMin = p.y;
-      if (p.y > yMax) yMax = p.y;
+      if (right) { if (p.y < yMinR) yMinR = p.y; if (p.y > yMaxR) yMaxR = p.y; }
+      else { if (p.y < yMin) yMin = p.y; if (p.y > yMax) yMax = p.y; }
     }
   }
   if (tMin === tMax) tMax = tMin + 1;
-  const pad = (yMax - yMin) * 0.08 || 1;
-  yMin -= pad; yMax += pad;
-  // Manual y-range: a pinned end overrides the auto-fitted one; a range that
-  // would collapse or invert falls back to a 1-unit span so yOf stays finite.
-  const pinned = opts.yMin != null || opts.yMax != null;
-  if (opts.yMin != null) yMin = opts.yMin;
-  if (opts.yMax != null) yMax = opts.yMax;
-  if (!(yMax > yMin)) yMax = yMin + 1;
+
+  // Fit one axis: pad the data extent by 8%, then let a pinned end override.
+  // Returns null when no visible series feeds the axis (e.g. its only series is
+  // hidden via the legend), so its ticks are skipped instead of drawing a bogus
+  // range. `pinMin`/`pinMax` (the user-edited range) apply only to the primary axis.
+  const fitAxis = (mn, mx, pinMin, pinMax) => {
+    if (!(mn <= mx)) return null;
+    const p = (mx - mn) * 0.08 || 1;
+    mn -= p; mx += p;
+    if (pinMin != null) mn = pinMin;
+    if (pinMax != null) mx = pinMax;
+    if (!(mx > mn)) mx = mn + 1;
+    return { min: mn, max: mx, pinned: pinMin != null || pinMax != null };
+  };
+  const left = fitAxis(yMin, yMax, opts.yMin, opts.yMax);
+  const right = hasRight ? fitAxis(yMinR, yMaxR) : null;
 
   const xOf = (t) => padL + ((t - tMin) / (tMax - tMin)) * plotW;
-  const yOf = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * plotH;
+  const yOfOn = (ax) => (y) => padT + (1 - (y - ax.min) / (ax.max - ax.min)) * plotH;
+  const yOfL = left ? yOfOn(left) : null;
+  const yOfR = right ? yOfOn(right) : null;
+  // Map a series to its axis' projector; fall back to whichever axis exists so a
+  // chart with series on only one side still draws.
+  const yOfFor = (s) => (s.axis === "right" ? yOfR : yOfL) || yOfL || yOfR;
+
   canvas._xScale = { padL, plotW, tMin, tMax };
   // Geometry for the click-to-edit y-axis fields (see yEditZone in views.js).
-  canvas._yEdit = { padL, padT, plotH, yMin, yMax };
+  // Only the primary axis is editable; when it has no series, disable editing.
+  canvas._yEdit = left ? { padL, padT, plotH, yMin: left.min, yMax: left.max } : null;
 
   const axis = themeColor("--chart-axis", AXIS);
   const grid = themeColor("--chart-grid", GRID);
@@ -141,21 +172,36 @@ export function drawLineChart(canvas, series, opts = {}) {
   ctx.font = FONT;
   ctx.textBaseline = "middle";
 
-  // Y gridlines + labels. A pinned axis labels its exact ends (dropping nice
-  // ticks that would crowd them) so the user's entered min/max read back.
-  let yTicks = niceTicks(yMin, yMax, 5);
-  if (pinned) {
-    const span = yMax - yMin;
-    yTicks = [yMin, ...yTicks.filter((t) => t - yMin > span * 0.06 && yMax - t > span * 0.06), yMax];
+  // Primary-axis gridlines + labels. A pinned axis labels its exact ends
+  // (dropping nice ticks that would crowd them) so the user's entered min/max
+  // read back.
+  if (left) {
+    let yTicks = niceTicks(left.min, left.max, 5);
+    if (left.pinned) {
+      const span = left.max - left.min;
+      yTicks = [left.min, ...yTicks.filter((t) => t - left.min > span * 0.06 && left.max - t > span * 0.06), left.max];
+    }
+    ctx.strokeStyle = grid;
+    ctx.fillStyle = axis;
+    ctx.lineWidth = 1;
+    ctx.textAlign = "right";
+    for (const t of yTicks) {
+      const y = yOfL(t);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(cssW - padR, y); ctx.stroke();
+      ctx.fillText(t.toFixed(opts.yDigits ?? 1), padL - 6, y);
+    }
   }
-  ctx.strokeStyle = grid;
-  ctx.fillStyle = axis;
-  ctx.lineWidth = 1;
-  ctx.textAlign = "right";
-  for (const t of yTicks) {
-    const y = yOf(t);
-    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(cssW - padR, y); ctx.stroke();
-    ctx.fillText(t.toFixed(opts.yDigits ?? 1), padL - 6, y);
+
+  // Secondary-axis labels on the right edge. No gridlines (the primary axis
+  // already rules the plot) and tinted the series' colour so it reads clearly
+  // which line it scales. Ticks outside the fitted range are skipped.
+  if (right) {
+    ctx.fillStyle = rightColor || axis;
+    ctx.textAlign = "left";
+    for (const t of niceTicks(right.min, right.max, 5)) {
+      if (t < right.min || t > right.max) continue;
+      ctx.fillText(t.toFixed(opts.y2Digits ?? opts.yDigits ?? 1), cssW - padR + 6, yOfR(t));
+    }
   }
 
   // X ticks (time)
@@ -191,6 +237,7 @@ export function drawLineChart(canvas, series, opts = {}) {
   for (const s of series) {
     if (!s.points.length) continue;
     const gapMs = gapThreshold(s.points, opts.sendIntervalMs, gapFactor);
+    const yOf = yOfFor(s);
     ctx.strokeStyle = s.color;
     let runDashed = null; // dash style of the run currently being accumulated
     for (let i = 1; i < s.points.length; i++) {
@@ -223,7 +270,7 @@ export function drawLineChart(canvas, series, opts = {}) {
     for (const s of series) {
       const p = valueAt(s.points, ct);
       if (!p) continue;
-      const py = yOf(p.y);
+      const py = yOfFor(s)(p.y);
       ctx.beginPath();
       ctx.arc(cx, py, 3.5, 0, Math.PI * 2);
       ctx.fillStyle = s.color;
