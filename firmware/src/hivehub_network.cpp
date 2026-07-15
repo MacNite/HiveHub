@@ -248,12 +248,31 @@ bool httpPatchJson(const String& url, const String& json, String* response) {
   return false;
 }
 
-bool uploadLine(const String& line) {
+bool uploadLine(const String& line, bool* claimConfirmed) {
   String response;
   bool ok = httpPostJson(apiUrl("/api/v1/measurements"), line, &response);
 
   if (!ok) Serial.println("[UPLOAD] Upload failed");
   else Serial.println("[UPLOAD] Upload accepted by server");
+
+  // Report whether the server considers this device claimed, so the caller can
+  // decide when it is safe to stop sending the claim code (see markClaimRegistered
+  // / device_prefs.cpp). We must NOT latch the claim on a merely-successful upload:
+  // a rebuilt or restored backend has no record of the device yet, and if the
+  // device stopped sending its claim code it could never be claimed again.
+  // Older servers do not return "claimed"; fall back to treating a successful
+  // upload as confirmation so behaviour against them is unchanged.
+  if (claimConfirmed) {
+    bool confirmed = ok;
+    if (ok && response.length()) {
+      JsonDocument doc;
+      if (deserializeJson(doc, response) == DeserializationError::Ok &&
+          doc["claimed"].is<bool>()) {
+        confirmed = doc["claimed"].as<bool>();
+      }
+    }
+    *claimConfirmed = confirmed;
+  }
 
   return ok;
 }

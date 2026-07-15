@@ -29,7 +29,7 @@ def ensure_device_config(
     firmware_version: Optional[str] = None,
     api_key: str = "",
     touch_last_seen: bool = False,
-):
+) -> bool:
     """Upsert the devices/device_configs rows for a device.
 
     last_seen_at is updated only when touch_last_seen is True — i.e. only for a
@@ -37,6 +37,12 @@ def ensure_device_config(
     or edits config on the device's behalf (the common case here), otherwise an
     open dashboard polling config keeps a long-offline device looking "online".
     Device config/firmware polls record contact via verify_device_key instead.
+
+    Returns True when this device is already claimed (``claimed_at`` is set). The
+    firmware uses this to decide when it may stop sending its claim code: it must
+    keep sending until the server confirms the claim, so that a rebuilt/restored
+    backend (which has lost the claim_code_hash) re-learns it automatically
+    instead of leaving the device permanently unclaimable.
     """
     claim_hash = hash_claim_code(claim_code) if claim_code else None
     key_hash = hashlib.sha256(api_key.encode()).hexdigest() if len(api_key) >= 16 else None
@@ -55,13 +61,14 @@ def ensure_device_config(
                         last_firmware_version = COALESCE(EXCLUDED.last_firmware_version, devices.last_firmware_version),
                         claim_code_hash = COALESCE(devices.claim_code_hash, EXCLUDED.claim_code_hash),
                         api_key_hash = COALESCE(devices.api_key_hash, EXCLUDED.api_key_hash)
-                RETURNING api_key_hash;
+                RETURNING api_key_hash, claimed_at;
                 """,
                 (device_id, claim_hash, key_hash, firmware_version),
             )
             row = cur.fetchone()
             if key_hash and row and row[0] and row[0] != key_hash:
                 raise HTTPException(status_code=401, detail="API key does not match this device")
+            claimed = bool(row and row[1] is not None)
             cur.execute(
                 """
                 INSERT INTO device_configs (device_id) VALUES (%s)
@@ -70,6 +77,7 @@ def ensure_device_config(
                 (device_id,),
             )
             conn.commit()
+    return claimed
 
 
 # Column list shared by every device_configs read so the device-facing and
