@@ -235,8 +235,8 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
     # image. A request without a recognized board is not matched against any
     # release — safer than guessing and risking a bricked flash. (Field devices on
     # firmware that predates the ?board= param therefore stop auto-updating until
-    # they are reflashed once via the AP portal; the single-architecture
-    # beecounter / hiveinside relays are unaffected.)
+    # they are reflashed once via the AP portal; the hiveinside relay is
+    # unaffected.)
     board = (board or "").strip().lower()
     if target == "hivescale":
         if board not in FIRMWARE_BOARDS:
@@ -264,9 +264,9 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
     # only served once the owner has approved THIS exact version for THIS device
     # in HivePal (POST /api/v1/app/devices/{id}/firmware/approve). Without an
     # approval the device keeps polling but never flashes, so publishing firmware
-    # no longer auto-updates every scale. Sub-device images (beecounter /
-    # hiveinside) are relayed explicitly via commands, not here, so they are
-    # unaffected by this gate.
+    # no longer auto-updates every scale. Sub-device images (hiveinside) are
+    # relayed explicitly via commands, not here, so they are unaffected by
+    # this gate.
     if target == "hivescale" and get_approved_firmware_version(device_id) != latest_version:
         return no_update
     url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
@@ -291,7 +291,13 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
 
 # Allowed firmware targets, shared by the JSON registration endpoint and the
 # multipart upload endpoint below.
-FIRMWARE_TARGETS = ("hivescale", "beecounter", "hiveinside")
+#
+# "beecounter" is intentionally NOT a target anymore: BeeCounter images were
+# delivered over the wired I2C relay, which was removed (BeeCounter transport
+# is BLE/GATT-only), and no GATT OTA exists yet — so a registered beecounter
+# release could never reach a device. Existing beecounter rows in
+# firmware_releases are ignored (nothing queries that target).
+FIRMWARE_TARGETS = ("hivescale", "hiveinside")
 
 # Board/architecture labels per multi-board target. These MUST match the
 # firmware's board labels (config.h HIVESCALE_BOARD_LABEL; the HiveInside JSON
@@ -301,7 +307,6 @@ FIRMWARE_TARGETS = ("hivescale", "beecounter", "hiveinside")
 #  * hivescale is dual-architecture (Xtensa ESP32 vs RISC-V ESP32-C6).
 #  * hiveinside now has two incompatible boards too: the original ESP32-C6
 #    prototype and the current Nordic nRF54LM20A (a signed Zephyr/MCUboot image).
-# beecounter stays single-architecture (board = NULL).
 HIVESCALE_BOARDS = ("esp32", "esp32-c6")
 HIVEINSIDE_BOARDS = ("esp32-c6", "nrf54lm20a")
 # Kept for callers that only reason about the hivescale ?board= query.
@@ -402,7 +407,8 @@ def crc32_of_file(path: Path) -> int:
     """Compute CRC-32 (IEEE 802.3) of a file as an unsigned 32-bit value.
 
     The HiveHub uses this to verify a firmware download before flashing it or
-    relaying it to a BeeCounter over I2C. Stored in a BIGINT to stay positive.
+    relaying it to a sub-device (HiveInside over BLE/GATT). Stored in a BIGINT
+    to stay positive.
     """
     crc = 0
     with open(path, "rb") as f:
@@ -419,7 +425,7 @@ def upsert_firmware_release(version: str, filename: str, active: bool,
     (owner_user_id, target, board, version).
 
     Releases are unique per (owner_user_id, target, board, version), so the same
-    version can coexist across targets (hivescale / beecounter / hiveinside),
+    version can coexist across targets (hivescale / hiveinside),
     across the two hivescale boards (esp32 / esp32-c6), and across owners.
     Re-uploading the same (owner, target, board, version) replaces it.
     ``owner_user_id=None`` registers a global / "official" release that any device

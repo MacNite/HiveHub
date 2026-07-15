@@ -1,23 +1,35 @@
 # HiveTraffic — wireless entrance bee counter (BLE/GATT)
 
-HiveTraffic is the wireless variant of the entrance bee counter (the
-`2026-easy-bee-counter` / *HiveTraffic* board). Instead of the wired I2C link,
-HiveHub reads it over Bluetooth LE: once per upload cycle it acts as a **GATT
-client**, connects to each paired HiveTraffic MAC, reads one JSON measurement
-characteristic and folds the counts into the same `bee_counter_{slot}_*` fields
-the wired counter uses.
+HiveTraffic is the entrance bee counter (the `2026-easy-bee-counter` /
+*HiveTraffic* board) read over Bluetooth LE. **BLE/GATT is the only supported
+BeeCounter transport** — the old wired I2C BeeCounter path (slave addresses
+fixed slave addresses, register polling, a latch/reset command, firmware
+updates over the wire) has
+been removed from the firmware, server and portal entirely. There is no wired
+fallback: a hive without a paired (and reachable) HiveTraffic counter simply
+reports no bee-counter data (`bee_counter.ok=false` when paired but
+unreachable; nothing at all when unpaired).
 
-It is a drop-in alternative to the I2C counter: **a hive with a paired
-HiveTraffic MAC is read over BLE; a hive without one falls back to the wired I2C
-BeeCounter.** Both can coexist (e.g. hive 1 wired, hive 2 wireless).
+Once per upload cycle HiveHub acts as a **GATT client**: it connects to each
+paired HiveTraffic MAC, reads one JSON measurement characteristic and folds the
+counts into the `bee_counter_{slot}_*` fields.
 
-**Any hive can have a HiveTraffic counter.** The wireless counter is resolved
-from the dynamic hive registry (`bee_counter_client.cpp::bleRunCycleRegistry`
-walks `hivecfg::gHives[]` for `beecounter` pairings), exactly like the
-HiveHeart / HiveScale GATT client, so it works on any hive up to `MAX_HIVES`.
-The *wired* I2C BeeCounter is the only variant still limited to hives 1–2,
-because it has just two fixed I2C addresses (`0x30` / `0x31`). Connection-based
-reads share the `MAX_GATT_READS_PER_CYCLE` per-cycle budget.
+**Any hive can have a HiveTraffic counter.** The counter is resolved from the
+dynamic hive registry (`bee_counter_client.cpp::bleRunCycleRegistry` walks
+`hivecfg::gHives[]` for `beecounter` pairings), exactly like the HiveHeart /
+HiveScale GATT client, so it works on any hive up to `MAX_HIVES`.
+Connection-based reads share the `MAX_GATT_READS_PER_CYCLE` per-cycle budget.
+
+## Firmware updates
+
+There is currently **no remote BeeCounter firmware-update path**:
+
+* BeeCounter firmware update over I2C has been **removed** (together with the
+  whole wired path). The firmware explicitly rejects the obsolete
+  `update_beecounter` command should an old server still queue one.
+* BeeCounter firmware update over **GATT is planned but not implemented yet**.
+* Until GATT OTA exists, BeeCounter firmware is updated locally (USB) on the
+  counter itself.
 
 ## Enabling
 
@@ -51,8 +63,9 @@ The characteristic returns a compact JSON document — **totals only**:
   "gates_healthy":3, "total_in":100, "total_out":95, "glitches":2 }
 ```
 
-HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects. No
-`CMD_LATCH` reset is written.
+HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects.
+The wire format is totals-only by design: no latch/reset command exists over
+BLE, so a missed connection can never lose counts.
 
 ## Intervals are differenced server-side
 
@@ -71,8 +84,8 @@ This differencing happens in two places, with identical semantics:
   `interval_in`/`interval_out` columns from the totals before returning rows.
   Without this, display clients that chart the interval fields directly (HivePal's
   bee-counter panel) would read every BLE row as zero traffic. Only `NULL`
-  intervals are filled, so the wired I2C path — which reports a real device
-  interval — is left untouched.
+  intervals are filled, so historical rows from the removed wired path — which
+  reported a real device interval — are left untouched.
 
 Because the BLE path reports no per-interval or per-gate detail, those columns
 arrive `NULL` for HiveTraffic readings; the derived interval is authoritative.
@@ -81,6 +94,6 @@ arrive `NULL` for HiveTraffic readings; the derived interval is authoritative.
 
 HiveHub already connects out over GATT for HiveInside and the
 beehivemonitoring.com sensors (see `beehivemonitoring-gatt.md`). HiveTraffic
-reuses the same connect-by-MAC pattern (`bee_counter_client.cpp::bleRunCycle`,
+reuses the same connect-by-MAC pattern (`bee_counter_client.cpp::bleRunCycleRegistry`,
 modelled on `beehive_gatt.cpp`), bringing the NimBLE stack up once per cycle for
-the wireless counter slots and tearing it down afterwards.
+the paired counters and tearing it down afterwards.

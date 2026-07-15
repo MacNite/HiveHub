@@ -16,7 +16,6 @@
 #include <esp_app_format.h>   // esp_image_header_t / ESP_CHIP_ID_* for the OTA arch guard
 #include <time.h>
 
-#include "bee_counter_client.h"
 #if ENABLE_BLE_SCAN
 #include "ble_sensor.h"
 #endif
@@ -564,7 +563,7 @@ static uint16_t expectedImageChipId() {
 }
 
 // Rolling CRC-32 (IEEE 802.3, reflected 0xEDB88320 — the same algorithm as the
-// backend's zlib.crc32 and beecnt::crc32_buf). Start with crc=0 and feed each
+// backend's zlib.crc32). Start with crc=0 and feed each
 // chunk the previous call's return value; the final value is the file CRC.
 static uint32_t crc32Update(uint32_t crc, const uint8_t* data, size_t len) {
   crc = ~crc;
@@ -750,95 +749,16 @@ bool performFirmwareUpdate(const String& firmwareUrl, int expectedSize,
   return true;
 }
 
-// Download a BeeCounter firmware image fully into RAM, then relay it to the
-// BeeCounter slave over I2C. `expectedCrc32` is the image CRC the backend
-// computed at release time (0 = compute locally, less safe). Returns true on a
-// confirmed update.
-bool updateBeeCounter(uint8_t address, const String& firmwareUrl, uint32_t expectedCrc32) {
-  if (!connectWifi()) return false;
-
-  String url = absoluteUrl(firmwareUrl);
-  Serial.print("[BEE-OTA] Downloading BeeCounter firmware: ");
-  Serial.println(url);
-
-  WiFiClientSecure client;
-  applyTlsConfig(client);
-  HTTPClient http;
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if (!http.begin(client, url)) {
-    Serial.println("[BEE-OTA] http.begin failed");
-    return false;
-  }
-
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("[BEE-OTA] Download failed. HTTP %d\n", code);
-    http.end();
-    return false;
-  }
-
-  int contentLength = http.getSize();
-  if (contentLength <= 0 || contentLength > 1024 * 1024) {
-    Serial.printf("[BEE-OTA] Invalid content length %d\n", contentLength);
-    http.end();
-    return false;
-  }
-
-  // Allocate the image buffer. Prefer PSRAM if the board has it; fall back to
-  // internal heap. 400 KB fits comfortably in C6 PSRAM; on a no-PSRAM build
-  // confirm ESP.getFreeHeap() has room before relying on this.
-  uint8_t* buf = (uint8_t*)heap_caps_malloc(contentLength, MALLOC_CAP_SPIRAM);
-  if (!buf) buf = (uint8_t*)malloc(contentLength);
-  if (!buf) {
-    Serial.printf("[BEE-OTA] OOM for %d bytes (free heap %u)\n",
-                  contentLength, (unsigned)ESP.getFreeHeap());
-    http.end();
-    return false;
-  }
-
-  WiFiClient* stream = http.getStreamPtr();
-  int read = 0;
-  unsigned long lastData = millis();
-  while (read < contentLength && (http.connected() || stream->available())) {
-    size_t avail = stream->available();
-    if (avail) {
-      int r = stream->readBytes(buf + read,
-                                min((size_t)(contentLength - read), avail));
-      read += r;
-      lastData = millis();
-    } else if (millis() - lastData > 10000) {
-      Serial.println("[BEE-OTA] download stalled");
-      break;
-    } else {
-      delay(1);
-    }
-  }
-  http.end();
-
-  if (read != contentLength) {
-    Serial.printf("[BEE-OTA] short download %d/%d\n", read, contentLength);
-    free(buf);
-    return false;
-  }
-
-  uint32_t crc = beecnt::crc32_buf(buf, read);
-  if (expectedCrc32 != 0 && crc != expectedCrc32) {
-    Serial.printf("[BEE-OTA] download CRC mismatch: got 0x%08X expected 0x%08X\n",
-                  (unsigned)crc, (unsigned)expectedCrc32);
-    free(buf);
-    return false;
-  }
-
-  bool ok = beecnt::pushFirmwareToBeeCounter(address, buf, read, crc);
-  free(buf);
-  return ok;
-}
+// NOTE: the BeeCounter OTA-over-the-wire relay was removed with the rest of the
+// wired BeeCounter path. BeeCounter firmware updates will eventually run over
+// BLE/GATT, but that is NOT implemented yet — there is currently no remote
+// BeeCounter update path. The obsolete update_beecounter command from older
+// servers is rejected explicitly in checkCommands() below.
 
 #if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
 // Relay a HiveInside firmware image to the paired sensor at `mac` over BLE GATT.
 //
-// Unlike updateBeeCounter (BeeCounter images are tens of KB, so it buffers the
-// whole thing), a HiveInside ESP32-C6 image is >1 MB and will NOT fit in the
+// A HiveInside ESP32-C6 image is >1 MB and will NOT fit in the
 // WROOM's RAM. So this STREAMS: it opens the HTTPS download, opens the BLE OTA
 // session, then pumps the body straight from the socket into the GATT DATA
 // characteristic a chunk at a time. The HiveInside device verifies the
@@ -1045,22 +965,15 @@ void checkCommands() {
     postCommandResult(commandId, true, "OTA check started");
     checkForOtaUpdate();
   } else if (type == "update_beecounter") {
-    // payload: { "slot": 1|2, "url": "/firmware/bee-x.bin", "crc32": <uint32> }
-    int slot = payload["slot"] | 1;
-    uint8_t addr = (slot == 2) ? beecnt::SLAVE_ADDR_SLOT_2 : beecnt::SLAVE_ADDR_SLOT_1;
-    String fwUrl = payload["url"] | "";
-    uint32_t crc = (uint32_t)(payload["crc32"] | 0);
-    if (fwUrl.length() == 0) {
-      postCommandResult(commandId, false, "update_beecounter missing url");
-    } else {
-      // Report the FINAL result, not "started": the relay runs synchronously and
-      // we only know success/failure once updateBeeCounter returns. Reporting
-      // "started" eagerly made a failed relay look successful in the backend/UI.
-      bool ok = updateBeeCounter(addr, fwUrl, crc);
-      Serial.printf("[BEE-OTA] update result: %s\n", ok ? "OK" : "FAIL");
-      postCommandResult(commandId, ok,
-                        ok ? "BeeCounter OTA completed" : "BeeCounter OTA failed");
-    }
+    // Obsolete command from an older server. The wired I2C BeeCounter path —
+    // including its OTA relay — was removed, and BeeCounter OTA over BLE/GATT
+    // is not implemented yet. Fail EXPLICITLY (never pretend to have updated,
+    // never touch the bus) so the queued command surfaces as failed in the
+    // backend instead of hanging or faking success.
+    Serial.println("[CMD] Rejecting obsolete update_beecounter command (wired I2C BeeCounter support removed)");
+    postCommandResult(commandId, false,
+                      "update_beecounter is no longer supported: the wired I2C BeeCounter "
+                      "path was removed and BeeCounter OTA over BLE/GATT is not implemented yet");
   }
 #if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
   else if (type == "update_hiveinside") {

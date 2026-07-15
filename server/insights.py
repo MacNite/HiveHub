@@ -682,16 +682,17 @@ def _extract_counter_series(
 
     Two sources of the per-interval count are supported transparently:
 
-    * **Device-reported interval** (``bee_counter_{ch}_interval_{dir}``): the
-      I2C ``CMD_LATCH`` handshake path, where the counter resets its interval
-      each poll. Used as-is whenever present.
+    * **Device-reported interval** (``bee_counter_{ch}_interval_{dir}``):
+      HISTORICAL rows only — the removed wired I2C latch path reported these
+      directly. Used as-is whenever present so old data keeps evaluating.
     * **Differenced lifetime total** (``bee_counter_{ch}_total_{dir}``): the
-      totals-only wireless/BLE path, where the device never resets and the
-      interval is derived here as ``total_now - total_prev`` between
-      consecutive readings (see 2026-easy-bee-counter/docs/ble-mode.md). A
-      missed poll just widens the next interval; a counter reboot or uint32
-      wrap (``total_now < total_prev``) is treated as ``total_now`` so the
-      restart from zero is not mistaken for a huge negative delta.
+      totals-only BLE/GATT path (the only supported BeeCounter transport),
+      where the counter never resets and the interval is derived here as
+      ``total_now - total_prev`` between consecutive readings (see
+      2026-easy-bee-counter/docs/ble-mode.md). A missed poll just widens the
+      next interval; a counter reboot or uint32 wrap
+      (``total_now < total_prev``) is treated as ``total_now`` so the restart
+      from zero is not mistaken for a huge negative delta.
 
     Differencing needs chronological order, so rows are sorted before the
     deltas are computed. The total baseline advances on every row that carries

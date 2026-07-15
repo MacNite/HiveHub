@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**", "feature/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Both officially supported firmware targets must compile from a clean
+  # dependency cache (every library is pinned to an exact version in
+  # firmware/platformio.ini). A compile error in any supported
+  # optional-feature combination fails the build.
+  firmware-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp32dev, xiao_esp32c6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
+        working-directory: firmware
+
+  # Host-level tests for the checked I2C layer: the exact production headers
+  # (nau7802_checked.h, scale_math.h, scale_topology.h) run against a scripted
+  # mock TwoWire so failed mux writes/readbacks, stale channel selections,
+  # failed NAU channel switches, short reads, partial sample sets, timeouts,
+  # railed values, excessive variance and invalid topologies are all injected
+  # deterministically.
+  firmware-host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run host tests
+        run: ./firmware/host_test/run_tests.sh
+
+  # The wired I2C BeeCounter path was removed for good. Fail the build if any
+  # of its symbols ever reappear in the firmware, so a stray revert or cherry
+  # pick cannot silently reintroduce the wired fallback or the OTA-over-I2C
+  # relay.
+  wired-beecounter-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure no wired BeeCounter symbols exist in the firmware
+        run: |
+          set -e
+          # Word-boundaried OTA_CHUNK_MAX so the legitimate HiveInside GATT-OTA
+          # constant HIVEINSIDE_OTA_CHUNK_MAX is not matched.
+          PATTERNS='SLAVE_ADDR_SLOT_1|SLAVE_ADDR_SLOT_2|CMD_LATCH|REG_PROTOCOL_VERSION|REG_TOTAL_IN|REG_INTERVAL_IN|REG_PER_GATE_IN|REG_OTA_BEGIN|REG_OTA_DATA|REG_OTA_END|pushFirmwareToBeeCounter|updateBeeCounter|\bOTA_CHUNK_MAX\b|BEE-OTA'
+          if grep -rnE "$PATTERNS" firmware/src firmware/include; then
+            echo "::error::Wired BeeCounter I2C symbols found — this path was removed (BLE/GATT only)."
+            exit 1
+          fi
+          if grep -nE '#include\s*[<"]Wire' firmware/src/bee_counter_client.cpp firmware/include/bee_counter_client.h; then
+            echo "::error::BeeCounter code must not touch the I2C bus."
+            exit 1
+          fi
+          echo "No wired BeeCounter symbols present."
+
+  server-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install server dependencies
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q build-essential python3-dev
+          pip install -r server/requirements.txt pytest
+      - name: Run server test suite
+        env:
+          DATABASE_URL: postgresql://ci-not-used/ci
+          PYTHONPATH: server
+        run: |
+          python3 test-data/test_counter_rules.py
+          python3 test-data/test_accel_rules.py
+          python3 test-data/test_ble_sensor_rules.py
+          python3 test-data/test_sd_import.py
+          python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py
+
+  # The website/configurator and dashboard have no test suite yet; keep them at
+  # least syntactically sound so a broken script cannot ship unnoticed.
+  website-js-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check website and dashboard scripts
+        run: |
+          set -e
+          for f in website/assets/*.js website/dashboard-demo/assets/*.js server/dashboard/assets/*.js; do
+            node --check "$f"
+          done

@@ -1123,21 +1123,22 @@ def attach_temperature_compensation(measurements: list[dict]) -> list[dict]:
 def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     """Backfill NULL per-interval bee-counter counts from the lifetime totals.
 
-    The wireless/BLE (HiveTraffic) bee-counter path is *totals-only*: the device
-    reports the monotonic lifetime ``total_in``/``total_out`` but no per-poll
-    ``interval_in``/``interval_out`` — it performs no I2C ``CMD_LATCH`` handshake,
-    so those interval columns are stored NULL (see
-    2026-easy-bee-counter/docs/ble-mode.md and bee_counter_client's totals_only
-    path). Display clients (HivePal) chart the interval fields directly, so a
-    BLE-sourced counter would otherwise read as zero traffic for every row.
+    The HiveTraffic bee-counter path (BLE/GATT — the only supported transport) is
+    *totals-only*: the device reports the monotonic lifetime
+    ``total_in``/``total_out`` but no per-poll ``interval_in``/``interval_out``
+    (there is no interval-latch/reset step over BLE), so those interval columns
+    are stored NULL (see 2026-easy-bee-counter/docs/ble-mode.md). Display clients
+    (HivePal) chart the interval fields directly, so a BLE-sourced counter would
+    otherwise read as zero traffic for every row.
 
     Here we derive each missing interval as ``total_now - total_prev`` between
     consecutive readings of the same channel — the same differencing the insight
     engine already does in insights._extract_counter_series, applied to the read
     APIs so the chart panel matches the insight card. Rules:
 
-    * Only NULL intervals are filled; the wired I2C path, which already reports a
-      device interval, is left untouched.
+    * Only NULL intervals are filled; historical rows from the removed wired
+      firmware, which already carry a device-reported interval, are left
+      untouched.
     * Rows where the channel was unreachable (``bee_counter_{ch}_ok`` falsy) are
       skipped and never advance the baseline, so a dead counter can't inject a
       bogus delta.

@@ -45,16 +45,25 @@ an alternative/complement to the HX711:
 > scales, no mux) **or** put all NAU7802s behind the mux (up to **16**) — never
 > both. (When a main-bus chip *is* present, the driver reads it only with the mux
 > fully disabled, and the provisioning portal hides the mux channels to avoid
-> phantom detections.)
+> phantom detections.) The firmware **rejects** a configuration mixing direct and
+> muxed NAU7802 channels, duplicate physical channel assignments, and
+> out-of-range mux (must be −1..7) or ADC (must be 1/2) values — both when
+> loading stored settings and when saving from the portal; offending channels
+> are never operated.
 >
 > On the obsolete 30-pin board the two HX711 pin channels (dedicated GPIOs, not
 > I2C, so no `0x2A` collision) could technically be combined with the 16 muxed
 > NAU7802 channels for 18 wired channels — but the legacy board is no longer
 > recommended, so **16 is the supported maximum**.
 
-The firmware reads NAU7802s **raw** and applies the same `offset`/`factor`
+The firmware reads NAU7802s **raw** through its own checked driver
+(`firmware/include/nau7802_checked.h`) and applies the same `offset`/`factor`
 calibration as the HX711 path (`weightFromRaw`), so calibration is per scale
-channel and stored in the hive registry.
+channel and stored in the hive registry. The shared I2C bus runs at an explicit
+**100 kHz**; every mux selection and NAU7802 channel switch is verified by
+register readback, and a reading is only reported when the full sample set
+arrived and passed a stability filter — otherwise the hive uploads
+`scale_ok=false` with a null weight instead of a wrong value.
 
 ### NAU7802 sleep before deep sleep
 
@@ -195,11 +204,11 @@ read, insights and temperature-compensation paths keep working unchanged.
 ## Known limitations
 
 - Connection-based **HiveHeart / wireless HiveScale** GATT sensors and
-  **HiveTraffic** wireless bee counters are all read for **any hive**
+  **HiveTraffic** bee counters are all read for **any hive**
   (`beehive_gatt.cpp` and `bee_counter_client.cpp::bleRunCycleRegistry` each
-  walk the whole registry), same as the passive beacons. Only the **wired I2C
-  BeeCounter** stays limited to hives 1–2, since it has just two fixed I2C
-  addresses (`0x30` / `0x31`).
+  walk the whole registry), same as the passive beacons. Bee counters are
+  **BLE/GATT-only** — the old wired I2C BeeCounter (hives 1–2 at
+  `0x30`/`0x31`) is no longer supported.
 - Server-side **temperature compensation** is applied to hives 1–2; hives 3+
   use raw weight for insights.
 - **Scale calibration** is synced for all hives (firmware 0.23.7+): hives 1–2 via

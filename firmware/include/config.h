@@ -186,23 +186,71 @@
 #endif
 
 // ==============================
+// SHARED I2C BUS
+// ==============================
+// The single shared bus (DS3231, SHT4x, NAU7802/TCA9548A, optional INA219 /
+// MAX17048) runs at an EXPLICIT 100 kHz — never the framework default, and
+// nothing is allowed to change it at runtime (the old BeeCounter OTA path that
+// temporarily switched the bus to 400 kHz has been removed together with all
+// wired-BeeCounter support). Initialization is checked and logged; see
+// firmware/src/i2c_bus.cpp.
+#ifndef I2C_CLOCK_HZ
+#define I2C_CLOCK_HZ 100000UL
+#endif
+
+// ==============================
 // NAU7802 24-bit I2C LOAD-CELL ADC (alternative to HX711)
 // ==============================
 // The NAU7802 (Nuvoton) is a 24-bit bridge ADC on I2C at a FIXED address 0x2A. It
 // has TWO differential input channels (CH1/CH2) multiplexed onto one ADC, so a
-// single NAU7802 reads two load cells. We read it RAW (getReading()) and apply our
-// own offset/factor, mirroring the HX711 path (weightFromRaw), so no per-channel
-// calibration state has to survive a mux switch. Before deep sleep every NAU7802
-// is put into power-down (PU_CTRL PUD/PUA cleared) — see powerDownScalesForSleep().
+// single NAU7802 reads two load cells. We read it RAW through the checked driver
+// (firmware/include/nau7802_checked.h) and apply our own offset/factor, mirroring
+// the HX711 path (weightFromRaw), so no per-channel calibration state has to
+// survive a mux switch. Before deep sleep every NAU7802 is put into power-down
+// (PU_CTRL PUD/PUA cleared, checked) — see powerDownScalesForSleep().
 #ifndef ENABLE_NAU7802
 #define ENABLE_NAU7802 1
 #endif
 #ifndef NAU7802_I2C_ADDRESS
 #define NAU7802_I2C_ADDRESS 0x2A
 #endif
-// Samples averaged per NAU7802 channel read (matches the HX711 default of 15).
+// Samples per NAU7802 channel read (matches the HX711 default of 15). The FULL
+// count is required — a partial or communication-corrupted set is never averaged
+// into a weight; the reading is marked invalid instead.
 #ifndef NAU7802_SAMPLES
 #define NAU7802_SAMPLES 15
+#endif
+// Conversions discarded after a mux/ADC-channel switch: the first results still
+// belong to the previous input's pipeline.
+#ifndef NAU7802_SETTLE_DISCARD
+#define NAU7802_SETTLE_DISCARD 4
+#endif
+// Overall per-read deadline. 15 samples + 4 discards at 80 SPS need ~240 ms;
+// 1 s bounds a missing/silent chip so a sweep of many channels stays responsive.
+#ifndef NAU7802_READ_TIMEOUT_MS
+#define NAU7802_READ_TIMEOUT_MS 1000UL
+#endif
+// Stability gate: max-min of the trimmed sample set (raw counts). A spread above
+// this marks the reading invalid (vibrating platform, broken wiring, EMI) rather
+// than averaging noise into a plausible-looking weight. At gain 128 a healthy
+// stationary load cell spreads a few hundred counts; 20000 (~0.24% of full
+// scale) is deliberately permissive so wind-rocked hives still measure.
+#ifndef NAU7802_MAX_SPREAD_COUNTS
+#define NAU7802_MAX_SPREAD_COUNTS 20000L
+#endif
+// Portal calibration (tare/span): number of consecutive full reads required and
+// the max spread between their results before a calibration value may persist.
+#ifndef SCALE_CAL_READS
+#define SCALE_CAL_READS 3
+#endif
+#ifndef SCALE_CAL_MAX_DELTA_COUNTS
+#define SCALE_CAL_MAX_DELTA_COUNTS 4000L
+#endif
+// Span calibration additionally requires the loaded raw to differ from the tare
+// offset by at least this many counts (rejects "known weight" with nothing on
+// the platform) and the resulting |factor| to be plausible (see scale_math.h).
+#ifndef SCALE_CAL_MIN_SPAN_COUNTS
+#define SCALE_CAL_MIN_SPAN_COUNTS 1000L
 #endif
 
 // ==============================
@@ -396,8 +444,7 @@
 // HIVEINSIDE FIRMWARE-OVER-BLE (OTA relay)
 // ==============================
 // HiveHub (the only WiFi node) relays a HiveInside firmware image to a paired
-// HiveInside ESP32-C6 over GATT, the same way it relays a BeeCounter image over
-// I2C (see updateBeeCounter / bee_counter_client). The backend queues an
+// HiveInside ESP32-C6 over GATT. The backend queues an
 // `update_hiveinside` command with the image URL + CRC-32; HiveHub STREAMS the
 // HTTPS download straight into the HiveInside OTA characteristics (it never
 // buffers the whole >1 MB image — the WROOM has no PSRAM), and the HiveInside
@@ -443,9 +490,8 @@
 #ifndef BLE_OVERRIDE_MICS
 #define BLE_OVERRIDE_MICS BLE_OVERRIDES_WIRED       // in-hive acoustics (INMP441)
 #endif
-#ifndef BLE_OVERRIDE_ACCEL
-#define BLE_OVERRIDE_ACCEL BLE_OVERRIDES_WIRED      // in-hive vibration (LIS3DH)
-#endif
+// (The former BLE_OVERRIDE_ACCEL flag is gone: the wired LIS3DH/LIS2DH12 driver
+// was removed — in-hive vibration comes from BLE sensors only.)
 
 // ==============================
 // WIRELESS SENSOR CATALOG (configurator)
@@ -465,23 +511,30 @@
 #endif
 
 // ------------------------------------------------------------------
-// HiveTraffic (wireless entrance bee counter, BLE/GATT)
+// HiveTraffic (wireless entrance bee counter) — BLE/GATT ONLY
 // ------------------------------------------------------------------
+// BLE/GATT is the ONLY supported BeeCounter transport. The wired I2C BeeCounter
+// path (fixed slave addresses, register polling, a latch/reset command, and
+// firmware-over-the-wire updates) has been removed entirely — there is no
+// wired fallback for any hive.
+//
 // When ENABLE_WIRELESS_BEECOUNTER is set, the firmware acts as a GATT client:
 // once per upload cycle it connects to each paired HiveTraffic MAC (a
 // "beecounter" BLE pairing in the hive registry — paired in the portal, seeded
 // via a HIVE_i_JSON blob, or via the legacy WBEECNT_n_MAC / counter_mac{0,1}
 // keys), reads its JSON measurement characteristic and folds the lifetime
-// IN/OUT totals into the same bee_counter_{slot}_* fields the wired I2C
-// BeeCounter uses. The wire format is totals-only: the backend differences
-// consecutive totals into per-interval counts (see
-// 2026-easy-bee-counter/docs/ble-mode.md), so no CMD_LATCH reset is written.
-// The wireless counter is read straight from the hive registry, so it can be
-// paired to ANY hive up to MAX_HIVES (like HiveHeart/HiveScale). The wired I2C
-// BeeCounter has two fixed I2C addresses and so stays limited to hives 1–2: a
-// hive with a paired MAC uses BLE; hive 1 or 2 without one falls back to the
-// wired I2C BeeCounter. All HiveTraffic devices share one service/characteristic
-// UUID.
+// IN/OUT totals into the bee_counter_{slot}_* fields. The wire format is
+// totals-only: the backend differences consecutive totals into per-interval
+// counts (see 2026-easy-bee-counter/docs/ble-mode.md); no latch/reset command
+// exists over BLE. A hive without a configured (or reachable) counter
+// reports no bee_counter data (absent / ok:false). Counters can be paired to
+// ANY hive up to MAX_HIVES. All HiveTraffic devices share one
+// service/characteristic UUID.
+//
+// BeeCounter firmware updates: the old OTA-over-I2C relay was deleted. A future
+// BeeCounter OTA will use GATT, but it is NOT implemented yet — there is
+// currently no remote BeeCounter firmware-update path, and the obsolete
+// update_beecounter server command is rejected explicitly (see checkCommands()).
 #ifndef BEECOUNTER_GATT_SERVICE_UUID
 #define BEECOUNTER_GATT_SERVICE_UUID "8e8b0101-7a1c-4b9e-9a2f-1d6e0b9c1a01"
 #endif

@@ -242,7 +242,7 @@
     var isC6v = isC6();
     $("#antenna-row").style.display = isC6v ? "block" : "none";
     $("#c6-wired-notice").style.display = isC6v ? "block" : "none";
-    ["mics", "accel"].forEach(function (name) {
+    ["mics"].forEach(function (name) {
       var s = $('.sensor[data-sensor="' + name + '"]');
       if (!s) return;
       var cb = $('[data-toggle]', s);
@@ -372,22 +372,9 @@
     }
     p("");
 
-    // Accelerometer (legacy — genuinely capped at 2 by I2C address space: the
-    // LIS3DH/LIS2DH12 SDO/SA0 pin only selects between 0x18 and 0x19).
-    p("// LIS3DH / LIS2DH12 vibration accelerometers (I2C) — legacy, 2 fixed I2C");
-    p("// addresses, so at most 2 regardless of hive count. Prefer a BLE in-hive");
-    p("// sensor for vibration on any other hive.");
-    if (isC6v) p("// Not available on XIAO ESP32-C6.");
-    var accelOn = enabled("accel") && !isC6v;
-    p(def("ENABLE_LIS3DH_ACCEL", accelOn ? "1" : "0"));
-    if (accelOn) {
-      p(def("LIS3DH_ADDR_SLOT_1", opt("accel", "addr1")));
-      p(def("LIS3DH_ADDR_SLOT_2", opt("accel", "addr2")));
-      p(def("LIS3DH_RANGE_G", opt("accel", "range")));
-      p(def("LIS3DH_ODR_HZ", opt("accel", "odr")));
-      p(def("LIS3DH_SAMPLE_COUNT", opt("accel", "count")));
-    }
-    p("");
+    // In-hive vibration is BLE-only: the wired LIS3DH/LIS2DH12 driver was
+    // removed, so no accelerometer flags are emitted. Pair a HiveInside (FFT
+    // bands) or HolyIot/RuuviTag (low-rate) sensor for vibration instead.
 
     buildHives(p);
 
@@ -474,9 +461,10 @@
     p(def("ENABLE_BEEHIVE_GATT", anyBeehive ? "1" : "0"));
     p("");
 
-    p("// HiveTraffic wireless entrance bee counter (GATT). Read from the hive");
-    p("// registry, so a counter works on any hive it is paired to (the wired I2C");
-    p("// BeeCounter is the one still limited to hives 1-2).");
+    p("// HiveTraffic entrance bee counter (BLE/GATT — the only supported");
+    p("// BeeCounter transport; wired I2C BeeCounters are no longer supported).");
+    p("// Read from the hive registry, so a counter works on any hive it is");
+    p("// paired to.");
     p(def("ENABLE_WIRELESS_BEECOUNTER", anyBeecounter ? "1" : "0"));
     p("");
 
@@ -485,7 +473,6 @@
       p("// sensor for the same quantity, per hive.");
       p(def("BLE_OVERRIDE_DS18B20", $("#ovr_temp").checked ? "1" : "0"));
       p(def("BLE_OVERRIDE_MICS", $("#ovr_mics").checked ? "1" : "0"));
-      p(def("BLE_OVERRIDE_ACCEL", $("#ovr_accel").checked ? "1" : "0"));
       p("");
     }
   }

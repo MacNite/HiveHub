@@ -74,7 +74,7 @@
       <div class="card"><div class="ico">🛰️</div><h3>Off-grid power telemetry</h3><p>Optional MAX17048 LiPo fuel-gauge data (voltage, state-of-charge, alerts) for unattended deployments.</p></div>
       <div class="card"><div class="ico">📶</div><h3>BLE sensors</h3><p>Pair any BLE-Sensor (in-hive or BLE-Scale) — no extra wiring. <a href="device-support.html">See supported devices or request support for new devices</a></p></div>
       <div class="card"><div class="ico">💾</div><h3>SD cache &amp; backup</h3><p>Local buffering when uploads fail, plus an append-only persistent measurement backup.</p></div>
-      <div class="card"><div class="ico">🐝</div><h3>BeeCounter ready</h3><p>Optional entrance traffic counting of incoming and outgoing bees over I2C.</p></div>
+      <div class="card"><div class="ico">🐝</div><h3>HiveTraffic ready</h3><p>Optional entrance traffic counting of incoming and outgoing bees over BLE/GATT.</p></div>
       <div class="card"><div class="ico">🔑</div><h3>Claim-code pairing</h3><p>Claim devices from HivePal without touching the database — just a pairing code.</p></div>
       <div class="card"><div class="ico">📡</div><h3>OTA &amp; remote commands</h3><p>Over-the-air updates, remote calibration, reboot, Wi-Fi reset and config versioning.</p></div>
       <div class="card"><div class="ico">🧠</div><h3>Rule-based insights</h3><p>The backend auto-evaluates weight, temperature, sound and vibration into colony insights.</p></div>
@@ -172,7 +172,7 @@ pio device monitor   # 115200 baud</pre>
       <div class="card"><h3>📊 Built-in dashboard</h3><p>The login-free web dashboard served from the backend — how to enable and use it.</p><p><a href="dashboard-demo/">Live demo →</a> · <a href="https://github.com/MacNite/HiveHub/blob/main/server/dashboard/README.md">docs →</a></p></div>
       <div class="card"><h3>📘 API reference</h3><p>Device &amp; HivePal endpoints, schemas and the measurement payload.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/api.md">docs/api.md →</a></p></div>
       <div class="card"><h3>🔌 Wiring</h3><p>Full pin map, pull-ups and the load-cell wiring reference.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/wiring.md">docs/wiring.md →</a></p></div>
-      <div class="card"><h3>📳 Accelerometer</h3><p>Per-hive vibration monitoring and the ~20 Hz swarm signal.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
+      <div class="card"><h3>📳 Vibration (BLE)</h3><p>Per-hive vibration monitoring and the ~20 Hz swarm signal, from an in-hive BLE sensor.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/accelerometer.md">docs/accelerometer.md →</a></p></div>
       <div class="card"><h3>📶 BLE sensor</h3><p>Pairing the HolyIot 25015 in-hive beacon.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/holyiot-ble-sensor.md">docs/holyiot-ble-sensor.md →</a></p></div>
       <div class="card"><h3>🧠 Insights</h3><p>The rule-based colony detector catalogue and its sources.</p><p><a href="insights.html">How insights work →</a></p></div>
       <div class="card"><h3>🛰️ Off-grid notes</h3><p>LiPo (MAX17048) power-telemetry behaviour and the wake/deep-sleep cycle.</p><p><a href="https://github.com/MacNite/HiveHub/blob/main/docs/offgrid-firmware-notes.md">docs/offgrid-firmware-notes.md →</a></p></div>

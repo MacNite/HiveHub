@@ -6,6 +6,7 @@
 #include "storage_power.h"
 #include "hive_config.h"
 #include "scale_bus.h"
+#include "scale_math.h"
 
 #include <WiFi.h>
 #include <ArduinoJson.h>
@@ -430,7 +431,10 @@ void handleBleScan() {
 // ── I2C / DS18B20 discovery (used to populate the hive-mapping dropdowns) ─────
 // A JS array literal of every detected I2C load-cell channel: each NAU7802 (main
 // bus + behind each TCA9548A channel) exposes two ADC inputs, plus the two HX711
-// pin channels are always offered. Runs a quick bus probe each page render.
+// pin channels are always offered. Runs a quick bus probe each page render,
+// through the same CHECKED mux routing the measurement path uses — an
+// unverified selection is treated as "nothing found on that channel", never as
+// a phantom detection.
 static String detectedScalesJs() {
   String js = "[";
   bool first = true;
@@ -438,15 +442,13 @@ static String detectedScalesJs() {
     if (!first) js += ",";
     first = false;
     js += "{b:'nau',mux:"; js += String(mux); js += ",adc:"; js += String(adc);
-    js += ",addr:"; js += String((int)NAU7802_I2C_ADDRESS);
     js += ",label:'NAU7802 ";
     js += (mux < 0) ? String("main bus") : (String("mux ch") + mux);
     js += " CH"; js += String(adc); js += "'}";
   };
 #if ENABLE_NAU7802
-  scalebus::muxDisableAll();
-  Wire.beginTransmission(NAU7802_I2C_ADDRESS);
-  bool directPresent = (Wire.endTransmission() == 0);
+  bool directPresent = false;
+  if (scalebus::muxDisableChecked() && scalebus::nauPresentOnBus()) directPresent = true;
   if (directPresent) { add(-1, 1); add(-1, 2); }
   // A NAU7802 on the main bus shares the fixed 0x2A address with every muxed
   // NAU7802 and stays on the bus while a mux channel is enabled, so the two
@@ -456,11 +458,10 @@ static String detectedScalesJs() {
   // the mux (up to 16) — see the topology note in config.h / docs/multi-hive.md.
   if (!directPresent && scalebus::muxPresent()) {
     for (int ch = 0; ch < 8; ch++) {
-      scalebus::muxSelect((uint8_t)ch);
-      Wire.beginTransmission(NAU7802_I2C_ADDRESS);
-      if (Wire.endTransmission() == 0) { add(ch, 1); add(ch, 2); }
+      if (!scalebus::muxSelectChecked((uint8_t)ch)) continue;  // unverified — skip
+      if (scalebus::nauPresentOnBus()) { add(ch, 1); add(ch, 2); }
     }
-    scalebus::muxDisableAll();
+    scalebus::muxDisableChecked();
   }
 #endif
 #if ENABLE_HX711
@@ -505,7 +506,7 @@ static String initialHivesJs() {
       if (s) js += ",";
       if (c.backend == hivecfg::ScaleBackend::NAU7802)
         js += String("{b:'nau',mux:") + (int)c.muxChannel + ",adc:" + (int)c.adcChannel +
-              ",addr:" + (int)c.i2cAddr + ",off:" + c.offset + ",fac:" + String(c.factor, 4) + "}";
+              ",off:" + c.offset + ",fac:" + String(c.factor, 4) + "}";
       else
         js += String("{b:'hx',hx:") + (int)c.hxIndex + ",off:" + c.offset +
               ",fac:" + String(c.factor, 4) + "}";
@@ -593,7 +594,51 @@ static String calChannelLabel(const hivecfg::ScaleChannel& ch) {
   return String("scale");
 }
 
-// GET /calibrate/read — JSON: live raw + kg for every configured scale channel.
+// Short human-readable reason a checked read failed (portal display).
+static String calFailReason(const scalebus::ReadResult& r) {
+  if (r.notConfigured)       return "channel not readable (bus down / chip init failed / invalid config)";
+  if (r.routeFailed)         return "mux routing failed";
+  if (r.channelSwitchFailed) return "ADC channel switch failed";
+  if (r.timedOut)            return "conversion timeout";
+  if (r.samplesAcquired < r.samplesRequested) return "incomplete sample set";
+  if (r.railed)              return "raw value at ADC rail or zero (open input / no chip)";
+  if (r.unstable)            return "reading unstable (spread too high)";
+  return "I2C communication error";
+}
+
+// A calibration-grade reading: SCALE_CAL_READS consecutive FULLY VALID reads
+// whose results agree within SCALE_CAL_MAX_DELTA_COUNTS. Anything less —
+// route/switch failure, partial samples, timeout, rail, drift — refuses to
+// yield a value, so calibration can never persist a corrupted point.
+static bool calStableRead(hivecfg::ScaleChannel& ch, long& outRaw, String& err) {
+  long vals[SCALE_CAL_READS];
+  for (int i = 0; i < SCALE_CAL_READS; i++) {
+    scalebus::ReadResult r = scalebus::readChannel(ch);
+    if (!r.ok) {
+      err = calFailReason(r);
+      return false;
+    }
+    vals[i] = r.raw;
+  }
+  long mn = vals[0], mx = vals[0];
+  long long sum = 0;
+  for (int i = 0; i < SCALE_CAL_READS; i++) {
+    if (vals[i] < mn) mn = vals[i];
+    if (vals[i] > mx) mx = vals[i];
+    sum += vals[i];
+  }
+  if (mx - mn > SCALE_CAL_MAX_DELTA_COUNTS) {
+    err = String("scale not stable (") + (mx - mn) +
+          " counts between reads) — let it settle and retry";
+    return false;
+  }
+  outRaw = (long)(sum / SCALE_CAL_READS);
+  return true;
+}
+
+// GET /calibrate/read — JSON: live raw + kg (+ validity) for every configured
+// scale channel. An invalid read reports ok:false with its reason instead of a
+// bogus raw value.
 static void handleCalibrateRead() {
   sendNoCacheHeaders();
   String js = "{\"ch\":[";
@@ -602,17 +647,22 @@ static void handleCalibrateRead() {
     hivecfg::Hive& hive = hivecfg::gHives[h];
     for (uint8_t s = 0; s < hive.scaleCount; s++) {
       hivecfg::ScaleChannel& ch = hive.scales[s];
-      if (!ch.valid()) continue;
-      long raw = scalebus::readRaw(ch);
-      float kg = calKg(raw, ch.offset, ch.factor);
+      if (ch.backend == hivecfg::ScaleBackend::None) continue;
+      scalebus::ReadResult r = scalebus::readChannel(ch);
+      float kg = r.ok ? calKg(r.raw, ch.offset, ch.factor) : NAN;
       if (!first) js += ",";
       first = false;
       String nm = hive.name.length() ? hive.name : (String("Hive ") + hive.index);
       js += "{\"h\":" + String(hive.index) + ",\"s\":" + String(s);
       js += ",\"name\":" + jsonQuote(nm);
       js += ",\"label\":" + jsonQuote(calChannelLabel(ch));
-      js += ",\"raw\":" + String(raw);
-      js += ",\"kg\":" + (isnan(kg) ? String("null") : String(kg, 3));
+      js += ",\"ok\":" + String(r.ok ? "true" : "false");
+      if (r.ok) {
+        js += ",\"raw\":" + String(r.raw);
+        js += ",\"kg\":" + (isnan(kg) ? String("null") : String(kg, 3));
+      } else {
+        js += ",\"raw\":null,\"kg\":null,\"err\":" + jsonQuote(calFailReason(r));
+      }
       js += ",\"off\":" + String(ch.offset) + ",\"fac\":" + String(ch.factor, 2) + "}";
     }
   }
@@ -620,8 +670,10 @@ static void handleCalibrateRead() {
   setupServer.send(200, "application/json", js);
 }
 
-// POST /calibrate/set — op=tare (offset := current raw) or op=span (factor from a
-// known weight: factor := (raw - offset) / kg). Persists the registry on success.
+// POST /calibrate/set — op=tare (offset := stable raw) or op=span (factor from a
+// known weight: factor := (raw - offset) / kg). Persists the registry ONLY when
+// a calibration-grade reading was obtained and the resulting values are
+// plausible; the stored offset/factor are untouched on any failure.
 static void handleCalibrateSet() {
   sendNoCacheHeaders();
   int h = setupServer.arg("h").toInt();
@@ -632,26 +684,40 @@ static void handleCalibrateSet() {
     setupServer.send(404, "application/json", "{\"ok\":false,\"err\":\"no such scale channel\"}");
     return;
   }
+  if (ch->configError) {
+    setupServer.send(409, "application/json",
+        "{\"ok\":false,\"err\":\"channel configuration is invalid (duplicate/conflicting topology) - fix the hive mapping first\"}");
+    return;
+  }
 
-  long raw = scalebus::readRaw(*ch);
   String err;
-  if (op == "tare") {
-    ch->offset = raw;
-  } else if (op == "span") {
-    float known = setupServer.arg("kg").toFloat();
-    if (known == 0.0f) {
-      err = "enter a non-zero known weight";
-    } else if (raw == ch->offset) {
-      err = "reading equals the tare point — Tare empty first, then load the scale";
-    } else {
-      ch->factor = (float)((double)(raw - ch->offset) / (double)known);
-    }
-  } else {
+  long raw = 0;
+  if (op != "tare" && op != "span") {
     err = "unknown operation";
+  } else if (!calStableRead(*ch, raw, err)) {
+    // err filled by calStableRead — no calibration value is modified.
+  } else if (op == "tare") {
+    ch->offset = raw;
+  } else {  // span
+    float known = setupServer.arg("kg").toFloat();
+    if (isnan(known) || isinf(known) || known == 0.0f) {
+      err = "enter a finite, non-zero known weight";
+    } else if (labs(raw - ch->offset) < SCALE_CAL_MIN_SPAN_COUNTS) {
+      err = "reading is (almost) equal to the tare point - Tare empty first, then load the scale";
+    } else {
+      float factor = (float)((double)(raw - ch->offset) / (double)known);
+      if (!scalemath::factorPlausible(factor)) {
+        err = String("computed factor ") + String(factor, 2) +
+              " is implausible - check the known weight and wiring";
+      } else {
+        ch->factor = factor;
+      }
+    }
   }
 
   if (err.length()) {
-    setupServer.send(400, "application/json", String("{\"ok\":false,\"err\":\"") + err + "\"}");
+    setupServer.send(400, "application/json",
+                     String("{\"ok\":false,\"err\":") + jsonQuote(err) + "}");
     return;
   }
   hivecfg::saveHiveConfig();
@@ -705,7 +771,7 @@ e.querySelector('[data-lb]').textContent=c.label;
 e.querySelector('[data-tare]').onclick=function(){setp(c.h,c.s,'tare','',e);};
 e.querySelector('[data-span]').onclick=function(){setp(c.h,c.s,'span',e.querySelector('[data-known]').value,e);};}
 e.querySelector('[data-kg]').textContent=(c.kg==null?'-- kg':c.kg+' kg');
-e.querySelector('[data-raw]').textContent='raw '+c.raw+'  ·  offset '+c.off+'  ·  factor '+c.fac;});}
+e.querySelector('[data-raw]').textContent=(c.ok===false?('READ INVALID: '+(c.err||'sensor error')+'  ·  '):('raw '+c.raw+'  ·  '))+'offset '+c.off+'  ·  factor '+c.fac;});}
 function poll(){fetch('/calibrate/read').then(function(r){return r.json();}).then(render).catch(function(){}).finally(function(){setTimeout(poll,1500);});}
 function setp(h,s,op,kg,e){var m=e.querySelector('[data-msg]');m.textContent='Saving...';
 var body='h='+h+'&s='+s+'&op='+op+'&kg='+encodeURIComponent(kg);
@@ -816,8 +882,7 @@ void handleSetupRoot() {
   // Fallback channel used when the bus probe found no NAU7802 but the user still
   // wants to pre-configure one.
 #if ENABLE_NAU7802
-  html += "var DEFAULT_NAU_SCALE={b:'nau',mux:-1,adc:1,addr:" + String((int)NAU7802_I2C_ADDRESS) +
-          ",label:'NAU7802 main bus CH1'};";
+  html += "var DEFAULT_NAU_SCALE={b:'nau',mux:-1,adc:1,label:'NAU7802 main bus CH1'};";
 #else
   html += "var DEFAULT_NAU_SCALE=null;";
 #endif
@@ -891,9 +956,14 @@ document.getElementById("hfull").style.display=HIVES.length>=MAX_HIVES?"inline":
 document.getElementById("addhive").disabled=HIVES.length>=MAX_HIVES;
 }
 document.getElementById("addhive").addEventListener("click",function(){if(HIVES.length<MAX_HIVES){var s=nextScale();HIVES.push({i:nextIndex(),n:"",s:s?[s]:[],ds:null,bl:[],sk:s?scaleKey(s):"none",wm:""});render();}});
-form.addEventListener("submit",function(){
+form.addEventListener("submit",function(ev){
+// Client-side duplicate check (server-side firmware validation is authoritative
+// and re-checks this on /save): two hives must never share one physical channel.
+var seen={},dup=null;
+HIVES.forEach(function(h){h.s.forEach(function(s){var k=scaleKey(s);if(seen[k])dup=k;seen[k]=1;});});
+if(dup){ev.preventDefault();alert("Two hives are mapped to the same scale channel ("+dup+"). Give each hive its own channel before saving.");return;}
 var out=HIVES.map(function(h){var o={i:h.i,n:h.n||""};
-o.s=(h.sk!="ble"&&h.sk!="none"?h.s.slice(0,1):[]).map(function(s){return s.b=="nau"?{b:"nau",mux:s.mux,adc:s.adc,addr:s.addr||42,off:s.off||0,fac:s.fac||-7050}:{b:"hx",hx:s.hx,off:s.off||0,fac:s.fac||-7050};});
+o.s=(h.sk!="ble"&&h.sk!="none"?h.s.slice(0,1):[]).map(function(s){return s.b=="nau"?{b:"nau",mux:s.mux,adc:s.adc,off:s.off||0,fac:s.fac||-7050}:{b:"hx",hx:s.hx,off:s.off||0,fac:s.fac||-7050};});
 if(h.ds&&h.ds.length)o.ds=h.ds;
 var bl=(h.ds===null?h.bl.filter(function(b){return b.m&&b.m.length;}).slice(0,MAX_INHIVE_BLE).map(function(b){return {t:b.t,m:b.m};}):[]);
 if(h.sk=="ble"&&h.wm&&h.wm.length)bl.push({t:"hivescale",m:h.wm});
@@ -924,24 +994,9 @@ render();
 }
 
 void handleSetupSave() {
-  prefs.begin("hivescale", false);
-
-  String newDeviceId = setupServer.arg("device_id");
-  String newClaimCode = setupServer.arg("claim_code");
-  String newApiBase = trimTrailingSlash(setupServer.arg("api_base"));
-  String newApiKey = setupServer.arg("api_key");
-
-  newClaimCode.trim();
-
-  if (newDeviceId.length() > 0) prefs.putString("device_id", newDeviceId);
-  prefs.putString("claim_code", newClaimCode);
-  if (newApiBase.length() > 0) prefs.putString("api_base", newApiBase);
-  if (newApiKey.length() > 0) prefs.putString("api_key", newApiKey);
-
-  // Parse the hive-mapping JSON the portal submitted. Each element is already in
-  // the shape hivecfg::hiveFromJson() expects, so we load them straight into the
-  // in-memory registry here; the NVS write happens once after prefs.end() below
-  // (saveHiveConfig opens its own handle, so it must not nest with this one).
+  // Parse the hive-mapping JSON the portal submitted BEFORE touching NVS, so an
+  // invalid/crafted topology can be rejected without persisting anything. Each
+  // element is already in the shape hivecfg::hiveFromJson() expects.
   {
     String hivesJson = setupServer.arg("hives_json");
     JsonDocument hd;
@@ -962,7 +1017,7 @@ void handleSetupSave() {
       auto sameChannel = [](const hivecfg::ScaleChannel& a, const hivecfg::ScaleChannel& b) {
         if (a.backend != b.backend) return false;
         if (a.backend == hivecfg::ScaleBackend::HX711) return a.hxIndex == b.hxIndex;
-        return a.muxChannel == b.muxChannel && a.adcChannel == b.adcChannel && a.i2cAddr == b.i2cAddr;
+        return a.muxChannel == b.muxChannel && a.adcChannel == b.adcChannel;
       };
 
       uint8_t count = 0;
@@ -986,8 +1041,47 @@ void handleSetupSave() {
         }
       }
       hivecfg::gHiveCount = count;
+
+      // AUTHORITATIVE topology validation — the page's dropdown/JS checks are
+      // convenience only. A structurally invalid submission (duplicate hive
+      // indices, duplicate physical channels, out-of-range mux/ADC, direct +
+      // muxed NAU7802 mix) is rejected outright: nothing is persisted and the
+      // last good registry is reloaded from NVS.
+      uint8_t submitted = count;
+      hivecfg::validateRegistry();
+      bool structurallyInvalid = (hivecfg::gHiveCount != submitted);
+      for (uint8_t h = 0; h < hivecfg::gHiveCount && !structurallyInvalid; h++)
+        for (uint8_t s = 0; s < hivecfg::gHives[h].scaleCount; s++)
+          if (hivecfg::gHives[h].scales[s].configError) { structurallyInvalid = true; break; }
+      if (structurallyInvalid) {
+        Serial.println("[SETUP] REJECTED hive configuration save (invalid topology; see log above)");
+        hivecfg::loadHiveConfig();  // restore the last good registry
+        sendNoCacheHeaders();
+        setupServer.send(400, "text/html",
+            "<html><body><h1>Configuration rejected</h1>"
+            "<p>The submitted hive mapping is invalid: duplicate hive indices, two hives on one "
+            "physical scale channel, an out-of-range mux/ADC value, or a mix of a main-bus NAU7802 "
+            "with muxed NAU7802s (impossible &mdash; all NAU7802s share the fixed address 0x2A). "
+            "Nothing was saved. Go back, fix the mapping and save again.</p>"
+            "<p><a href='/'>Back to setup</a></p></body></html>");
+        return;
+      }
     }
   }
+
+  prefs.begin("hivescale", false);
+
+  String newDeviceId = setupServer.arg("device_id");
+  String newClaimCode = setupServer.arg("claim_code");
+  String newApiBase = trimTrailingSlash(setupServer.arg("api_base"));
+  String newApiKey = setupServer.arg("api_key");
+
+  newClaimCode.trim();
+
+  if (newDeviceId.length() > 0) prefs.putString("device_id", newDeviceId);
+  prefs.putString("claim_code", newClaimCode);
+  if (newApiBase.length() > 0) prefs.putString("api_base", newApiBase);
+  if (newApiKey.length() > 0) prefs.putString("api_key", newApiKey);
 
   int savedCount = 0;
   for (int i = 0; i < MAX_WIFI_NETWORKS; i++) {

@@ -524,26 +524,8 @@ def queue_hiveinside_update_from_app(
     }
 
 
-@router.post(
-    "/api/v1/app/devices/{device_id}/commands/update-beecounter",
-    dependencies=[Depends(require_hivepal_service_key)],
-)
-def queue_beecounter_update_from_app(
-    device_id: str,
-    slot: int = Query(1),
-    user_id: str = Depends(require_user_id),
-):
-    """App-facing trigger for a BeeCounter OTA relay (see the HiveInside endpoint
-    above; same upload-then-queue split). The caller must be owner or admin."""
-    if slot not in (1, 2):
-        raise HTTPException(status_code=400, detail="slot must be 1 or 2")
-    require_device_role(user_id, device_id, ["owner", "admin"])
-    result = queue_relay_firmware_update(
-        device_id, "beecounter", "update_beecounter", slot
-    )
-    return {
-        "status": result["status"],
-        "id": result["id"],
-        "command_type": "update_beecounter",
-        "payload": {"slot": slot},
-    }
+# NOTE: the app-facing update-beecounter endpoint was removed together with the
+# wired I2C BeeCounter path. BeeCounter data collection is BLE/GATT-only, and a
+# BeeCounter OTA over BLE/GATT is planned but not implemented yet — there is
+# currently no supported remote BeeCounter firmware-update path for HivePal to
+# trigger.

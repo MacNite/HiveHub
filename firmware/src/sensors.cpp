@@ -7,6 +7,7 @@
 #include "bee_counter_client.h"
 #include "hive_config.h"
 #include "scale_bus.h"
+#include "scale_math.h"
 
 #include <WiFi.h>
 #include <time.h>
@@ -112,30 +113,23 @@ void syncTime() {
   timeSource = "invalid";
 }
 
-#if ENABLE_HX711
-long readAverageRaw(HX711& scale, int samples) {
-  if (!scale.wait_ready_timeout(2000)) {
-    Serial.println("[HX711] Not ready");
-    return 0;
-  }
-  return scale.read_average(samples);
-}
-#endif
-
 float weightFromRaw(long raw, long offset, float factor) {
   if (factor == 0.0f) return NAN;
   return ((float)(raw - offset)) / factor;
 }
 
-// A 24-bit bridge ADC (NAU7802, HX711) rails to within a couple of counts of its
-// signed full scale (±8388607) when its differential input is open — i.e. no load
-// cell is wired to that channel. readRaw() also returns exactly 0 for a missing or
-// unreachable chip. Neither is a real weight, so treat both as "no usable reading":
-// the hive is then reported with weight_kg omitted (null) and scale_ok=false
-// instead of emitting a nonsense value like -1189 kg from a floating input.
-static const long ADC24_FULLSCALE_MARGIN = 8388600L;  // ~0x7FFFF8 (2^23 - 8)
-static bool scaleRawUsable(long raw) {
-  return raw != 0 && raw < ADC24_FULLSCALE_MARGIN && raw > -ADC24_FULLSCALE_MARGIN;
+// Human-readable reason a checked scale read was rejected — for the serial log,
+// so a field report can name the failing stage (device, mux channel, ADC
+// channel and hive index are printed alongside by the caller).
+static const char* scaleFailReason(const scalebus::ReadResult& r) {
+  if (r.notConfigured)       return "not configured / bus down / chip init failed";
+  if (r.routeFailed)         return "mux routing failed (unverified selection)";
+  if (r.channelSwitchFailed) return "ADC channel switch unverified";
+  if (r.timedOut)            return "conversion timeout";
+  if (r.samplesAcquired < r.samplesRequested) return "incomplete sample set";
+  if (r.railed)              return "railed/zero raw (open input or no chip)";
+  if (r.unstable)            return "unstable (sample spread too high)";
+  return "I2C communication error";
 }
 
 static const char* scaleBackendName(hivecfg::ScaleBackend b) {
@@ -291,22 +285,16 @@ String createMeasurementJson() {
   if (wiredMicUsed) micResult = readMicSamples();
 #endif
 
-  // ── BeeCounter (entrance gates) ────────────────────────────────────────────
-  //   Wireless HiveTraffic is read over BLE for ANY hive that carries a
+  // ── BeeCounter (entrance gates) — BLE/GATT only ────────────────────────────
+  //   HiveTraffic counters are read over BLE for ANY hive that carries a
   //   "beecounter" pairing in the registry (like HiveHeart/HiveScale), indexed
-  //   by registry position. The wired I2C BeeCounter has two fixed I2C addresses
-  //   (0x30/0x31), so it stays limited to hives 1–2 and only fills a hive that
-  //   has no wireless snapshot.
+  //   by registry position. There is NO wired I2C BeeCounter path and no
+  //   fallback: a hive without a pairing reports nothing; a paired but
+  //   unreachable counter reports bee_counter.ok=false.
   beecnt::Snapshot beeSnaps[MAX_HIVES];
 #if ENABLE_WIRELESS_BEECOUNTER
   beecnt::bleRunCycleRegistry(beeSnaps, MAX_HIVES);
 #endif
-  for (uint8_t h = 0; h < hivecfg::gHiveCount && h < MAX_HIVES; h++) {
-    if (beeSnaps[h].present) continue;
-    const uint8_t idx = hivecfg::gHives[h].index;
-    if (idx == 1)      (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_1, beeSnaps[h]);
-    else if (idx == 2) (void)beecnt::pollSlot(beecnt::SLAVE_ADDR_SLOT_2, beeSnaps[h]);
-  }
 
   // ── Assemble the upload document ───────────────────────────────────────────
   JsonDocument doc;
@@ -384,30 +372,50 @@ String createMeasurementJson() {
     const bhgatt::ScaleReading* bhScale = (h < MAX_HIVES && bh.scale[h].present) ? &bh.scale[h] : nullptr;
 #endif
 
-    // Scales: sum every channel mapped to this hive (usually one). A channel with
-    // no load cell rails its 24-bit ADC to full scale, and a missing chip reads 0;
-    // scaleRawUsable() drops both so an unwired hive reports null weight +
-    // scale_ok=false instead of a nonsense value from a floating input.
+    // Scales: sum every channel mapped to this hive (usually one). Every read
+    // goes through the checked scalebus layer, which returns a structured
+    // result — a weight is produced ONLY from a verified route + verified ADC
+    // channel + complete, stable sample set. Anything else marks the hive
+    // scale_ok=false with weight_kg omitted (null), never a nonsense value.
     double weightSum = 0.0;
-    bool   anyScale = false;         // got at least one usable reading
+    bool   anyScale = false;         // got at least one fully valid reading
     bool   triedWiredScale = false;  // a wired NAU7802/HX711 channel is configured
     long   firstRaw = 0;
     const char* scaleSrc = "";
     for (uint8_t s = 0; s < hive.scaleCount; s++) {
       const hivecfg::ScaleChannel& ch = hive.scales[s];
-      if (!ch.valid()) continue;
+      if (ch.backend == hivecfg::ScaleBackend::None) continue;
       triedWiredScale = true;
-      long raw = scalebus::readRaw(ch);
-      if (s == 0) { firstRaw = raw; scaleSrc = scaleBackendName(ch.backend); }
-      if (!scaleRawUsable(raw)) {
-        Serial.printf("[MEASURE] hive %u scale %u (%s) raw=%ld UNUSABLE (open input / no chip)\n",
-                      hive.index, s, scaleBackendName(ch.backend), raw);
+      if (s == 0) scaleSrc = scaleBackendName(ch.backend);
+      if (ch.configError) {
+        Serial.printf("[MEASURE] hive %u scale %u (%s) SKIPPED: invalid/conflicting configuration (fix in portal)\n",
+                      hive.index, s, scaleBackendName(ch.backend));
         continue;
       }
-      float kg = weightFromRaw(raw, ch.offset, ch.factor);
+      scalebus::ReadResult rr = scalebus::readChannel(ch);
+      if (s == 0) firstRaw = rr.raw;
+      if (!rr.ok) {
+        Serial.printf("[MEASURE] hive %u scale %u (%s addr=0x%02X mux=%d adc=%u) INVALID: %s "
+                      "(samples %u/%u, commErr %u, spread %ld, recovery %s)\n",
+                      hive.index, s, scaleBackendName(ch.backend),
+                      ch.backend == hivecfg::ScaleBackend::NAU7802 ? NAU7802_I2C_ADDRESS : 0,
+                      (int)ch.muxChannel, ch.adcChannel, scaleFailReason(rr),
+                      rr.samplesAcquired, rr.samplesRequested, rr.commErrors, rr.spread,
+                      rr.recoveryAttempted ? (rr.recoverySucceeded ? "ok" : "failed") : "none");
+        continue;
+      }
+      if (!scalemath::factorPlausible(ch.factor)) {
+        Serial.printf("[MEASURE] hive %u scale %u (%s) INVALID: calibration factor %.3f implausible\n",
+                      hive.index, s, scaleBackendName(ch.backend), (double)ch.factor);
+        continue;
+      }
+      float kg = weightFromRaw(rr.raw, ch.offset, ch.factor);
       if (!isnan(kg)) { weightSum += kg; anyScale = true; }
-      Serial.printf("[MEASURE] hive %u scale %u (%s) raw=%ld kg=%.3f\n",
-                    hive.index, s, scaleBackendName(ch.backend), raw, kg);
+      Serial.printf("[MEASURE] hive %u scale %u (%s mux=%d adc=%u) raw=%ld kg=%.3f "
+                    "(samples %u/%u, spread %ld)\n",
+                    hive.index, s, scaleBackendName(ch.backend), (int)ch.muxChannel,
+                    ch.adcChannel, rr.raw, kg, rr.samplesAcquired, rr.samplesRequested,
+                    rr.spread);
     }
     if (anyScale) {
       ho["weight_kg"]    = weightSum;
@@ -484,11 +492,16 @@ String createMeasurementJson() {
     if (bhHeart) writeBeehiveHeartToHive(ho, *bhHeart);
     if (bhScale) writeBeehiveScaleToHive(ho, *bhScale);
 #endif
-    // BeeCounter entrance gates: wireless HiveTraffic on any hive, wired I2C on
-    // hives 1–2. beeSnaps is indexed by registry position, matching this loop.
-    // Hives 1–2 always emit a bee_counter object (ok:false when absent) to
-    // preserve the wired path's long-standing output.
-    if (beeSnaps[h].present || hive.index == 1 || hive.index == 2)
+    // BeeCounter entrance gates (BLE/GATT only): beeSnaps is indexed by
+    // registry position, matching this loop. A hive emits a bee_counter object
+    // only when it actually has a paired HiveTraffic counter — present data
+    // when the read succeeded, ok:false when the paired counter was
+    // unreachable this cycle. Hives without a pairing report nothing (there is
+    // no wired path and no implicit hive-1/2 counter anymore).
+    bool counterPaired = false;
+    for (uint8_t b = 0; b < hive.bleCount; b++)
+      if (hive.ble[b].type == "beecounter" && hive.ble[b].mac.length()) counterPaired = true;
+    if (h < MAX_HIVES && (beeSnaps[h].present || counterPaired))
       beecnt::writeSnapshotToHive(ho, beeSnaps[h]);
   }
 

@@ -11,6 +11,7 @@
 #endif
 
 #include "scale_bus.h"
+#include "i2c_bus.h"
 #include "status_led.h"
 
 #if ENABLE_INMP441_MICS
@@ -109,8 +110,12 @@ void powerDownScalesForSleep() {
   // Put every I2C NAU7802 (direct + behind each mux channel) into power-down
   // first, while the I2C bus is still active. This is the "sleep the NAU7802
   // before the ESP32 deep-sleeps" step; without it the ADC keeps converting and
-  // burns milliamps through the whole sleep window.
-  scalebus::powerDownAllForSleep();
+  // burns milliamps through the whole sleep window. Each power-down write is
+  // checked; a failure is logged with the chip's mux channel (see scale_bus)
+  // and counted, because it can raise sleep current for the whole window.
+  if (!scalebus::powerDownAllForSleep()) {
+    Serial.println("[SLEEP] WARNING: not every NAU7802 confirmed power-down; sleep current may be elevated");
+  }
 
 #if ENABLE_HX711
   scale1.power_down();
@@ -216,6 +221,12 @@ void enterDeepSleep(unsigned long sleepMs) {
 
   powerDownScalesForSleep();
   preparePowerMonitorsForSleep();
+  // Last I2C users are done: shut the Wire peripheral down and leave SDA/SCL as
+  // plain inputs (the external pull-ups park both lines high) so nothing is
+  // back-powered or leaks through the ESP32 pads during deep sleep. Identical
+  // and safe on both the classic ESP32 and the XIAO ESP32-C6; wake-up re-runs
+  // i2cbus::begin() from setup(), so initialization is unaffected.
+  i2cbus::endForSleep();
 #if ENABLE_INMP441_MICS
   shutdownMicsI2s();
 #endif

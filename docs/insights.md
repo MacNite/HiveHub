@@ -526,7 +526,7 @@ which detectors each one feeds:
 |---|---|---|
 | Microphone | Pre-swarm (piping/tooting), queenlessness (acoustic signature), robbing (agitated spectrum) | **Integrated** (FFT bands) |
 | Entrance counter (BeeCounter) | Swarm event (asymmetric outflow), robbing (incoming-spike pattern), queenlessness (forager decline), absconding (daily decline → 3-of-3), foraging (traffic cross-check), winter (cleansing flights) | **Integrated** |
-| In-hive vibration (BLE: HiveInside FFT / HolyIot-RuuviTag low-rate; legacy wired LIS3DH) | Pre-swarm vibration rising (detectors 11 and 12) and the pre-swarm temperature watch boost | **Integrated** |
+| In-hive vibration (BLE: HiveInside FFT / HolyIot-RuuviTag low-rate) | Pre-swarm vibration rising (detectors 11 and 12) and the pre-swarm temperature watch boost | **Integrated** |
 
 With the BeeCounter integrated, the swarm-event, robbing, queenlessness,
 absconding, foraging and winter detectors all consume

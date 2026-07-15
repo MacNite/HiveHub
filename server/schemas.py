@@ -218,13 +218,18 @@ class MeasurementIn(BaseModel):
     mic_right_band_high_dbfs:     Optional[float] = None
 
     # ── BeeCounter (per-hive entrance gate counts) ───────────────────────────
-    # One BeeCounter per hive. Up to two on the shared I2C bus, addresses
-    # 0x30 / 0x31. Each block is independent — a missing unit reports
-    # bee_counter_N_ok=False and the rest of its fields are null.
+    # One HiveTraffic BeeCounter per hive, read over BLE/GATT (the only
+    # supported transport — the wired I2C path was removed). Current firmware
+    # reports LIFETIME totals only; the interval columns are backfilled
+    # server-side by differencing consecutive totals (see
+    # difference_bee_counter_intervals in measurements.py). Each block is
+    # independent — a paired-but-unreachable unit reports
+    # bee_counter_N_ok=False and the rest of its fields null.
     #
-    # The per-gate 24-byte arrays live in raw_json as bee_counter_N_per_gate_in
-    # / bee_counter_N_per_gate_out — they are forensic data, not surfaced as
-    # columns.
+    # interval_*, busy_retries, read_attempts, latch_succeeded and the per-gate
+    # arrays (raw_json bee_counter_N_per_gate_in/out) are LEGACY inputs kept so
+    # historical rows and not-yet-reflashed devices on the old wired firmware
+    # still ingest; new firmware never sends them.
     bee_counter_1_ok:                Optional[bool] = None
     bee_counter_1_protocol_version:  Optional[int]  = None
     bee_counter_1_status_flags:      Optional[int]  = None
@@ -481,7 +486,10 @@ class FirmwareReleaseIn(BaseModel):
     version: str
     filename: str
     active: bool = True
-    target: Literal["hivescale", "beecounter", "hiveinside"] = "hivescale"
+    # "beecounter" is no longer an accepted target: BeeCounter firmware was
+    # delivered over the (removed) wired I2C relay, and no BLE/GATT OTA exists
+    # yet — a registered beecounter image could never reach a device.
+    target: Literal["hivescale", "hiveinside"] = "hivescale"
 
     @field_validator("target", mode="before")
     @classmethod
@@ -491,15 +499,20 @@ class FirmwareReleaseIn(BaseModel):
         # transparently stored as a hivescale release.
         return normalize_firmware_target(v) if isinstance(v, str) else v
 
-    # Board/architecture this image was built for ("esp32" / "esp32-c6"). Required
-    # in effect for the "hivescale" target so OTA never serves a 30-pin ESP32
-    # (Xtensa) image to an ESP32-C6 (RISC-V) or vice versa; left None for the
-    # single-architecture beecounter / hiveinside sub-device targets. When omitted
-    # for a hivescale release it is derived from the board-stamped filename.
+    # Board/architecture this image was built for. Required in effect for the
+    # "hivescale" target ("esp32" / "esp32-c6") so OTA never serves a 30-pin
+    # ESP32 (Xtensa) image to an ESP32-C6 (RISC-V) or vice versa; for
+    # "hiveinside" it distinguishes the ESP32-C6 prototype from the nRF54LM20A.
+    # When omitted for a hivescale release it is derived from the board-stamped
+    # filename.
     board: Optional[str] = None
 
 
 class DeviceCommandIn(BaseModel):
+    # NOTE: "update_beecounter" was removed together with the wired I2C
+    # BeeCounter path — the firmware can no longer perform it, so the server
+    # must not queue it. BeeCounter data collection is BLE/GATT-only; a future
+    # BeeCounter OTA will use GATT but is not implemented yet.
     command_type: Literal[
         "calibrate_scale_1",
         "calibrate_scale_2",
@@ -509,7 +522,6 @@ class DeviceCommandIn(BaseModel):
         "reset_wifi",
         "check_ota",
         "ota_update",
-        "update_beecounter",
         "update_hiveinside",
         "start_provisioning",
         "start_calibration_mode",
