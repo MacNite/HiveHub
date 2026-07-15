@@ -79,12 +79,11 @@ def queue_relay_firmware_update(device_id: str, target: str,
     ))
 
 
-@router.post("/api/v1/devices/{device_id}/commands/update-beecounter",
-          dependencies=[Depends(require_api_key)])
-def queue_beecounter_update(device_id: str, slot: int = Query(1)):
-    """Queue a relay of the active BeeCounter firmware to the BeeCounter at the
-    given slot (1 -> 0x30, 2 -> 0x31) over I2C."""
-    return queue_relay_firmware_update(device_id, "beecounter", "update_beecounter", slot)
+# NOTE: the update-beecounter endpoint was removed together with the wired I2C
+# BeeCounter path. The firmware cannot relay BeeCounter images anymore (it
+# rejects the obsolete update_beecounter command explicitly), and a BeeCounter
+# OTA over BLE/GATT is planned but NOT implemented yet — so there is currently
+# no supported remote BeeCounter firmware-update path.
 
 
 @router.post("/api/v1/devices/{device_id}/commands/update-hiveinside",

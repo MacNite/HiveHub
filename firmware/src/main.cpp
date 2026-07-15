@@ -10,9 +10,9 @@
 #include "hivehub_network.h"
 #include "sensors.h"
 #include "portal.h"
-#include "bee_counter_client.h"
 #include "hive_config.h"
 #include "scale_bus.h"
+#include "i2c_bus.h"
 #include "status_led.h"
 
 #if ENABLE_INMP441_MICS
@@ -86,61 +86,20 @@ void runUploadCycle() {
     Serial.printf("[OTA] Skipping; next scheduled check in %u cycle(s)\n", rtcCyclesUntilOta);
   }
 
+  // One-line I2C/scale health summaries so a field log shows recovery attempts,
+  // NACK/timeout counts and mux/NAU failures without extra chatter.
+  i2cbus::logDiag();
+  scalebus::logDiag();
+
   Serial.println("[CYCLE] Done");
   debugLine();
 }
 
-// Release a wedged I2C bus before handing it to the Wire driver. If a slave is
-// interrupted mid-read (brown-out, a glitch, or a reset between the ACK and the
-// data byte) it keeps holding SDA low, waiting to clock out the rest of its
-// byte. The master can then never issue a START, so *every* device — SHT4x, RTC,
-// NAU7802, the MAX17048 — reads as MISSING, and a plain reset does not clear it:
-// only a full power-cycle of the stuck slave does. That is exactly the failure
-// where the bus "works for days, then goes dead until the battery is unplugged."
-//
-// The standard rescue is to bit-bang up to 9 SCL pulses so the slave finishes
-// its byte and lets SDA float back high, then manufacture a STOP. This is a
-// no-op on a healthy (idle-high) bus, so it is safe to run on every boot before
-// Wire.begin().
-static void recoverI2CBus() {
-  pinMode(I2C_SDA, INPUT_PULLUP);
-  pinMode(I2C_SCL, OUTPUT_OPEN_DRAIN);
-  digitalWrite(I2C_SCL, HIGH);
-  delayMicroseconds(5);
-
-  if (digitalRead(I2C_SDA) == HIGH) {
-    pinMode(I2C_SDA, INPUT);
-    pinMode(I2C_SCL, INPUT);
-    return;  // bus already idle — nothing to recover
-  }
-
-  int cycles = 0;
-  while (digitalRead(I2C_SDA) == LOW && cycles < 9) {
-    digitalWrite(I2C_SCL, LOW);
-    delayMicroseconds(5);
-    digitalWrite(I2C_SCL, HIGH);   // released; external pull-up raises SCL
-    delayMicroseconds(5);
-    cycles++;
-  }
-
-  // Manufacture a STOP (SDA low->high while SCL is high) so any slave still
-  // listening sees a clean end-of-transaction before the driver takes over.
-  pinMode(I2C_SDA, OUTPUT_OPEN_DRAIN);
-  digitalWrite(I2C_SDA, LOW);
-  delayMicroseconds(5);
-  digitalWrite(I2C_SCL, HIGH);
-  delayMicroseconds(5);
-  digitalWrite(I2C_SDA, HIGH);
-  delayMicroseconds(5);
-
-  const bool released = digitalRead(I2C_SDA) == HIGH;
-  Serial.printf("[I2C] Bus recovery: clocked %d cycle(s); SDA %s\n",
-                cycles, released ? "released" : "STILL LOW (check wiring/slave)");
-
-  // Return the pins to inputs so Wire.begin() can reconfigure them cleanly.
-  pinMode(I2C_SDA, INPUT);
-  pinMode(I2C_SCL, INPUT);
-}
+// I2C bring-up (stuck-bus recovery + checked Wire.begin at the explicit
+// 100 kHz I2C_CLOCK_HZ) lives in i2c_bus.cpp. When it fails, i2cbus::ok()
+// stays false and every I2C consumer (RTC, SHT4x, scalebus, power monitors)
+// is skipped — readings fail closed as missing/invalid instead of the bus
+// wedging every driver in turn.
 
 void setup() {
   Serial.begin(115200);
@@ -195,8 +154,11 @@ void setup() {
     initSdCard();
     // Bring up I2C + the scale bus + the 1-Wire bus so the portal's "Scan I2C
     // scales" and DS18B20 mapping can enumerate what is physically attached.
-    recoverI2CBus();
-    Wire.begin(I2C_SDA, I2C_SCL);
+    // A failed bus bring-up is not fatal here: the portal still serves the
+    // config pages; scans just come back empty (and log why).
+    if (!i2cbus::begin()) {
+      Serial.println("[SETUP] I2C bus unusable; portal scans will show no I2C devices");
+    }
     scalebus::begin();
 #if ENABLE_DS18B20_HIVE_TEMP
     ds18b20.begin();
@@ -205,18 +167,22 @@ void setup() {
     return;
   }
 
-  recoverI2CBus();
-  Wire.begin(I2C_SDA, I2C_SCL);
-  Serial.println("[I2C] Started");
+  const bool i2cOk = i2cbus::begin();
+  if (!i2cOk) {
+    // Fail closed: no I2C device init on a stuck bus. The cycle still runs so
+    // the device can report its state (sd_ok/rtc_ok/sht_ok all false, scales
+    // invalid) instead of going silent.
+    Serial.println("[SETUP] I2C bus initialization FAILED; skipping all I2C device initialization");
+  }
 
-  rtcOk = rtc.begin();
+  rtcOk = i2cOk && rtc.begin();
   Serial.printf("[RTC] %s\n", rtcOk ? "OK" : "MISSING");
 
   if (rtcOk && rtc.lostPower()) {
     Serial.println("[RTC] Lost power");
   }
 
-  shtOk = sht4.begin();
+  shtOk = i2cOk && sht4.begin();
   Serial.printf("[SHT4x] %s\n", shtOk ? "OK" : "MISSING");
 
   if (shtOk) {
@@ -225,7 +191,7 @@ void setup() {
   }
 
 #if ENABLE_INA219_SOLAR
-  solarMonitorOk = solarMonitor.begin(&Wire);
+  solarMonitorOk = i2cOk && solarMonitor.begin(&Wire);
   Serial.printf("[INA219] %s\n", solarMonitorOk ? "OK" : "MISSING");
   if (solarMonitorOk) {
     solarMonitor.setCalibration_32V_2A();
@@ -234,7 +200,7 @@ void setup() {
 #endif
 
 #if ENABLE_MAX17048_BATTERY
-  batteryMonitorOk = batteryGauge.begin();
+  batteryMonitorOk = i2cOk && batteryGauge.begin();
   Serial.printf("[MAX17048] %s\n", batteryMonitorOk ? "OK" : "MISSING");
   if (batteryMonitorOk) {
     batteryGauge.quickStart();

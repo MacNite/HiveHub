@@ -35,8 +35,11 @@ struct ScaleChannel {
   // HX711 backend: which of the two board HX711 instances (0 -> HX1_*, 1 -> HX2_*).
   uint8_t hxIndex = 0;
 
-  // NAU7802 backend:
-  uint8_t i2cAddr    = NAU7802_I2C_ADDRESS;  // fixed 0x2A in practice
+  // NAU7802 backend. The NAU7802's I2C address is FIXED at 0x2A (no
+  // address-select pin), so it is not part of the configuration: the legacy
+  // "addr" JSON field is parsed for backward compatibility, normalized to
+  // NAU7802_I2C_ADDRESS (with a log when it differed) and no longer persisted
+  // or presented as configurable.
   int8_t  muxChannel = -1;   // -1 = directly on the main bus; 0..7 behind the mux
   uint8_t adcChannel = 1;    // NAU7802 input mux: 1 -> CH1, 2 -> CH2
 
@@ -44,7 +47,14 @@ struct ScaleChannel {
   long  offset = 0;
   float factor = -7050.0f;
 
-  bool valid() const { return backend != ScaleBackend::None; }
+  // Runtime-only (never persisted): set by validateRegistry() when this channel
+  // is part of an invalid/conflicting topology (duplicate physical channel,
+  // out-of-range mux/ADC, direct+muxed NAU7802 mix, implausible calibration).
+  // A flagged channel is never operated — scalebus::readChannel() fails closed —
+  // but the stored configuration is preserved so the portal can show and fix it.
+  bool configError = false;
+
+  bool valid() const { return backend != ScaleBackend::None && !configError; }
 };
 
 // One wireless pairing. `type` matches the portal vocabulary
@@ -88,8 +98,21 @@ extern uint8_t gHiveCount;
 // Parse the NVS per-hive blobs (and hive_count) into gHives. When no blobs exist
 // yet, migrate the legacy fixed-slot keys (scale offsets/factors, ble_mac0/1,
 // wcount/wtypeN/wmacN/wslotN) into a two-hive registry so an upgraded device keeps
-// working without re-provisioning.
+// working without re-provisioning. Always finishes with validateRegistry().
 void loadHiveConfig();
+
+// Authoritative validation of the loaded registry (runs on every load AND on
+// every portal save — never rely on the portal page's dropdown behavior):
+//   - duplicate or out-of-range hive indices  -> offending hives dropped;
+//   - invalid mux (-1..7 only, no masking), invalid ADC channel (1/2), invalid
+//     HX711 index, duplicate physical channels, direct+muxed NAU7802 mixes,
+//     non-finite/implausible calibration factors -> offending channels get
+//     configError set (never operated, preserved for correction in the portal);
+//   - obsolete wired-BeeCounter "beecounter"-typed pairings without a BLE MAC
+//     cannot exist (pairings are MAC-keyed), so nothing wired can activate.
+// Every problem is logged with hive index + channel detail. Returns true when
+// nothing had to be flagged or dropped.
+bool validateRegistry();
 
 // Serialize gHives back to NVS (used after a calibration writeback).
 void saveHiveConfig();

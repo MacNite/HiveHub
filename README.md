@@ -56,20 +56,20 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Backend load-cell temperature compensation** — corrects HX711 thermal drift on read from the stored raw values; see [docs/temperature-compensation.md](docs/temperature-compensation.md).
 - **Per-hive temperature** — optional DS18B20 probes on a shared 1-Wire bus (off by default), or an in-hive BLE sensor as the source.
 - **Per-hive in-hive sound** — optional INMP441 stereo I2S microphones with per-band FFT (off by default).
-- **Per-hive vibration** — from a paired in-hive BLE sensor (a HiveInside ESP32-C6 gives full FFT bands; a HolyIot/RuuviTag beacon gives a low-rate magnitude), capturing the ~20 Hz pre-swarm signal microphones miss. A legacy wired LIS3DH/LIS2DH12 driver is retained for custom builds.
+- **Per-hive vibration** — from a paired in-hive BLE sensor (a HiveInside ESP32-C6 gives full FFT bands; a HolyIot/RuuviTag beacon gives a low-rate magnitude), capturing the ~20 Hz pre-swarm signal microphones miss. (The old wired LIS3DH/LIS2DH12 driver has been removed — in-hive vibration is BLE-only.)
 - **In-hive BLE sensors** — pair up to two battery beacons (HolyIot 25015, RuuviTag, HiveInside ESP32-C6, or beehivemonitoring.com HiveHeart) for temperature/humidity/pressure/vibration with no wiring.
 - **Ambient temperature & humidity** — an SHT4x on I2C.
 - **RTC timekeeping** — a DS3231 timestamps measurements without depending on NTP.
 - **SD card cache & backup** — local buffering when uploads fail, plus an append-only persistent backup that can be downloaded in AP mode and re-imported via HivePal.
 - **Claim-code pairing** — claim devices from HivePal without manual database setup.
 - **Remote configuration & commands** — sampling interval, scale offsets/factors, calibration, OTA checks, provisioning, reboot, Wi-Fi reset, and factory reset.
-- **OTA firmware updates** — owner-scoped releases with an accept-to-apply gate; the device also relays firmware to a BeeCounter (over I2C) and a HiveInside sensor (over BLE GATT).
+- **OTA firmware updates** — owner-scoped releases with an accept-to-apply gate; the device also relays firmware to a HiveInside sensor (over BLE GATT). There is currently **no remote BeeCounter firmware-update path**: the old OTA-over-I2C relay was removed and a BeeCounter OTA over BLE/GATT is planned but not implemented yet.
 - **Wi-Fi provisioning portal** — opened by the setup button for field configuration, including pairing wireless sensors.
 - **Multi-network Wi-Fi** — up to three saved networks.
 - **Insights** — backend auto-evaluation of weight, temperature, sound, vibration, and entrance traffic per hive, based on [these publications](docs/insights-sources-tldr.md).
 - **Insight alert notifications (optional)** — get swarm / robbing / winter-risk alerts by **e-mail (SMTP)** and/or **Web Push** to your phone or an installable dashboard PWA (Android, iOS 16.4+, desktop) when an insight first fires or escalates. Off by default; see [Insight alert notifications](docs/notifications.md).
 - **Optional off-grid mode** — solar/LiPo charging (CN3791 MPPT + TPS63020) with MAX17048 LiPo telemetry.
-- **Optional entrance bee counters** — wired [BeeCounter](https://github.com/MacNite/2026-easy-bee-counter) (I2C) or wireless HiveTraffic (BLE/GATT).
+- **Optional entrance bee counters** — wireless [HiveTraffic](docs/hivetraffic-bee-counter.md) counters over **BLE/GATT only** (wired I2C BeeCounters are no longer supported).
 - **Built-in web dashboard (optional)** — a login-free, dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts: device dropdown, per-hive selection, charts for every data group, plus device-config editing, hive renaming, firmware/OTA and calibration controls. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
 - **[HivePal](https://github.com/martinhrvn/hive-pal) integration** — dedicated `/api/v1/app/...` endpoints using a HivePal service key, per-user JWTs, and per-user access roles.
 - **Optional MQTT bridge** — mirror every reading to an MQTT broker (Home Assistant, Node-RED, openHAB…) with Home Assistant auto-discovery, alongside the built-in PostgreSQL store. Off by default; see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration).
@@ -129,19 +129,18 @@ bill of materials with price estimates and shop links lives on the
 | 2x [INMP441 sound sensors](https://s.click.aliexpress.com/e/_c313NoAd) | `ENABLE_INMP441_MICS` | Internal hive sound with per-band FFT |
 | [MAX17048](https://s.click.aliexpress.com/e/_c3JKEzrL) | `ENABLE_MAX17048_BATTERY` | LiPo voltage, state-of-charge, and low-battery alert |
 | In-hive BLE sensor (HolyIot 25015 / RuuviTag / HiveInside / HiveHeart) | `ENABLE_BLE_SCAN`, `ENABLE_BEEHIVE_GATT` | Temp / humidity / pressure / vibration, no wiring — paired by MAC |
-| 2x LIS3DH (proto) / LIS2DH12TR (final) | `ENABLE_LIS3DH_ACCEL` | **Legacy** wired vibration driver (in-hive vibration now comes from a BLE sensor) |
 | [CN3791 solar charger](https://s.click.aliexpress.com/e/_c4T7Ve5x) · [10 Ah LiPo](https://s.click.aliexpress.com/e/_c45jfAGv) · [6 V 4.5 W solar panel](https://s.click.aliexpress.com/e/_c3njKuVF) | Hardware only | Off-grid charging path feeding the Scale Module's TPS63020 |
 
 ### Optional bee counters
 
-Entrance traffic counting (in/out bees) is available wired over I2C or wireless over BLE:
+Entrance traffic counting (in/out bees) is **BLE/GATT-only**:
 
-- **[BeeCounter](https://github.com/MacNite/2026-easy-bee-counter)** — wired I2C counter at `0x30` / `0x31`.
-- **HiveTraffic** — wireless BLE/GATT counter; see [docs/hivetraffic-bee-counter.md](docs/hivetraffic-bee-counter.md).
+- **HiveTraffic** — the wireless [2026-easy-bee-counter](https://github.com/MacNite/2026-easy-bee-counter) board; see [docs/hivetraffic-bee-counter.md](docs/hivetraffic-bee-counter.md). Pairable to any hive.
+- Wired I2C BeeCounters (the old `0x30`/`0x31` slave path, including firmware updates over I2C) are **no longer supported**. BeeCounter firmware update over GATT is planned but not implemented yet, so there is currently no remote BeeCounter update path.
 
 ### Firmware pin mapping
 
-Pins are defined in `firmware/include/config.h` (with optional per-device overrides in `secrets.h`). The firmware source is split into focused units under `firmware/src/` (`main.cpp`, `hivehub_network.cpp`, `portal.cpp`, `sensors.cpp`, `scale_bus.cpp`, `hive_config.cpp`, `mics.cpp`, `accel.cpp`, `ble_sensor.cpp`, `beehive_gatt.cpp`, `bee_counter_client.cpp`, `storage_power.cpp`, `device_prefs.cpp`, `status_led.cpp`, `globals.cpp`).
+Pins are defined in `firmware/include/config.h` (with optional per-device overrides in `secrets.h`). The firmware source is split into focused units under `firmware/src/` (`main.cpp`, `hivehub_network.cpp`, `portal.cpp`, `sensors.cpp`, `scale_bus.cpp`, `i2c_bus.cpp`, `hive_config.cpp`, `mics.cpp`, `ble_sensor.cpp`, `beehive_gatt.cpp`, `bee_counter_client.cpp`, `storage_power.cpp`, `device_prefs.cpp`, `status_led.cpp`, `globals.cpp`).
 
 The table below is the **legacy 30-pin ESP32** map. The recommended **XIAO ESP32-C6** build (`pio run -e xiao_esp32c6`) has its own pin map — NAU7802 scales over I2C on D4/D5, DS18B20 on D1, SD on D3/D8–D10, button on D2, no HX711/INMP441 — see [docs/wiring.md](docs/wiring.md) and [pcb-design/README.md](pcb-design/README.md).
 
@@ -150,12 +149,10 @@ The table below is the **legacy 30-pin ESP32** map. The recommended **XIAO ESP32
 | HX711 #1 DOUT / SCK | 16 / 17 | Scale 1; SCK held high during deep sleep to power down the HX711 |
 | HX711 #2 DOUT / SCK | 32 / 33 | Scale 2; SCK held high during deep sleep to power down the HX711 |
 | DS18B20 1-Wire data | 4 | Shared bus for both probes; 4.7 kΩ pull-up to 3.3 V (`ENABLE_DS18B20_HIVE_TEMP`) |
-| I2C SDA / SCL | 21 / 22 | RTC, SHT4x, BeeCounter, optional MAX17048 |
+| I2C SDA / SCL | 21 / 22 | RTC, SHT4x, NAU7802/TCA9548A, optional MAX17048 — shared bus at an explicit **100 kHz** |
 | SD CS / SCK / MISO / MOSI | 5 / 18 / 23 / 19 | MicroSD over SPI |
 | Setup button | 27 | `INPUT_PULLUP`; short press opens provisioning AP, long press factory resets |
 | INMP441 BCLK / WS / SD | 14 / 13 / 34 | I2S, shared by both mics; GPIO34 is input-only (`ENABLE_INMP441_MICS`) |
-| BeeCounter | 21 / 22 | I2C at `0x30` / `0x31` |
-| LIS3DH / LIS2DH12 (legacy) | 21 / 22 | I2C at `0x18` / `0x19` (`ENABLE_LIS3DH_ACCEL`) |
 
 > See [docs/wiring.md](docs/wiring.md) for detailed wiring and [pcb-design/README.md](pcb-design/README.md) for the KiCad breakout PCB pinout.
 
@@ -378,11 +375,10 @@ Require the `X-API-Key` header (per-device key, except where noted as master/adm
 | `POST` | `/api/v1/measurements` | Submit a measurement (incl. optional telemetry) |
 | `GET` | `/api/v1/measurements/latest` | Latest measurements for dashboards (master/admin) |
 | `GET`/`PATCH` | `/api/v1/devices/{id}/config` | Get / update device configuration |
-| `GET` | `/api/v1/devices/{id}/firmware` | Check for a firmware update (`?version=` & `?target=hivescale\|beecounter`) |
+| `GET` | `/api/v1/devices/{id}/firmware` | Check for a firmware update (`?version=`, `?target=hivescale`, `?board=`) |
 | `POST` | `/api/v1/firmware/releases` | Register a firmware release (master/admin) |
 | `GET` | `/firmware/{filename}` | Download a firmware binary |
 | `POST` | `/api/v1/devices/{id}/commands` | Queue a remote command (master/admin) |
-| `POST` | `/api/v1/devices/{id}/commands/update-beecounter` | Queue a BeeCounter OTA relay (`?slot=1\|2`) |
 | `POST` | `/api/v1/devices/{id}/commands/update-hiveinside` | Queue a HiveInside OTA relay over BLE (`?slot=1\|2`) |
 | `GET` | `/api/v1/devices/{id}/commands/next` | Claim next pending command |
 | `POST` | `/api/v1/devices/{id}/commands/{cmd_id}/result` | Report command result |
@@ -404,7 +400,7 @@ Require both `X-HivePal-Service-Key` and a per-user `Authorization: Bearer <hive
 | `POST` | `/api/v1/app/devices/{id}/calibration/start` · `/stop` | Start / stop calibration mode |
 | `POST` | `/api/v1/app/devices/{id}/firmware` | Upload a firmware binary (multipart) and register it |
 | `GET`/`POST` | `/api/v1/app/devices/{id}/firmware/status` · `/approve` | OTA status / accept-to-apply approval |
-| `POST` | `/api/v1/app/devices/{id}/commands/update-beecounter` · `/update-hiveinside` | Trigger a sub-device OTA relay |
+| `POST` | `/api/v1/app/devices/{id}/commands/update-hiveinside` | Trigger a HiveInside OTA relay |
 | `GET` | `/api/v1/app/devices/{id}/insights[/summary\|/history]` | Rule-based colony insights, summary, and history |
 
 ### Local dashboard endpoints (optional, auth-free)
@@ -433,8 +429,8 @@ Core fields include weights, hive/ambient temperatures and humidity, raw HX711 v
 
 - **Acoustic (INMP441):** `mic_ok`, per-channel `mic_left_*` / `mic_right_*` RMS/peak levels and per-band FFT energy (`*_band_sub_bass_dbfs`, `*_band_hum_dbfs`, `*_band_piping_dbfs`, `*_band_stress_dbfs`, `*_band_high_dbfs`).
 - **In-hive BLE sensor:** `hive_N_humidity_percent`, `ble_N_humidity_percent`, `ble_N_pressure_hpa`, and the beehivemonitoring.com `hiveheart_N_*` / `hivescale_N_*` fields.
-- **Vibration:** `accel_N_ok`, broadband `accel_N_rms_mg` / `accel_N_peak_mg`, and per-band energy `accel_N_band_swarm_mg` (8–30 Hz) / `_fanning_mg` (30–100 Hz) / `_activity_mg` (100–200 Hz) — populated by the in-hive BLE sensor (or the legacy wired driver).
-- **Entrance traffic (BeeCounter / HiveTraffic):** `bee_counter_1_*` / `bee_counter_2_*` totals, interval in/out counts, gate health, and status fields.
+- **Vibration:** `accel_N_ok`, broadband `accel_N_rms_mg` / `accel_N_peak_mg`, and per-band energy `accel_N_band_swarm_mg` (8–30 Hz) / `_fanning_mg` (30–100 Hz) / `_activity_mg` (100–200 Hz) — populated by the in-hive BLE sensor.
+- **Entrance traffic (HiveTraffic BeeCounter, BLE/GATT):** `bee_counter_1_*` / `bee_counter_2_*` lifetime totals, gate health, and status fields; the backend derives the interval in/out counts by differencing consecutive totals.
 - **Power telemetry:** `battery_*` (MAX17048) fields; the backend also still accepts the legacy `solar_*` fields.
 - **Status:** `network_transport`, `calibration_mode`, `boot_count`, `time_source`.
 
@@ -465,7 +461,6 @@ Commands are queued by the server and picked up by the device on its next cycle.
 | `stop_calibration_mode` | `{}` | Return to normal interval and deep sleep |
 | `reboot` | `{}` | Restart the ESP32 |
 | `check_ota` / `ota_update` | `{}` | Trigger an immediate OTA check |
-| `update_beecounter` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay firmware to a BeeCounter over I2C (usually via the `update-beecounter` helper) |
 | `update_hiveinside` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay firmware to a HiveInside sensor over BLE GATT (usually via the `update-hiveinside` helper) |
 | `start_provisioning` | `{}` | Start the Wi-Fi provisioning AP |
 | `reset_wifi` | `{}` | Clear saved Wi-Fi credentials and reboot |
@@ -477,7 +472,7 @@ Commands are queued by the server and picked up by the device on its next cycle.
 
 The `pcb-design/` directory contains the KiCad designs — **all published boards are tested and working**:
 
-- **ESP32-C6 Scale Module (V0.4, recommended)** — the central board. Off-the-shelf modules on pin headers (no SMD soldering): XIAO ESP32-C6, NAU7802 for 2 scales, DS3231 RTC, SHT40, SD module, DS18B20 bus, BeeCounter, MAX17048 battery gauge, TP4056 USB-C charger, and TPS63020 buck-boost regulator with a power-source selection jumper.
+- **ESP32-C6 Scale Module (V0.4, recommended)** — the central board. Off-the-shelf modules on pin headers (no SMD soldering): XIAO ESP32-C6, NAU7802 for 2 scales, DS3231 RTC, SHT40, SD module, DS18B20 bus, MAX17048 battery gauge, TP4056 USB-C charger, and TPS63020 buck-boost regulator with a power-source selection jumper.
 - **NAU7802 breakout PCB (v0.2)** — I2C frontend for up to 16 wired scales (TCA9548A mux + up to 8× NAU7802; when it is used, no NAU7802 goes on the Scale Module); optionally carries its own XIAO MCU as a standalone BLE scale sensor.
 - **Power Module (V0.3)** — off-grid power (solar, battery) for a Scale Module; probably discontinued soon.
 - **ESP32 30-pin Scale Module (V0.3)** — the legacy board (ESP32 DevKit + 2× HX711 + INMP441 mics); obsolete and no longer recommended.

@@ -45,8 +45,8 @@ There are two kinds of device key:
 - **Master/admin key** — the value of the server `API_KEY` environment
   variable. Used for server-to-server / tooling endpoints that no device
   calls: `GET /api/v1/measurements/latest`, `POST /api/v1/firmware/releases`,
-  `POST …/commands` (queueing), `…/commands/update-beecounter`,
-  `…/commands/update-hiveinside`, and `GET /api/v1/time`.
+  `POST …/commands` (queueing), `…/commands/update-hiveinside`, and
+  `GET /api/v1/time`.
 
 > A device's per-device key no longer has to match the server `API_KEY`. To
 > rotate or re-register a device key, clear its stored hash with
@@ -122,7 +122,7 @@ Submit a measurement from a device. On the first measurement from a new `device_
 >       "accel": { "ok": true, "rms_mg": 12.5 },
 >       "ble": { "present": true, "sensor_type": "HolyIot 25015", "pressure_hpa": 1011.2 } },
 >     { "index": 2, "weight_kg": 38.0, "scale_source": "nau7802", "temp_c": 33.0,
->       "bee_counter": { "ok": true, "total_in": 1200, "interval_in": 5 } }
+>       "bee_counter": { "ok": true, "total_in": 1200, "total_out": 1190 } }
 >   ]
 > }
 > ```
@@ -191,40 +191,46 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | `mic_{left,right}_band_stress_dbfs` | number | No | 550–1500 Hz agitation band energy |
 | `mic_{left,right}_band_high_dbfs` | number | No | 1500–3000 Hz band energy |
 
-#### Entrance-counter fields (BeeCounter)
+#### Entrance-counter fields (HiveTraffic BeeCounter — BLE/GATT only)
 
-One BeeCounter may be fitted per hive on the shared I2C bus (`0x30` / `0x31`).
-Each block is independent; a missing unit reports `bee_counter_N_ok=false` and
-the rest of its fields are null. For `N` in `1`, `2`:
+One HiveTraffic counter may be paired per hive; it is read over **BLE/GATT**
+(the only supported bee-counter transport — the wired I2C path was removed).
+Each block is independent; a paired-but-unreachable unit reports
+`bee_counter_N_ok=false` and the rest of its fields null; an unpaired hive
+sends no bee-counter fields at all. Current firmware reports **lifetime totals
+only** — the interval columns are backfilled server-side by differencing
+consecutive totals. For `N` in `1`, `2`:
 
 | Field | Type | Description |
 |---|---|---|
-| `bee_counter_N_ok` | boolean | Counter acked on this cycle |
-| `bee_counter_N_protocol_version` | integer | I2C protocol version reported by the slave |
+| `bee_counter_N_ok` | boolean | Counter reached and parsed this cycle |
+| `bee_counter_N_protocol_version` | integer | Counter firmware revision (BLE `fw` field) |
 | `bee_counter_N_status_flags` | integer | Status bitfield |
 | `bee_counter_N_uptime_s` | integer | Counter uptime in seconds |
 | `bee_counter_N_num_gates` / `_gates_healthy` | integer | Gate count and healthy-gate count |
-| `bee_counter_N_total_in` / `_total_out` | integer | Cumulative in/out counts |
-| `bee_counter_N_interval_in` / `_interval_out` | integer | In/out counts since the last read (consumed by Insights) |
-| `bee_counter_N_glitch_count` / `_busy_retries` / `_read_attempts` | integer | Diagnostics |
-| `bee_counter_N_latch_succeeded` | boolean | Counter latched cleanly after the read |
+| `bee_counter_N_total_in` / `_total_out` | integer | Cumulative (lifetime) in/out counts |
+| `bee_counter_N_glitch_count` | integer | Diagnostics |
 
-The per-gate 24-byte arrays are kept only in `raw_json` as
-`bee_counter_N_per_gate_in` / `bee_counter_N_per_gate_out`.
+Legacy inputs still accepted for historical rows / not-yet-reflashed devices on
+the removed wired firmware: `bee_counter_N_interval_in`/`_interval_out`
+(device-reported intervals), `_busy_retries`, `_read_attempts`,
+`_latch_succeeded`, and the per-gate 24-byte arrays kept only in `raw_json`
+(`bee_counter_N_per_gate_in` / `bee_counter_N_per_gate_out`). New firmware
+never sends them.
 
 #### Vibration fields (in-hive accelerometer)
 
 Per-hive vibration, populated from a paired in-hive **BLE sensor** (a HiveInside
 ESP32-C6 supplies the full FFT bands; a HolyIot 25015 / RuuviTag beacon supplies
-only broadband `accel_N_rms_mg` / `accel_N_peak_mg`). A legacy wired
-LIS3DH/LIS2DH12 driver can also fill these (see
-[accelerometer.md](accelerometer.md)). Each block is independent; a missing
+only broadband `accel_N_rms_mg` / `accel_N_peak_mg`) — see
+[accelerometer.md](accelerometer.md). (The old wired LIS3DH/LIS2DH12 driver has
+been removed; vibration is BLE-only.) Each block is independent; a missing
 source reports `accel_N_ok=false` and the rest of its fields are null. All
 band/RMS values are AC (gravity removed), in milli-g (mg). For `N` in `1`, `2`:
 
 | Field | Type | Description |
 |---|---|---|
-| `accel_N_ok` | boolean | Accelerometer present (WHO_AM_I matched) and read this cycle |
+| `accel_N_ok` | boolean | Vibration source present and read this cycle |
 | `accel_N_sample_rate_hz` | integer | Output data rate used for the capture |
 | `accel_N_sample_count` | integer | Samples fed into the FFT |
 | `accel_N_range_g` | integer | Full-scale range (±2/4/8/16 g) |
@@ -421,15 +427,15 @@ For the `hivescale` self-update this endpoint is also **accept-to-apply**: it
 returns `update: true` only once the owner has approved that exact version for the
 device (`POST /api/v1/app/devices/{device_id}/firmware/approve`). Until then it
 reports no update, so publishing firmware never auto-flashes a whole fleet. The
-sub-device targets (`beecounter` / `hiveinside`) are relayed explicitly via
-commands and are not gated here.
+sub-device target (`hiveinside`) is relayed explicitly via commands and is not
+gated here.
 
 **Auth:** `X-API-Key` (per-device key)
 
 | Query parameter | Default | Description |
 |---|---|---|
 | `version` | `0.0.0` | Current device firmware version |
-| `target` | `hivescale` | `hivescale` (the ESP32 itself) or `beecounter`. The `hivehub` alias is also accepted and treated as `hivescale`. |
+| `target` | `hivescale` | `hivescale` (the ESP32 itself) or `hiveinside`. The `hivehub` alias is also accepted and treated as `hivescale`. |
 
 No update:
 
@@ -474,7 +480,9 @@ Registers or updates a firmware release. The binary must already exist in `FIRMW
 }
 ```
 
-`target` defaults to `hivescale` and may also be `beecounter`. Response:
+`target` defaults to `hivescale` and may also be `hiveinside`. (`beecounter`
+is no longer a valid target: the wired I2C update relay was removed and
+BeeCounter OTA over BLE/GATT is not implemented yet.) Response:
 
 ```json
 { "status": "ok", "version": "0.9.3", "target": "hivescale", "crc32": 2882343476 }
@@ -483,24 +491,6 @@ Registers or updates a firmware release. The binary must already exist in `FIRMW
 ### `GET /firmware/{filename}`
 
 Downloads a firmware binary. This endpoint has no API-key requirement; the URL is normally obtained from the firmware check endpoint.
-
-### `POST /api/v1/devices/{device_id}/commands/update-beecounter`
-
-Queues an `update_beecounter` command that tells the HiveHub to relay the active
-BeeCounter firmware image to the BeeCounter at the given slot over I2C. The image
-URL, version, and CRC-32 are looked up server-side and embedded in the command payload.
-
-**Auth:** `X-API-Key` (master/admin key)
-
-| Query parameter | Default | Description |
-|---|---|---|
-| `slot` | `1` | BeeCounter slot: `1` → I2C `0x30`, `2` → I2C `0x31` |
-
-Returns `404` if there is no active `beecounter` release. Response on success:
-
-```json
-{ "id": 71, "status": "pending" }
-```
 
 ### `POST /api/v1/devices/{device_id}/commands/update-hiveinside`
 
@@ -556,7 +546,6 @@ Commands are queued server-side and claimed by the device on a later cycle.
 | `factory_reset` | `{}` | Factory reset stored preferences and reboot |
 | `reset_wifi` | `{}` | Clear saved Wi-Fi credentials and reboot |
 | `check_ota` / `ota_update` | `{}` | Trigger immediate OTA check/update |
-| `update_beecounter` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a BeeCounter over I2C (normally queued via the `update-beecounter` helper above) |
 | `update_hiveinside` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a HiveInside sensor over BLE GATT (normally queued via the `update-hiveinside` helper above) |
 | `start_provisioning` | `{}` | Start provisioning AP |
 
@@ -806,7 +795,7 @@ fleet. Pushing a global / official build is still done with the master-key
 |---|---:|---|
 | `file` | Yes | The firmware binary |
 | `version` | Yes | Release version string |
-| `target` | No | `hivescale` (default), `beecounter`, or `hiveinside`. **`hivehub` is accepted as an alias for `hivescale`** and is stored as `hivescale`, so HiveHub firmware needs no special handling. |
+| `target` | No | `hivescale` (default) or `hiveinside`. **`hivehub` is accepted as an alias for `hivescale`** and is stored as `hivescale`, so HiveHub firmware needs no special handling. (`beecounter` is no longer accepted: the wired I2C update relay was removed and BeeCounter OTA over BLE/GATT is not implemented yet.) |
 | `active` | No | Whether the release is active (default `true`) |
 
 ```json
@@ -824,10 +813,10 @@ fleet. Pushing a global / official build is still done with the master-key
 > **Uploading only registers the release; it does not start a relay or auto-flash.**
 > For a `hivescale` target the owner must still approve the update per device (see
 > `firmware/status` and `firmware/approve` below) before any scale installs it. For
-> a `hiveinside` (or `beecounter`) target, queue the OTA with the trigger endpoint
+> a `hiveinside` target, queue the OTA with the trigger endpoint
 > below after the upload. Releases are unique per `(owner, target, version)`, so the
 > same version number can coexist across owners and across
-> `hivescale`/`beecounter`/`hiveinside`.
+> `hivescale`/`hiveinside`.
 
 ### `GET /api/v1/app/devices/{device_id}/firmware/status`
 
@@ -879,19 +868,6 @@ Returns `404` if there is no active `hiveinside` release. Response on success:
 
 ```json
 { "status": "pending", "id": 72, "command_type": "update_hiveinside", "payload": { "slot": 1 } }
-```
-
-### `POST /api/v1/app/devices/{device_id}/commands/update-beecounter`
-
-App-facing trigger for a BeeCounter OTA relay (same upload-then-queue split as
-HiveInside). Requires `owner` or `admin`.
-
-| Query parameter | Default | Description |
-|---|---|---|
-| `slot` | `1` | BeeCounter slot (`1` or `2`) |
-
-```json
-{ "status": "pending", "id": 73, "command_type": "update_beecounter", "payload": { "slot": 1 } }
 ```
 
 ### `GET /api/v1/app/devices/{device_id}/insights`
@@ -992,12 +968,12 @@ The backend auto-creates and updates the schema on startup.
 | `device_members` | Users with `owner`, `admin`, or `viewer` role per device |
 | `device_channels` | Display names for scale channel 1 and 2 |
 | `device_configs` | Send interval, offsets, calibration factors, config version |
-| `measurements` | Measurement records, including power/acoustic/BeeCounter columns and `raw_json` |
+| `measurements` | Measurement records, including power/acoustic/bee-counter columns and `raw_json` |
 | `firmware_releases` | Firmware versions available for OTA, with `target`, `crc32`, and `owner_user_id` (NULL = global/official; otherwise the owner the release is private to) |
 | `device_commands` | Pending, claimed, done, and failed commands |
 | `insight_alerts` | Persisted lifecycle of insight alerts (first/last seen, peak severity, resolution) powering the history endpoint |
 
-The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), cellular status, calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive BeeCounter counts, load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, and the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields; `firmware_releases` gains `target`, `crc32`, and `owner_user_id`. The SQL files in `server/migrations/` (`001`–`011`, from `001_offgrid_telemetry.sql` through `011_firmware_owner_scoping.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
+The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), cellular status, calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, and the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields; `firmware_releases` gains `target`, `crc32`, and `owner_user_id`. The SQL files in `server/migrations/` (`001`–`011`, from `001_offgrid_telemetry.sql` through `011_firmware_owner_scoping.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
 
 ---
 

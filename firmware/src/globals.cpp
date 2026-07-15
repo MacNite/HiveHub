@@ -7,9 +7,6 @@ const char* const FIRMWARE_VERSION = "0.23.12";
 HX711 scale1;
 HX711 scale2;
 #endif
-#if ENABLE_NAU7802
-NAU7802 nau;
-#endif
 #if ENABLE_DS18B20_HIVE_TEMP
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature ds18b20(&oneWire);

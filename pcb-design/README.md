@@ -43,7 +43,7 @@ Scales are read over I2C via the **on-board NAU7802** 24-bit load-cell ADC (2 di
 | SHT40 Ambient | I2C `0x44` | Ambient temperature and humidity |
 | SD module | SPI | MicroSD for local cache and backup |
 | DS18B20 header | 1-Wire (D1) | In-hive temperature bus, 4.7 kΩ pull-up on board |
-| BeeCounter header | I2C `0x30`/`0x31` | Wired entrance bee counter |
+| BeeCounter header | — | Unused: wired I2C BeeCounters are no longer supported by the firmware. Entrance counting is now BLE/GATT-only (HiveTraffic); the header is a leftover on this board revision. |
 | MAX17048 | I2C | LiPo battery voltage / state-of-charge gauge |
 | TPS63020 buck-boost | — | Battery/solar input to regulated 3.3 V rail, with power selector |
 | Power Module header | — | Connection to the separate Power Module (optional) |
@@ -55,7 +55,7 @@ Scales are read over I2C via the **on-board NAU7802** 24-bit load-cell ADC (2 di
 | Signal | XIAO pin | GPIO | Notes |
 |---|---|---:|---|
 | DS18B20 1-Wire | D1 | 1 | In-hive temperature bus (4.7 kΩ pull-up on board) |
-| I2C SDA | D4 | 22 | NAU7802 scales, RTC, SHT40, BeeCounter, MAX17048, expansion |
+| I2C SDA | D4 | 22 | NAU7802 scales, RTC, SHT40, MAX17048, expansion (100 kHz) |
 | I2C SCL | D5 | 23 | Shared I2C bus clock |
 | SD CS | D3 | 21 | SD card chip select |
 | SD SCK / MISO / MOSI | D8 / D9 / D10 | 19 / 20 / 18 | MicroSD over SPI |
@@ -91,7 +91,7 @@ Handles off-grid power for a Scale Module: solar charging, battery, regulated ou
 
 > ❌ **No longer recommended.** This board and its firmware target (`pio run -e esp32dev`) keep working, but the design is obsolete and will be discontinued soon. Use the ESP32-C6 Scale Module for new builds. The reference below is retained for existing boards.
 
-Breakout board for a 30-pin ESP32 DevKit with the full wired sensor suite: 2× HX711 scale amplifiers, DS18B20 1-Wire bus, 2× INMP441 I2S microphones, SD, RTC, SHT40, and BeeCounter.
+Breakout board for a 30-pin ESP32 DevKit with the full wired sensor suite: 2× HX711 scale amplifiers, DS18B20 1-Wire bus, 2× INMP441 I2S microphones, SD, RTC, and SHT40. (The board also carries a legacy BeeCounter header, but wired I2C BeeCounters are no longer supported by the firmware — entrance counting is BLE/GATT-only now.)
 
 ### Modules on board
 
@@ -109,7 +109,7 @@ Breakout board for a 30-pin ESP32 DevKit with the full wired sensor suite: 2× H
 | J15 | SHT40 Ambient | I2C | External ambient temperature and humidity |
 | J6 | INMP441 Sound Sensor Hive 1 | I2S | MEMS microphone — left channel |
 | J16 | INMP441 Sound Sensor Hive 2 | I2S | MEMS microphone — right channel |
-| J20 | BeeCounter | Digital I/O | Bee traffic counter module |
+| J20 | BeeCounter (legacy) | — | Unused: wired I2C BeeCounters are no longer supported by the firmware (BLE/GATT-only now) |
 | SW1 | Pushbutton | Digital input | Short press: provisioning AP; long press: factory reset |
 | J10 | Power In | — | 5 V supply input |
 | J19 | Power Module Header | — | Connection to separate Power Module |
@@ -135,8 +135,6 @@ Breakout board for a 30-pin ESP32 DevKit with the full wired sensor suite: 2× H
 | INMP441 BCLK | 14 | Output | I2S bit clock shared by both microphones |
 | INMP441 WS (LRCLK) | 13 | Output | I2S word select shared by both microphones |
 | INMP441 SD (data) | 34 | Input | I2S data; GPIO34 is input-only on ESP32 |
-| BeeCounter signal A | 12 | Input | Beam sensor channel A |
-| BeeCounter signal B | 15 | Input | Beam sensor channel B (see schematic) |
 
 > GPIO34 is input-only and has no internal pull-up. The INMP441 SD line is an open-drain output; pull-up on board is not required but confirm with your module's datasheet.
 
@@ -158,21 +156,14 @@ INMP441 Hive 1 (J6):  VDD -> 3.3V  GND -> GND  BCLK -> GPIO14  WS -> GPIO13  SD 
 INMP441 Hive 2 (J16): VDD -> 3.3V  GND -> GND  BCLK -> GPIO14  WS -> GPIO13  SD -> GPIO34  L/R -> 3.3V
 ```
 
-### BeeCounter wiring (J20)
+### BeeCounter header (J20) — legacy, unused
 
-| J20 pin | Signal |
-|---|---|
-| 1 | GPIO13 |
-| 2 | GPIO14 |
-| 3 | GND |
-
-> Note: GPIO13 is shared with INMP441 WS. In firmware, the I2S peripheral takes ownership of GPIO13 during audio sampling.
-
-> **Firmware integration note:** the current HiveHub firmware
-> (`firmware/src/bee_counter_client.cpp`) communicates with the BeeCounter as an
-> **I2C slave** at addresses `0x30` (hive 1) / `0x31` (hive 2) on the shared bus
-> (SDA GPIO21 / SCL GPIO22) — including the OTA-over-I2C firmware relay. Route
-> the BeeCounter to SDA/SCL rather than the discrete GPIOs.
+> **Wired I2C BeeCounters are no longer supported.** Earlier firmware polled a
+> BeeCounter as an I2C slave (and relayed its firmware over I2C); that entire
+> path has been removed. Entrance counting is now **BLE/GATT-only** (the wireless
+> HiveTraffic counter — see [docs/hivetraffic-bee-counter.md](../docs/hivetraffic-bee-counter.md)).
+> The J20 header remains on this legacy board revision but the firmware does
+> nothing with it. Leave it unpopulated.
 
 ### Power and connectors
 
@@ -188,7 +179,12 @@ The board is powered via J10 (Power In, 5 V) or through J19 (Power Module Header
 | DS3231 RTC | `0x68` |
 | SHT40 | `0x44` |
 | MAX17048 | `0x36` |
-| BeeCounter 1 / 2 | `0x30` / `0x31` |
+
+The bus runs at an explicit **100 kHz** (`I2C_CLOCK_HZ`). The old wired
+BeeCounter addresses `0x30`/`0x31` are no longer used — BeeCounter/HiveTraffic
+is BLE/GATT-only. All NAU7802s share the fixed `0x2A`, so a main-bus NAU7802 and
+the mux cannot coexist: use one direct chip (2 channels) **or** the TCA9548A mux
+(up to 16), never both.
 
 ### I2C pull-ups — avoid bus brownouts
 

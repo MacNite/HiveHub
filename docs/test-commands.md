@@ -7,7 +7,7 @@ Replace placeholders before running:
 | Placeholder | Replace with |
 |---|---|
 | `HOST` | Server host or domain, for example `192.168.1.100` or `hivescale.example.com` |
-| `YOUR_API_KEY` | For device endpoints: that device's **per-device key** (registered on first contact). For the admin/tooling endpoints (`measurements/latest`, `firmware/releases`, queueing commands, `update-beecounter`, `time`): the server's master `API_KEY`. |
+| `YOUR_API_KEY` | For device endpoints: that device's **per-device key** (registered on first contact). For the admin/tooling endpoints (`measurements/latest`, `firmware/releases`, queueing commands, `time`): the server's master `API_KEY`. |
 | `YOUR_HIVEPAL_KEY` | HiveHub `HIVEPAL_SERVICE_API_KEY`, also configured in HivePal as `HIVESCALE_SERVICE_API_KEY` |
 | `DEVICE_ID` | Device ID, for example `hive_scale_dual_01` |
 | `JWT_TOKEN` | A HivePal user access token (JWT). HiveHub verifies it with `HIVEPAL_JWT_SECRET` and reads the user from the `sub` claim. Get one from HivePal's login/register response. |
@@ -209,7 +209,9 @@ curl -X POST http://HOST:31115/api/v1/devices/DEVICE_ID/commands/55/result \
 ## OTA firmware
 
 Register a release. The binary must already exist in `FIRMWARE_DIR`. `target`
-defaults to `hivescale` and may also be `beecounter`.
+defaults to `hivescale` and may also be `hiveinside`. (`beecounter` is no longer
+a valid target — the wired I2C update relay was removed and BeeCounter OTA over
+BLE/GATT is not implemented yet.)
 
 ```bash
 curl -X POST http://HOST:31115/api/v1/firmware/releases \
@@ -222,14 +224,6 @@ Check for an update (per target):
 
 ```bash
 curl "http://HOST:31115/api/v1/devices/DEVICE_ID/firmware?version=0.9.2&target=hivescale" \
-  -H "X-API-Key: YOUR_API_KEY"
-```
-
-Queue a BeeCounter OTA relay (slot 1 → I2C `0x30`, slot 2 → `0x31`). Requires an
-active `beecounter` release:
-
-```bash
-curl -X POST "http://HOST:31115/api/v1/devices/DEVICE_ID/commands/update-beecounter?slot=1" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 

@@ -191,8 +191,10 @@ curl -X POST http://localhost:31115/api/v1/firmware/releases \
   -d '{"version": "0.5.0", "filename": "hivescale-0.5.0.bin", "active": true, "target": "hivescale"}'
 ```
 
-`target` defaults to `hivescale`; use `beecounter` to publish an image that the
-HiveHub relays to a BeeCounter over I2C. App clients (HivePal) can also upload
+`target` defaults to `hivescale`; `hiveinside` publishes an image the HiveHub
+relays to a paired HiveInside sensor over BLE GATT. (There is no `beecounter`
+target — the wired I2C BeeCounter update path was removed and BeeCounter OTA
+over BLE/GATT is not implemented yet.) App clients (HivePal) can also upload
 the binary directly via `POST /api/v1/app/devices/{id}/firmware` instead of
 copying it into `FIRMWARE_DIR` first — see [api.md](api.md).
 

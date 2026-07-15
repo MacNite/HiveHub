@@ -257,14 +257,16 @@ class FirmwareReleaseIn(BaseModel):
     version: str
     filename: str
     active: bool = True
-    target: Literal["hivescale", "beecounter"] = "hivescale"
+    # "beecounter" removed: the wired I2C update relay no longer exists and
+    # BeeCounter OTA over BLE/GATT is not implemented yet.
+    target: Literal["hivescale", "hiveinside"] = "hivescale"
 
 
 class DeviceCommandIn(BaseModel):
     command_type: Literal[
         "tare_scale_1", "tare_scale_2", "calibrate_scale_1", "calibrate_scale_2",
         "reboot", "reset_preferences", "factory_reset", "reset_wifi", "check_ota",
-        "ota_update", "update_beecounter", "start_provisioning",
+        "ota_update", "update_hiveinside", "start_provisioning",
         "start_calibration_mode", "stop_calibration_mode",
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -446,15 +448,8 @@ def queue_command(device_id: str, payload: DeviceCommandIn):
     return {"status": cmd["status"], "id": cmd["id"]}
 
 
-@app.post("/api/v1/devices/{device_id}/commands/update-beecounter", dependencies=[Depends(require_api_key)])
-def queue_beecounter_update(device_id: str, slot: int = Query(1)):
-    r = _latest_release_for_owner("beecounter", _device_owner_id(device_id))
-    if not r:
-        raise HTTPException(status_code=404, detail="No active beecounter firmware release")
-    cmd = _create_command(device_id, "update_beecounter",
-                          {"slot": slot, "url": f"/firmware/{r['filename']}",
-                           "version": r["version"], "crc32": int(r["crc32"] or 0)})
-    return {"id": cmd["id"], "status": cmd["status"]}
+# (update-beecounter removed: BeeCounter transport is BLE/GATT-only and no
+# GATT OTA exists yet, so there is no BeeCounter firmware-update path to mock.)
 
 
 @app.post("/api/v1/devices/{device_id}/commands/update-hiveinside", dependencies=[Depends(require_api_key)])
@@ -664,8 +659,8 @@ async def upload_firmware_from_app(
     user_id: str = Depends(require_user_id),
 ):
     require_device_role(user_id, device_id, ["owner", "admin"])
-    if target not in ("hivescale", "beecounter"):
-        raise HTTPException(status_code=400, detail="target must be one of hivescale, beecounter")
+    if target not in ("hivescale", "hiveinside"):
+        raise HTTPException(status_code=400, detail="target must be one of hivescale, hiveinside")
     size = 0
     while True:
         chunk = await file.read(1024 * 1024)
@@ -766,13 +761,7 @@ def queue_hiveinside_update_from_app(device_id: str, slot: int = Query(1),
     require_device_role(user_id, device_id, ["owner", "admin"])
     return _queue_relay_update_from_app(device_id, "hiveinside", "update_hiveinside", slot)
 
-
-@app.post("/api/v1/app/devices/{device_id}/commands/update-beecounter",
-          dependencies=[Depends(require_hivepal_service_key)])
-def queue_beecounter_update_from_app(device_id: str, slot: int = Query(1),
-                                     user_id: str = Depends(require_user_id)):
-    require_device_role(user_id, device_id, ["owner", "admin"])
-    return _queue_relay_update_from_app(device_id, "beecounter", "update_beecounter", slot)
+# (app-facing update-beecounter removed together with the wired I2C path.)
 
 
 @app.get("/api/v1/app/devices/{device_id}/insights", dependencies=[Depends(require_hivepal_service_key)])

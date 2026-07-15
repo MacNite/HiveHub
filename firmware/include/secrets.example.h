@@ -151,9 +151,9 @@
 //       — "hivescale" is a WIRELESS SCALE SOURCE (used instead of "s", not
 //       alongside a wired one or "ds"); every other type is the hive's one
 //       non-scale in-hive sensor and is mutually exclusive with "ds".
-//       "beecounter" (wireless HiveTraffic) is read from the registry over BLE,
-//       so it works on ANY hive up to MAX_HIVES (the wired I2C BeeCounter is the
-//       one that stays limited to hives 1-2 by its two fixed I2C addresses).
+//       "beecounter" (HiveTraffic) is read from the registry over BLE/GATT and
+//       works on ANY hive up to MAX_HIVES. BLE/GATT is the ONLY BeeCounter
+//       transport — wired I2C BeeCounters are no longer supported.
 //
 // Example: 3 hives — hive 1 on HX711 #1 with a HiveHeart GATT sensor, hive 2
 // on HX711 #2 with a DS18B20 probe, hive 3 on a wireless HiveScale:
@@ -187,11 +187,12 @@
 // Wireless scale category (placeholder — not consumed yet).
 #define ENABLE_WIRELESS_SCALE        0
 
-// HiveTraffic wireless entrance bee counter (GATT). Set to 1 and pair each
-// counter's MAC in the provisioning portal (to any hive up to MAX_HIVES), or
-// seed the legacy WBEECNT_n_MAC below for hives 1-2. A hive with a paired MAC is
-// read over BLE; hive 1 or 2 without one falls back to the wired I2C BeeCounter.
-// The firmware uses the shared BEECOUNTER_GATT_* UUIDs.
+// HiveTraffic wireless entrance bee counter (BLE/GATT — the ONLY supported
+// BeeCounter transport; wired I2C BeeCounters are no longer supported). Set to
+// 1 and pair each counter's MAC in the provisioning portal (to any hive up to
+// MAX_HIVES), or seed the legacy WBEECNT_n_MAC below for hives 1-2. A hive
+// without a paired MAC reports no bee-counter data. The firmware uses the
+// shared BEECOUNTER_GATT_* UUIDs.
 #define ENABLE_WIRELESS_BEECOUNTER   0
 //#define WBEECNT_1_MAC                "AA:BB:CC:DD:EE:FF"   // HiveTraffic counter 1
 //#define WBEECNT_2_MAC                "AA:BB:CC:DD:EE:00"   // HiveTraffic counter 2

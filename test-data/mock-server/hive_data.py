@@ -31,7 +31,7 @@ documented for real "scale hives":
   (SIM7080G) link quality.
 * Acoustic telemetry - INMP441 broadband RMS and the 5 FFT bands used by
   ``insights.py`` (hum / piping / stress / ...), louder during active foraging.
-* BeeCounter entrance traffic - per-gate in/out counts with morning departures
+* BeeCounter (HiveTraffic, BLE/GATT) entrance traffic - in/out counts with morning departures
   and afternoon arrivals.
 
 A few "events" are scripted so the insights endpoints return something

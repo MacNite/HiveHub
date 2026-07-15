@@ -131,8 +131,8 @@
           </p>
 
           <div id="c6-wired-notice" class="note warn" style="display:none; margin-bottom:.8rem">
-            ⚠ <strong>XIAO ESP32-C6 selected</strong> — wired INMP441 mics and the legacy LIS3DH
-            accelerometer are <strong>not supported</strong> on this board (no spare pins/HX711).
+            ⚠ <strong>XIAO ESP32-C6 selected</strong> — wired INMP441 mics are
+            <strong>not supported</strong> on this board (no spare pins/HX711).
             A single wired DS18B20 probe still works (see Hives below); use wireless BLE
             in-hive sensors for anything else.
           </div>
@@ -158,32 +158,7 @@
             </div>
           </div>
 
-          <!-- Accelerometer -->
-          <div class="sensor" data-sensor="accel">
-            <span class="tag">Wired · I2C</span>
-            <label class="toggle">
-              <input type="checkbox" data-toggle />
-              <span><span class="t-title">📳 LIS3DH / LIS2DH12 accelerometers</span>
-              <span class="t-desc">Per-hive comb vibration incl. the ~20 Hz pre-swarm band.</span></span>
-            </label>
-            <div class="opts">
-              <div class="field row">
-                <div><label>Slot 1 address (hive 1)</label>
-                  <select data-opt="addr1"><option value="0x18" selected>0x18 (SDO/SA0 → GND)</option><option value="0x19">0x19 (SDO/SA0 → VCC)</option></select></div>
-                <div><label>Slot 2 address (hive 2)</label>
-                  <select data-opt="addr2"><option value="0x18">0x18 (SDO/SA0 → GND)</option><option value="0x19" selected>0x19 (SDO/SA0 → VCC)</option></select></div>
-              </div>
-              <div class="field row">
-                <div><label>Full-scale range (g)</label>
-                  <select data-opt="range"><option>2</option><option>4</option><option>8</option><option>16</option></select></div>
-                <div><label>Output data rate (Hz)</label>
-                  <select data-opt="odr"><option>100</option><option selected>400</option></select></div>
-                <div><label>Samples / cycle</label><input type="number" data-opt="count" value="256" /></div>
-              </div>
-              <div class="note info">Sets <code>ENABLE_LIS3DH_ACCEL</code> plus the per-device
-                address / range / ODR / sample-count macros the firmware expects.</div>
-            </div>
-          </div>
+          <!-- In-hive vibration is BLE-only; the wired LIS3DH/LIS2DH12 driver was removed. -->
 
           <!-- MAX17048 battery -->
           <div class="sensor" data-sensor="max17048">
@@ -223,8 +198,8 @@
               cycle, so any number of them costs the same scan. GATT sensors (HiveInside GATT,
               HiveHeart, wireless HiveScale, HiveTraffic) connect serially and are capped at
               <code>MAX_GATT_READS_PER_CYCLE</code> per wake — see <code>docs/multi-hive.md</code>.
-              <strong>HiveTraffic wireless bee counters can be paired to any hive.</strong>
-              Only the wired I2C BeeCounter stays limited to hives 1 and 2 (two fixed I2C addresses).</div>
+              <strong>HiveTraffic bee counters (BLE/GATT only) can be paired to any hive.</strong>
+              Wired I2C BeeCounters are no longer supported.</div>
             <div class="field row">
               <div><label>Scan seconds / cycle</label><input type="number" id="ble_scan" value="6" min="1" /></div>
               <div><label>HolyIot Company ID (16-bit)</label><input type="text" id="ble_company" value="0xFFFF" /></div>
@@ -247,11 +222,6 @@
               <input type="checkbox" id="ovr_mics" checked />
               <span><span class="t-title" style="font-size:.92rem">Override wired INMP441 microphones</span>
               <span class="t-desc">Acoustics come from a HiveInside / HiveHeart sensor; the wired stereo mics are skipped.</span></span>
-            </label>
-            <label class="toggle" style="margin:.3rem 0">
-              <input type="checkbox" id="ovr_accel" checked />
-              <span><span class="t-title" style="font-size:.92rem">Override wired accelerometer</span>
-              <span class="t-desc">Vibration comes from the BLE sensor; the wired LIS3DH is skipped.</span></span>
             </label>
             <div class="note info">The ambient SHT40 is never overridden — it measures outside-hive
               climate, a different quantity stored separately, so it does not collide.</div>

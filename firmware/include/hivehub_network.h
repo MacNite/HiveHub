@@ -49,7 +49,9 @@ void reportScaleCalibration();
 // be 0 when the backend predates them; the corresponding check is then skipped.
 bool performFirmwareUpdate(const String& firmwareUrl, int expectedSize = 0,
                            uint32_t expectedCrc32 = 0);
-bool updateBeeCounter(uint8_t address, const String& firmwareUrl, uint32_t expectedCrc32 = 0);
+// (The old BeeCounter OTA-over-the-wire relay was removed with the wired
+// BeeCounter path; a future BeeCounter OTA will use BLE/GATT and is not
+// implemented yet.)
 // Stream a HiveInside firmware image from `firmwareUrl` to the paired HiveInside
 // sensor at `mac` over BLE GATT. The image is never fully buffered; bytes are
 // relayed straight from the HTTPS download into the device's OTA service, which

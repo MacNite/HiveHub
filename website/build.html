@@ -312,7 +312,7 @@
         <h4>Signals (XIAO ESP32-C6)</h4>
         <table>
           <tr><th>Signal</th><th>XIAO pin</th><th>GPIO</th><th>Connects to</th></tr>
-          <tr><td>I2C SDA</td><td>D4</td><td>22</td><td>NAU7802 (0x2A) <em>or</em> TCA9548A (0x70), DS3231 RTC (0x68), SHT40 (0x44), MAX17048 (0x36), BeeCounter (0x30/0x31)</td></tr>
+          <tr><td>I2C SDA</td><td>D4</td><td>22</td><td>NAU7802 (0x2A) <em>or</em> TCA9548A (0x70), DS3231 RTC (0x68), SHT40 (0x44), MAX17048 (0x36) — shared bus at an explicit 100 kHz</td></tr>
           <tr><td>I2C SCL</td><td>D5</td><td>23</td><td>Same devices — shared bus clock</td></tr>
           <tr><td>DS18B20 1-Wire</td><td>D1</td><td>1</td><td>All in-hive temperature probes in parallel; one 4.7 kΩ pull-up to 3.3 V for the whole bus</td></tr>
           <tr><td>SD CS</td><td>D3</td><td>21</td><td>SD module chip select</td></tr>

@@ -79,16 +79,13 @@ layout:
 |---|---|
 | Hives *(up to 16)* | `HIVE_COUNT` + one `HIVE_<n>_JSON` blob per hive (scale channel, DS18B20 ROM or BLE/GATT sensor) |
 | INMP441 microphones | `ENABLE_INMP441_MICS`, pins, sample rate/frames |
-| LIS3DH / LIS2DH12 accelerometers | `ENABLE_LIS3DH_ACCEL`, addresses, range, ODR, sample count |
 | In-hive BLE bridge + GATT | `ENABLE_BLE_SCAN`, scan seconds, active scan, company id, `HIVEINSIDE_USE_GATT`, `ENABLE_BEEHIVE_GATT`, `ENABLE_WIRELESS_BEECOUNTER`, `BLE_OVERRIDE_*` — all derived from what the hives above use |
 | MAX17048 LiPo fuel gauge | `ENABLE_MAX17048_BATTERY`, alert percent |
 
-> The INMP441 mics default to **off** (toggle on if fitted). The wired
-> LIS3DH/LIS2DH12 accelerometer is a legacy option genuinely capped at 2 hives
-> by its I2C address space (SDO/SA0 only selects between `0x18`/`0x19`) —
-> current builds get in-hive vibration from a BLE sensor instead (HiveInside
-> FFT bands; HolyIot/RuuviTag low-rate); see
-> [`docs/accelerometer.md`](../docs/accelerometer.md).
+> The INMP441 mics default to **off** (toggle on if fitted). In-hive vibration
+> is BLE-only — the wired LIS3DH/LIS2DH12 accelerometer driver has been removed;
+> get vibration from a BLE sensor instead (HiveInside FFT bands; HolyIot/RuuviTag
+> low-rate); see [`docs/accelerometer.md`](../docs/accelerometer.md).
 
 ### Hives & sensors
 
@@ -109,13 +106,13 @@ historical starting point). Each hive card has:
 | RuuviTag 4-in-1 | BLE beacon | ✅ supported, any hive |
 | HiveInside ESP32-C6 | GATT | ✅ supported, any hive |
 | HiveHeart *(beehivemonitoring.com)* | GATT | ✅ supported, any hive |
-| HiveTraffic *(entrance bee counter)* | GATT | ✅ supported, any hive (the wired I2C BeeCounter is the one limited to hives 1-2) |
+| HiveTraffic *(entrance bee counter)* | BLE/GATT | ✅ supported, any hive (wired I2C BeeCounters are no longer supported) |
 
 A hive can combine a wireless HiveScale (as its scale source) with a separate
 in-hive sensor — the tool emits both into that hive's `bl` array, matching
 `MAX_BLE_PER_HIVE`. The **collision-avoidance** overrides (`BLE_OVERRIDE_DS18B20`
-/ `_MICS` / `_ACCEL`) and the shared BLE scan settings appear once any hive
-uses a beacon/GATT sensor.
+/ `_MICS`) and the shared BLE scan settings appear once any hive uses a
+beacon/GATT sensor.
 
 Each `HIVE_<n>_JSON` is the exact blob shape the portal itself saves to NVS
 (`hiveToJson()`/`hiveFromJson()` in `firmware/src/hive_config.cpp`), so a

@@ -28,8 +28,8 @@ pio run -e xiao_esp32c6
 | Signal | XIAO pin | GPIO | Notes |
 |---|---|---|---|
 | DS18B20 1-Wire | D1 | 1 | In-hive temperature bus, 4.7 kΩ pull-up to 3.3 V |
-| I2C SDA | D4 | 22 | NAU7802 scales, RTC, SHT4x, BeeCounter, optional MAX17048 |
-| I2C SCL | D5 | 23 | NAU7802 scales, RTC, SHT4x, BeeCounter, optional MAX17048 |
+| I2C SDA | D4 | 22 | NAU7802 scales, RTC, SHT4x, optional MAX17048 |
+| I2C SCL | D5 | 23 | NAU7802 scales, RTC, SHT4x, optional MAX17048 |
 | SD CS | D3 | 21 | SD card chip select |
 | SD SCK | D8 | 19 | SPI clock (XIAO default SCK) |
 | SD MISO | D9 | 20 | SPI MISO (XIAO default MISO) |
@@ -76,6 +76,7 @@ The firmware logs the active antenna selection on every boot:
 | SHT4x ambient temp/humidity | ✅ |
 | DS18B20 wired in-hive probes | ✅ (1-Wire bus on D1) |
 | BLE wireless in-hive sensors (HolyIot, RuuviTag, HiveInside) | ✅ |
+| HiveTraffic BeeCounter (BLE/GATT — the only supported bee-counter transport) | ✅ |
 | OTA firmware update over WiFi | ✅ |
 | WiFi provisioning portal | ✅ |
 | Optional MAX17048 fuel gauge | ✅ (I2C) |
@@ -96,8 +97,8 @@ The firmware pin definitions live in `firmware/include/config.h` (with optional 
 | HX711 #2 DOUT | 32 | Input | Scale 2 data |
 | HX711 #2 SCK | 33 | Output | Scale 2 clock; used to power down HX711 during deep sleep |
 | DS18B20 data | 4 | Bidirectional | Shared 1-Wire bus for both hive probes |
-| I2C SDA | 21 | Bidirectional | RTC, SHT4x, BeeCounter, optional MAX17048 |
-| I2C SCL | 22 | Output | RTC, SHT4x, BeeCounter, optional MAX17048 |
+| I2C SDA | 21 | Bidirectional | RTC, SHT4x, NAU7802/TCA9548A, optional MAX17048 |
+| I2C SCL | 22 | Output | RTC, SHT4x, NAU7802/TCA9548A, optional MAX17048 |
 | SD CS | 5 | Output | SD card chip select |
 | SD SCK | 18 | Output | SPI clock |
 | SD MISO | 23 | Input | SD card SPI MISO |
@@ -106,9 +107,10 @@ The firmware pin definitions live in `firmware/include/config.h` (with optional 
 | INMP441 BCLK | 14 | Output | I2S bit clock, shared by both mics (`ENABLE_INMP441_MICS`) |
 | INMP441 WS | 13 | Output | I2S word select (LRCLK), shared by both mics |
 | INMP441 SD | 34 | Input | I2S data from both mics; GPIO34 is input-only |
-| LIS3DH/LIS2DH12 ×2 | — | I2C | Accelerometers on the shared I2C bus at `0x18` / `0x19` (`ENABLE_LIS3DH_ACCEL`) |
 
-> Important pin notes: the firmware uses **GPIO23 as SD MISO** and **GPIO19 as SD MOSI** (many generic ESP32 examples use the opposite mapping). The two INMP441 microphones share one I2S bus; channel (left/right) is set in hardware by tying each mic's L/R pin to GND or 3.3 V. BeeCounters and the optional LIS3DH/LIS2DH12 accelerometers are not on dedicated GPIOs — they are polled over the shared I2C bus (BeeCounters at `0x30` / `0x31`, accelerometers at `0x18` / `0x19`).
+> Important pin notes: the firmware uses **GPIO23 as SD MISO** and **GPIO19 as SD MOSI** (many generic ESP32 examples use the opposite mapping). The two INMP441 microphones share one I2S bus; channel (left/right) is set in hardware by tying each mic's L/R pin to GND or 3.3 V.
+>
+> **No wired bee counters, no wired accelerometers.** BeeCounter entrance counting is **BLE/GATT-only** (the HiveTraffic counter — see [hivetraffic-bee-counter.md](hivetraffic-bee-counter.md)); the old wired I2C BeeCounter (`0x30`/`0x31`) is no longer supported. In-hive vibration comes from a paired BLE sensor; the old wired LIS3DH/LIS2DH12 driver has been removed.
 
 ---
 
@@ -124,8 +126,6 @@ The firmware pin definitions live in `firmware/include/config.h` (with optional 
 | MicroSD card module | SPI | CS 5, SCK 18, MISO 23, MOSI 19 |
 | Setup button | Digital input | GPIO27 to GND |
 | INMP441 mics x2 | I2S | BCLK 14, WS 13, SD 34 (shared bus) |
-| BeeCounter x2 | I2C | GPIO21 SDA, GPIO22 SCL (`0x30` / `0x31`) |
-| LIS3DH / LIS2DH12 x2 | I2C | GPIO21 SDA, GPIO22 SCL (`0x18` / `0x19`) |
 | MAX17048 | I2C | GPIO21 SDA, GPIO22 SCL |
 
 ---
@@ -279,71 +279,13 @@ energy (sub-bass, hum, piping, stress, high) per channel.
 
 ---
 
-## LIS3DH / LIS2DH12 accelerometers (per-hive vibration)
+## In-hive vibration — BLE sensors only
 
-> **Legacy / optional.** The wired accelerometer is no longer wired into the stock
-> firmware's measurement cycle — in-hive vibration now comes from a BLE sensor
-> (see [accelerometer.md](accelerometer.md)). The driver is retained behind
-> `ENABLE_LIS3DH_ACCEL` for custom builds; this wiring is kept for that case.
-
-One low-g MEMS accelerometer per hive captures low-frequency comb/wall
-vibration — most importantly the **~20 Hz pre-swarm signal** that hive
-microphones cannot reach. Enable with `ENABLE_LIS3DH_ACCEL`. The **LIS3DH**
-(purple GY-LIS3DH breakout, used for prototyping) and the **LIS2DH12TR** (final
-BOM) share the same WHO_AM_I (`0x33`), register map and I2C addresses, so the
-same firmware drives both. See [accelerometer.md](accelerometer.md) for the
-rationale, bands and config.
-
-### Which LIS3DH pins to connect (I2C mode)
-
-| LIS3DH pin | Connect to | Required? | Notes |
-|---|---|---|---|
-| VCC | 3.3 V | Yes | Board regulator accepts 3.3 V |
-| GND | GND | Yes | Common ground |
-| SCL | GPIO22 | Yes | Shared I2C clock |
-| SDA | GPIO21 | Yes | Shared I2C data |
-| CS | 3.3 V | **Yes** | Selects I2C. CS **low at power-up = SPI**, so tie it high |
-| SDO/SA0 | GND **or** 3.3 V | **Yes** | Sets the I2C address LSB: GND → `0x18` (hive 1), 3.3 V → `0x19` (hive 2) |
-| INT1 | — | No | Data-ready / motion interrupt; unused (firmware polls) |
-| INT2 | — | No | Second interrupt; unused |
-| ADC1 / ADC2 / ADC3 | — | No | LIS3DH auxiliary ADC inputs; unused |
-
-So the minimal per-board connection is **VCC, GND, SCL, SDA, CS→3.3 V, and
-SDO→GND or 3.3 V** for the address. To run both hives, wire two boards in
-parallel on SDA/SCL/VCC/GND and set one SDO low (`0x18`) and the other high
-(`0x19`):
-
-```text
-Accelerometer 1 (hive 1): VCC->3.3V GND->GND SCL->GPIO22 SDA->GPIO21 CS->3.3V SDO->GND   (0x18)
-Accelerometer 2 (hive 2): VCC->3.3V GND->GND SCL->GPIO22 SDA->GPIO21 CS->3.3V SDO->3.3V  (0x19)
-```
-
-Enable and tune in `secrets.h`:
-
-```cpp
-#define ENABLE_LIS3DH_ACCEL 1
-#define LIS3DH_ADDR_SLOT_1  0x18   // hive 1
-#define LIS3DH_ADDR_SLOT_2  0x19   // hive 2
-#define LIS3DH_ODR_HZ       400    // 10/25/50/100/200/400
-#define LIS3DH_SAMPLE_COUNT 256    // power of two; 256 @ 400 Hz ≈ 0.64 s
-#define LIS3DH_RANGE_G      2      // 2/4/8/16 g
-```
-
-Per cycle the firmware reports, per hive, the broadband AC RMS and the energy in
-three vibration bands — swarm (8–30 Hz), fanning (30–100 Hz) and activity
-(100–200 Hz) — under the `accel_1_*` / `accel_2_*` keys.
-
-> Mounting matters: bolt or firmly couple the sensor to the hive body or a brood
-> frame so substrate-borne vibration transfers into it. A board dangling on
-> flying leads mostly measures cable sway. The literature places transducers on
-> the inner hive wall or perpendicular to the comb in a brood frame.
-
-### LIS2DH12TR (final build)
-
-The LIS2DH12 is ST's pin-compatible successor and is register- and
-address-compatible for everything this firmware uses, so no code changes are
-needed — wire it exactly as above (VCC, GND, SCL, SDA, CS→3.3 V, SDO for the
-address). It is the recommended part for the final, easily sourced BOM.
+The wired LIS3DH/LIS2DH12 accelerometer driver has been **removed** from the
+firmware. Per-hive vibration (including the ~20 Hz pre-swarm band) comes from a
+paired in-hive BLE sensor instead — a HiveInside node gives full FFT bands, a
+HolyIot 25015 or RuuviTag beacon gives a low-rate magnitude. See
+[accelerometer.md](accelerometer.md).
 
 ---
 
@@ -382,15 +324,22 @@ The firmware reports battery voltage, state-of-charge, monitor status, and low-b
 
 ## I2C bus summary
 
+The shared bus runs at an **explicit 100 kHz** (`I2C_CLOCK_HZ` in
+`firmware/include/config.h`) — the firmware sets and verifies the clock at
+every boot and nothing changes it at runtime. Initialization and stuck-bus
+recovery are checked and logged (`firmware/src/i2c_bus.cpp`).
+
 | Device | Address |
 |---|---|
-| NAU7802 | `0x2A` (fixed) |
+| NAU7802 | `0x2A` (fixed — not configurable, no address-select pin) |
 | TCA9548A mux | `0x70` |
 | DS3231 RTC | `0x68` |
 | SHT4x | `0x44` |
 | MAX17048 | `0x36` |
-| BeeCounter 1 / 2 | `0x30` / `0x31` |
-| LIS3DH / LIS2DH12 1 / 2 | `0x18` / `0x19` (set by SDO/SA0) |
+
+(Wired BeeCounters at `0x30`/`0x31` and wired LIS3DH/LIS2DH12 accelerometers at
+`0x18`/`0x19` are **no longer supported** — bee counting is BLE/GATT-only and
+vibration comes from BLE in-hive sensors.)
 
 ### I2C pull-ups — avoid bus brownouts
 
@@ -436,7 +385,17 @@ note explaining why a main-bus NAU7802 and the mux cannot be combined.
 ### NAU7802 (one chip = two load cells)
 
 The NAU7802 sits on the shared I2C bus at the fixed address `0x2A` and has two
-differential inputs (CH1/CH2):
+differential inputs (CH1/CH2). Supported topologies: **either** one direct
+NAU7802 on the main bus (2 channels) **or** up to eight NAU7802s behind one
+TCA9548A (16 channels) — never both at once.
+
+> **CH2 hardware note.** The NAU7802 has an on-die 330 pF "PGA capacitor" that
+> can be switched across the **channel-2 inputs** (PGA_PWR bit 7). It improves
+> CH1-only designs but corrupts CH2 readings when a second load cell is wired
+> there. The firmware sets this automatically from the hive registry: the cap is
+> enabled only while CH2 is unused and disabled as soon as any hive maps a scale
+> to CH2. Do **not** add an external filter capacitor directly across Vin2P/Vin2N
+> either if CH2 carries a load cell.
 
 | NAU7802 pin | Connect to |
 | --- | --- |

@@ -5,6 +5,8 @@
 #include "hive_config.h"
 #include "globals.h"
 #include "config.h"
+#include "scale_topology.h"
+#include "scale_math.h"
 
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -61,7 +63,8 @@ String hiveToJson(const Hive& h) {
       o["b"]    = "nau";
       o["mux"]  = c.muxChannel;
       o["adc"]  = c.adcChannel;
-      o["addr"] = c.i2cAddr;
+      // No "addr": the NAU7802 address is fixed at 0x2A and not configurable.
+      // Legacy blobs carrying an addr are normalized on parse (hiveFromJson).
     } else {
       o["b"]  = "hx";
       o["hx"] = c.hxIndex;
@@ -98,10 +101,22 @@ bool hiveFromJson(const String& json, Hive& out) {
     ScaleChannel& c = out.scales[out.scaleCount];
     String b = o["b"] | "hx";
     if (b == "nau") {
-      c.backend    = ScaleBackend::NAU7802;
-      c.muxChannel = (int8_t)(o["mux"] | -1);
-      c.adcChannel = (uint8_t)(o["adc"] | 1);
-      c.i2cAddr    = (uint8_t)(o["addr"] | NAU7802_I2C_ADDRESS);
+      c.backend = ScaleBackend::NAU7802;
+      // Preserve out-of-range values in a detectable form instead of masking
+      // them (& 0x07 could silently map two hives to one physical channel):
+      // anything below -1 becomes -2, anything above 7 becomes 8; both fail
+      // validateRegistry() and the channel is never operated.
+      int mux = o["mux"] | -1;
+      c.muxChannel = (int8_t)(mux < -1 ? -2 : (mux > 7 ? 8 : mux));
+      int adc = o["adc"] | 1;
+      c.adcChannel = (uint8_t)((adc == 1 || adc == 2) ? adc : 0);  // 0 = invalid
+      // Legacy blobs carried a configurable "addr"; the NAU7802 address is
+      // fixed at 0x2A. Normalize and log — any other value was never reachable.
+      int addr = o["addr"] | (int)NAU7802_I2C_ADDRESS;
+      if (addr != (int)NAU7802_I2C_ADDRESS) {
+        Serial.printf("[HIVECFG] hive %u: legacy scale addr 0x%02X normalized to fixed 0x%02X\n",
+                      out.index, (unsigned)addr, NAU7802_I2C_ADDRESS);
+      }
     }
 #if ENABLE_HX711
     else {
@@ -115,7 +130,6 @@ bool hiveFromJson(const String& json, Hive& out) {
       c.backend    = ScaleBackend::NAU7802;
       c.muxChannel = -1;
       c.adcChannel = 1;
-      c.i2cAddr    = NAU7802_I2C_ADDRESS;
     }
 #endif
     c.offset = (long)(o["off"] | 0);
@@ -186,7 +200,6 @@ static void migrateLegacy(Preferences& p) {
     h.scales[0].backend    = ScaleBackend::NAU7802;
     h.scales[0].muxChannel = -1;
     h.scales[0].adcChannel = i + 1;
-    h.scales[0].i2cAddr    = NAU7802_I2C_ADDRESS;
 #endif
     h.scales[0].offset  = p.getLong(i == 0 ? "s1_offset" : "s2_offset", 0);
     h.scales[0].factor  = p.getFloat(i == 0 ? "s1_factor" : "s2_factor", -7050.0f);
@@ -312,6 +325,103 @@ static void seedHivesFromSecrets() {
                 gHiveCount, (int)(HIVE_COUNT));
 }
 
+// ── Authoritative registry validation ────────────────────────────────────────
+// Runs after every load AND after every portal save. The portal page's dropdown
+// logic is convenience only; this is what actually prevents an invalid or
+// crafted topology from operating hardware. Pure rules live in
+// scale_topology.h (host-tested); this wrapper maps them onto gHives, drops
+// hives with bad/duplicate indices, flags bad channels with configError (the
+// stored blob is preserved so the owner can fix it in the portal) and logs
+// every problem precisely.
+bool validateRegistry() {
+  bool clean = true;
+
+  // 1) Hive indices: in range, unique. Offenders are dropped from the live
+  //    registry — operating a hive under a colliding index could attribute its
+  //    readings to another hive.
+  uint8_t idx[MAX_HIVES];
+  uint8_t bad[MAX_HIVES];
+  for (uint8_t i = 0; i < gHiveCount; i++) idx[i] = gHives[i].index;
+  if (!scaletopo::validateHiveIndices(idx, gHiveCount, MAX_HIVES, bad)) {
+    clean = false;
+    uint8_t kept = 0;
+    for (uint8_t i = 0; i < gHiveCount; i++) {
+      if (bad[i]) {
+        Serial.printf("[HIVECFG] REJECTED hive slot %u: index %u is %s (valid: unique, 1..%u)\n",
+                      i, gHives[i].index,
+                      (gHives[i].index < 1 || gHives[i].index > MAX_HIVES) ? "out of range"
+                                                                           : "a duplicate",
+                      MAX_HIVES);
+        continue;
+      }
+      if (kept != i) gHives[kept] = gHives[i];
+      kept++;
+    }
+    gHiveCount = kept;
+  }
+
+  // 2) Wired channel topology: range checks (no masking), duplicate physical
+  //    channels, direct+muxed NAU7802 conflicts.
+  scaletopo::ChanSpec specs[MAX_HIVES * MAX_SCALES_PER_HIVE];
+  uint16_t issues[MAX_HIVES * MAX_SCALES_PER_HIVE];
+  struct Ref { uint8_t hive; uint8_t slot; };
+  Ref refs[MAX_HIVES * MAX_SCALES_PER_HIVE];
+  uint8_t n = 0;
+  for (uint8_t h = 0; h < gHiveCount; h++) {
+    for (uint8_t s = 0; s < gHives[h].scaleCount; s++) {
+      ScaleChannel& c = gHives[h].scales[s];
+      c.configError = false;
+      if (c.backend == ScaleBackend::None) continue;
+      specs[n].hiveIndex  = gHives[h].index;
+      specs[n].backend    = (c.backend == ScaleBackend::HX711) ? scaletopo::Backend::HX711
+                                                               : scaletopo::Backend::NAU7802;
+      specs[n].hxIndex    = c.hxIndex;
+      specs[n].muxChannel = c.muxChannel;
+      specs[n].adcChannel = c.adcChannel;
+      refs[n] = {h, s};
+      n++;
+    }
+  }
+  scaletopo::TopologyResult topo = scaletopo::validateChannels(specs, n, issues);
+  if (!topo.ok) {
+    clean = false;
+    for (uint8_t i = 0; i < n; i++) {
+      if (!issues[i]) continue;
+      ScaleChannel& c = gHives[refs[i].hive].scales[refs[i].slot];
+      c.configError = true;
+      Serial.printf("[HIVECFG] DISABLED scale channel (hive %u, slot %u, %s mux=%d adc=%u hx=%u):",
+                    specs[i].hiveIndex, refs[i].slot,
+                    specs[i].backend == scaletopo::Backend::HX711 ? "hx711" : "nau7802",
+                    (int)specs[i].muxChannel, (unsigned)specs[i].adcChannel, specs[i].hxIndex);
+      if (issues[i] & scaletopo::CHAN_BAD_MUX)      Serial.print(" mux out of range (-1..7)");
+      if (issues[i] & scaletopo::CHAN_BAD_ADC)      Serial.print(" ADC channel not 1/2");
+      if (issues[i] & scaletopo::CHAN_BAD_HX_INDEX) Serial.print(" HX711 index not 0/1");
+      if (issues[i] & scaletopo::CHAN_DUPLICATE)    Serial.print(" duplicate physical channel");
+      if (issues[i] & scaletopo::CHAN_DIRECT_MUX_CONFLICT)
+        Serial.print(" direct + muxed NAU7802 cannot coexist (shared fixed 0x2A)");
+      Serial.println(" — channel will not be operated; fix it in the portal");
+    }
+  }
+
+  // 3) Calibration sanity. An implausible factor blocks weight conversion
+  //    (sensors.cpp) but the channel stays readable so the portal /calibrate
+  //    page can fix it — configError is NOT set for this.
+  for (uint8_t h = 0; h < gHiveCount; h++) {
+    for (uint8_t s = 0; s < gHives[h].scaleCount; s++) {
+      const ScaleChannel& c = gHives[h].scales[s];
+      if (c.backend == ScaleBackend::None || c.configError) continue;
+      if (!scalemath::factorPlausible(c.factor)) {
+        clean = false;
+        Serial.printf("[HIVECFG] hive %u scale %u: calibration factor %.3f is implausible; "
+                      "no weight will be reported until it is recalibrated\n",
+                      gHives[h].index, s, (double)c.factor);
+      }
+    }
+  }
+
+  return clean;
+}
+
 void loadHiveConfig() {
   prefs.begin("hivescale", true);
 
@@ -322,6 +432,7 @@ void loadHiveConfig() {
     migrateLegacy(prefs);
 #endif
     prefs.end();
+    validateRegistry();
     bridgeLegacyGlobals();
     return;
   }
@@ -339,6 +450,7 @@ void loadHiveConfig() {
     }
   }
   prefs.end();
+  validateRegistry();
   bridgeLegacyGlobals();
 
   Serial.printf("[HIVECFG] Loaded %u hive(s), %u scale channel(s)\n",

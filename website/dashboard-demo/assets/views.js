@@ -1494,8 +1494,10 @@ function renderDevice(root, state) {
   });
   const targetSelect = el("select", { class: "full" },
     el("option", { value: "hivescale" }, "Main unit (HiveHub / HiveScale)"),
-    el("option", { value: "hiveinside" }, "HiveInside"),
-    el("option", { value: "beecounter" }, "BeeCounter"));
+    el("option", { value: "hiveinside" }, "HiveInside"));
+  // (No BeeCounter target: the wired I2C update relay was removed, and
+  // BeeCounter OTA over BLE/GATT is not implemented yet — the server rejects
+  // beecounter uploads, so the option is gone.)
   // Board options depend on the target: the main unit ships two architectures
   // (Xtensa ESP32 vs RISC-V ESP32-C6), and HiveInside now ships two too — the
   // legacy ESP32-C6 prototype and the nRF54LM20A (signed Zephyr image). The
