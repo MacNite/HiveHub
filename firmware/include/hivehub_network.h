@@ -22,7 +22,10 @@ bool httpPostJson(const String& url, const String& json, String* response = null
 bool httpPatchJson(const String& url, const String& json, String* response = nullptr);
 
 // ---- Upload ---------------------------------------------------------------
-bool uploadLine(const String& line);
+// claimConfirmed (optional out-param) is set to true only when the server
+// reports the device as claimed, so the caller can defer latching the local
+// "claim registered" flag until the claim actually exists server-side.
+bool uploadLine(const String& line, bool* claimConfirmed = nullptr);
 bool uploadCachedLines();
 
 // ---- Config / OTA / commands ---------------------------------------------

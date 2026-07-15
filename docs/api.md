@@ -138,7 +138,7 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | `device_id` | string | Yes | Unique device identifier |
 | `hives` | array | No | Per-hive readings (up to 16); see the multi-hive note above |
 | `hive_count` | int | No | Number of hives the device has configured |
-| `claim_code` | string | No | Pairing code; the firmware sends it only until its first successful upload, after which it is omitted to limit exposure |
+| `claim_code` | string | No | Pairing code; the firmware keeps sending it until the server confirms the device is claimed (via the `claimed` field in the response below), after which it is omitted to limit exposure. This means a rebuilt/restored backend automatically re-learns the code and the device stays claimable. |
 | `timestamp` | ISO datetime | No | Measurement time; server receive time is used if omitted |
 | `scale_1_weight_kg` | number | No | Scale 1 weight in kilograms |
 | `scale_2_weight_kg` | number | No | Scale 2 weight in kilograms |
@@ -306,9 +306,15 @@ it on `MeasurementIn` or it will be discarded on ingest.
 {
   "status": "ok",
   "id": 1042,
-  "measured_at": "2026-05-01T12:00:00+00:00"
+  "measured_at": "2026-05-01T12:00:00+00:00",
+  "claimed": false
 }
 ```
+
+`claimed` is `true` once a HivePal user has claimed the device. The firmware keeps
+sending its `claim_code` until it sees `claimed: true`, so that a backend that has
+lost the device record (fresh install, DB restore) re-learns the claim code and the
+device can be claimed again without a re-flash.
 
 ### `GET /api/v1/measurements/latest`
 

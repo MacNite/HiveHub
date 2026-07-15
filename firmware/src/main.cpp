@@ -45,9 +45,14 @@ void runUploadCycle() {
   // The retry cache is only for failed live uploads. The previous firmware
   // added every row to the cache and then depended on cache replay, which could
   // stop all uploads if the cache file or FAT metadata became corrupted.
-  bool currentUploaded = uploadLine(json);
+  bool serverConfirmedClaim = false;
+  bool currentUploaded = uploadLine(json, &serverConfirmedClaim);
 
-  if (currentUploaded) markClaimRegistered();
+  // Only stop sending the claim code once the server confirms the claim. This
+  // keeps the device claimable after a backend rebuild/restore: an unclaimed
+  // (or newly reset) server reports claimed=false, so the device keeps sending
+  // its claim code until the beekeeper claims it in HivePal.
+  if (serverConfirmedClaim) markClaimRegistered();
 
   if (!currentUploaded) {
     if (sdOk) {

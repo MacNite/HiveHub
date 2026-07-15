@@ -423,7 +423,7 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
         raise HTTPException(status_code=401, detail="Invalid API key")
     now = datetime.now(timezone.utc)
     measured_at = resolve_measured_at(payload.timestamp, payload.device_id, now)
-    ensure_device_config(
+    claimed = ensure_device_config(
         payload.device_id, payload.claim_code, payload.firmware_version, x_api_key,
         touch_last_seen=True,
     )
@@ -449,7 +449,16 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
             measured_at,
             tempco=mqtt_tempco,
         )
-    return {"status": "ok", "id": new_id, "measured_at": measured_at.isoformat()}
+    # `claimed` lets the firmware defer latching its "claim registered" flag until
+    # the server has actually recorded the claim. Until then the device keeps
+    # sending its claim code, so a rebuilt/restored backend re-learns it and the
+    # device stays claimable (see server/devices.ensure_device_config).
+    return {
+        "status": "ok",
+        "id": new_id,
+        "measured_at": measured_at.isoformat(),
+        "claimed": claimed,
+    }
 
 
 @router.post(
