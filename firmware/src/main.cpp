@@ -235,6 +235,12 @@ void setup() {
   // Wire (started above) and the loaded registry; safe when no I2C scales exist.
   scalebus::begin();
 
+  // Capture every wired I2C reading NOW, before WiFi/BLE come up: on the
+  // ESP32-C6 radio start-up wedges the I2C peripheral into ESP_ERR_INVALID_STATE
+  // (a state Wire.end()/begin() cannot clear), so this is the only reliable
+  // window. createMeasurementJson() uploads the cached snapshot.
+  prefetchWiredSensors();
+
   initSdCard();
 
   initializeTime(wokeFromDeepSleep);
@@ -288,6 +294,11 @@ void loop() {
 
   if (now - lastCycleMs >= activeIntervalMs) {
     lastCycleMs = now;
+    // Awake mode (calibration / deep-sleep disabled): refresh the wired-sensor
+    // snapshot before uploading so values aren't frozen at boot. WiFi is already
+    // associated here, so on the C6 these reads may hit the radio-wedged I2C
+    // peripheral and return empty — that is the honest result, not stale data.
+    prefetchWiredSensors();
     runUploadCycle();
   }
 
