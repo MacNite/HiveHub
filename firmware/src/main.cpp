@@ -191,7 +191,11 @@ void setup() {
   }
 
 #if ENABLE_INA219_SOLAR
-  solarMonitorOk = i2cOk && solarMonitor.begin(&Wire);
+  // Address-probe first: Adafruit_INA219::begin() reads the config register, and
+  // a register read to an ABSENT chip wedges the C6 I2C-NG driver. A clean
+  // address NACK reports "MISSING" without ever issuing that transaction.
+  solarMonitorOk = i2cOk && i2cbus::deviceResponds(INA219_I2C_ADDRESS) &&
+                   solarMonitor.begin(&Wire);
   Serial.printf("[INA219] %s\n", solarMonitorOk ? "OK" : "MISSING");
   if (solarMonitorOk) {
     solarMonitor.setCalibration_32V_2A();
@@ -200,7 +204,13 @@ void setup() {
 #endif
 
 #if ENABLE_MAX17048_BATTERY
-  batteryMonitorOk = i2cOk && batteryGauge.begin();
+  // Address-probe first: SFE_MAX1704X::begin()/isConnected() reads the VERSION
+  // register, and that register read to an ABSENT gauge is exactly what leaves
+  // the C6 I2C-NG master in ESP_ERR_INVALID_STATE (a wedge that then fails every
+  // later transfer, e.g. the RTC and SHT4x reads). Gate it behind a clean
+  // address NACK so a missing gauge is reported without wedging the bus.
+  batteryMonitorOk = i2cOk && i2cbus::deviceResponds(MAX17048_I2C_ADDRESS) &&
+                     batteryGauge.begin();
   Serial.printf("[MAX17048] %s\n", batteryMonitorOk ? "OK" : "MISSING");
   if (batteryMonitorOk) {
     batteryGauge.quickStart();

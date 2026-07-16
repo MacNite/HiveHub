@@ -12,6 +12,12 @@ bool gBusOk = false;
 uint8_t gRuntimeRecoveries = 0;
 constexpr uint8_t RUNTIME_RECOVERY_MAX = 3;
 
+// Per-measurement-cycle budget for mid-cycle driver heals (healForRead). A
+// normal timer-wake cycle is a single boot, but provisioning/calibration stay
+// awake across cycles, so resetReadHeals() re-arms the budget at each cycle.
+uint8_t gReadHeals = 0;
+constexpr uint8_t READ_HEAL_MAX = 8;
+
 // Bus-recovery totals that survive deep sleep (cheap trend signal for a bus
 // that goes bad in the field). RTC memory, not flash — no wear.
 RTC_DATA_ATTR uint32_t rtcRecoveryAttempts = 0;
@@ -149,6 +155,32 @@ bool begin() {
 
 bool ok() { return gBusOk; }
 
+bool deviceResponds(uint8_t addr) {
+  if (!gBusOk) return false;
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
+}
+
+void resetReadHeals() { gReadHeals = 0; }
+
+bool healForRead() {
+  if (!gBusOk) return false;
+  if (gReadHeals >= READ_HEAL_MAX) {
+    Serial.printf("[I2C] Read-path heal budget exhausted (%u/%u); not resetting\n",
+                  gReadHeals, READ_HEAL_MAX);
+    return false;
+  }
+  gReadHeals++;
+  gDiag.readHeals++;
+  Serial.printf("[I2C] Read-path heal %u/%u: clearing wedged driver\n",
+                gReadHeals, READ_HEAL_MAX);
+  Wire.end();
+  delay(2);
+  // begin() re-runs recover() + Wire.begin() + setClock(); it also re-logs the
+  // "[I2C] Started ..." line, which usefully marks the reset in the trace.
+  return begin();
+}
+
 bool runtimeRecover() {
   if (gRuntimeRecoveries >= RUNTIME_RECOVERY_MAX) {
     Serial.printf("[I2C] Runtime recovery budget exhausted (%u/%u); not retrying\n",
@@ -179,10 +211,10 @@ hivei2c::I2cBusIface& iface() { return gWireBus; }
 Diag& diag() { return gDiag; }
 
 void logDiag() {
-  Serial.printf("[I2C] Diag: recovery %u/%u failed this boot (%lu/%lu since power-on), init failures %u\n",
+  Serial.printf("[I2C] Diag: recovery %u/%u failed this boot (%lu/%lu since power-on), init failures %u, read heals %u\n",
                 gDiag.recoveryFailures, gDiag.recoveryAttempts,
                 (unsigned long)rtcRecoveryFailures, (unsigned long)rtcRecoveryAttempts,
-                gDiag.initFailures);
+                gDiag.initFailures, gDiag.readHeals);
 }
 
 }  // namespace i2cbus

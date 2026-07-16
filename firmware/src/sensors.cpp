@@ -6,6 +6,7 @@
 #include "storage_power.h"
 #include "bee_counter_client.h"
 #include "hive_config.h"
+#include "i2c_bus.h"
 #include "scale_bus.h"
 #include "scale_math.h"
 
@@ -47,6 +48,12 @@ void initializeTime(bool wokeFromDeepSleep) {
 String timestampNow() {
   if (rtcOk) {
     DateTime now = rtc.now();
+    // A wedged driver makes rtc.now() return zeroed registers (year 2000). Heal
+    // once and re-read so a bus that another device wedged doesn't force the
+    // timestamp onto the NTP/1970 fallback.
+    if (!(now.year() >= 2024 && now.year() <= 2099) && i2cbus::healForRead()) {
+      now = rtc.now();
+    }
     if (now.year() >= 2024 && now.year() <= 2099) {
       char buf[25];
       snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ", now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
@@ -190,6 +197,11 @@ static void writeBeehiveScaleToHive(JsonObject ho, const bhgatt::ScaleReading& s
 String createMeasurementJson() {
   Serial.println("[MEASURE] Reading sensors...");
 
+  // Re-arm the per-cycle I2C heal budget: each cycle's reads (RTC, SHT4x,
+  // battery, scales) may each ask the bus to clear a wedged driver once and
+  // retry, bounded so a genuinely dead bus can never spin.
+  i2cbus::resetReadHeals();
+
   powerUpScales();
 
   // ── In-hive BLE sensors (beacon + capped GATT) for ALL hives ───────────────
@@ -234,7 +246,12 @@ String createMeasurementJson() {
   float ambientHumidity = NAN;
   if (shtOk) {
     sensors_event_t humidity, temp;
-    if (sht4.getEvent(&humidity, &temp)) {
+    // One heal+retry: if the read fails because an earlier transaction wedged
+    // the driver, clearing it lets this healthy sensor come back in the same
+    // cycle instead of reporting null.
+    bool got = sht4.getEvent(&humidity, &temp);
+    if (!got && i2cbus::healForRead()) got = sht4.getEvent(&humidity, &temp);
+    if (got) {
       ambientTemp = temp.temperature;
       ambientHumidity = humidity.relative_humidity;
     } else {
@@ -262,6 +279,12 @@ String createMeasurementJson() {
   bool batteryAlert = false;
   if (batteryMonitorOk) {
     batteryVoltage = batteryGauge.getVoltage();
+    // A connected LiPo never reads 0.0 V, so 0.0 means the VCELL read failed —
+    // typically the wedged-driver state. Heal once and re-read before trusting
+    // the rest of the gauge registers.
+    if (batteryVoltage == 0.0f && i2cbus::healForRead()) {
+      batteryVoltage = batteryGauge.getVoltage();
+    }
     batterySoc = batteryGauge.getSOC();
     batteryAlert = batteryGauge.getAlert();
     if (batteryAlert) batteryGauge.clearAlert();
