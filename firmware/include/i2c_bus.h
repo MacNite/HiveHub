@@ -22,6 +22,7 @@ struct Diag {
   uint16_t recoveryAttempts   = 0;
   uint16_t recoveryFailures   = 0;
   uint16_t initFailures       = 0;   // Wire.begin()/setClock() failures
+  uint16_t readHeals          = 0;   // mid-cycle driver resets (healForRead)
 };
 
 // GPIO bit-bang recovery of a stuck bus (a slave holding SDA low mid-byte).
@@ -39,6 +40,31 @@ bool begin();
 
 // True once begin() succeeded this boot (gates every I2C consumer).
 bool ok();
+
+// Address-only ACK probe on the live bus (0-byte write, Arduino endTransmission
+// convention). Unlike a register read, an absent device NACKs cleanly here and
+// does NOT wedge the ESP32-C6 I2C-NG master driver. Call this before invoking a
+// third-party library begin() whose presence check is a register read (SparkFun
+// MAX1704x, Adafruit INA219): a missing device is then reported without ever
+// issuing the transaction that trips ESP_ERR_INVALID_STATE. Returns false when
+// the bus is down (never begun) or the address does not ACK.
+bool deviceResponds(uint8_t addr);
+
+// Clear a wedged I2C master driver mid-cycle, then re-init (Wire.end() +
+// recover() + Wire.begin() + setClock()). On Arduino-ESP32 3.x / ESP-IDF 5.x
+// the new "i2c-ng" master can be left in ESP_ERR_INVALID_STATE after a failed
+// transaction (e.g. a NACKed register read to an absent chip), after which
+// EVERY later transfer — even to healthy sensors — fails until the driver is
+// torn down and rebuilt. A cycle read path calls this once when its read fails
+// and then retries. Bounded per measurement cycle (resetReadHeals()) so a truly
+// dead bus can never spin: returns false once the budget is spent or the bus
+// was never up. Distinct from runtimeRecover(), which serves the long-lived
+// provisioning/calibration modes with its own budget.
+bool healForRead();
+
+// Reset the per-cycle healForRead() budget. Call once at the top of a
+// measurement cycle so each cycle gets a fresh, bounded number of heals.
+void resetReadHeals();
 
 // Bounded runtime recovery for provisioning/calibration mode, where the device
 // stays awake instead of rebooting each cycle: ends Wire, re-runs recover() +

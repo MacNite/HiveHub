@@ -103,6 +103,14 @@
 #define INA219_I2C_ADDRESS 0x40
 #endif
 
+// SparkFun MAX1704x fuel-gauge fixed I2C address. Named so the setup path can
+// address-probe (i2cbus::deviceResponds) BEFORE calling the SparkFun begin(),
+// whose register-read probe of an ABSENT gauge wedges the ESP32-C6 I2C-NG
+// master driver (ESP_ERR_INVALID_STATE) instead of returning a clean NACK.
+#ifndef MAX17048_I2C_ADDRESS
+#define MAX17048_I2C_ADDRESS 0x36
+#endif
+
 #ifndef MAX17048_ALERT_PERCENT
 #define MAX17048_ALERT_PERCENT 20
 #endif
