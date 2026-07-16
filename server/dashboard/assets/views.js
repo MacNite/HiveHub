@@ -1463,18 +1463,28 @@ function renderDevice(root, state) {
       "A build only reaches a device whose board matches — check the Board field when uploading."));
   }
 
+  // Shared "approve the latest release and flash it over the air" action, used by
+  // the Firmware panel's button and by the inline Apply button that appears right
+  // after an upload — so a fresh upload can be flashed without a manual refresh.
+  // Full reload afterwards so the refetched firmware status hides the button once
+  // the version is approved (a light reload keeps stale firmware and leaves it up).
+  const approveAndFlash = async (btn, versionLabel) => {
+    const version = versionLabel ? ` ${versionLabel}` : "";
+    if (!window.confirm(
+      `Approve firmware${version} and flash it over the air?\n\n` +
+      "The device installs it on its next check-in and reboots. " +
+      "A remote device that fails mid-update may need physical access to recover.")) return;
+    btn.disabled = true;
+    try {
+      await state.actions.approveFirmware();
+      state.toast("Firmware approved — device will update on next check-in", "success");
+      state.reload({ full: true });
+    } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
+  };
+
   if (fw.update_available && fw.pending_approval) {
     const approveBtn = el("button", { class: "btn", type: "button" }, "Approve & flash latest");
-    approveBtn.addEventListener("click", async () => {
-      const version = fw.latest_version ? ` ${fw.latest_version}` : "";
-      if (!window.confirm(
-        `Approve firmware${version} and flash it over the air?\n\n` +
-        "The device installs it on its next check-in and reboots. " +
-        "A remote device that fails mid-update may need physical access to recover.")) return;
-      approveBtn.disabled = true;
-      try { await state.actions.approveFirmware(); state.toast("Firmware approved — device will update on next check-in", "success"); state.reload(); }
-      catch (e) { state.toast(e.message, "error"); approveBtn.disabled = false; }
-    });
+    approveBtn.addEventListener("click", () => approveAndFlash(approveBtn, fw.latest_version));
     fwPanel.append(el("div", { class: "form-actions" }, approveBtn));
   }
 
@@ -1534,6 +1544,35 @@ function renderDevice(root, state) {
   targetSelect.addEventListener("change", syncBoardRow);
   const uploadBtn = el("button", { class: "btn", type: "submit" }, "Upload firmware");
 
+  // Result slot under the upload form. After a successful main-unit upload we drop
+  // an "Approve & flash" button straight in here so the just-registered release can
+  // be applied over the air right away, instead of waiting for a manual refresh to
+  // surface the button in the Firmware panel above (a plain upload only reload()s
+  // light, which doesn't refetch firmware status).
+  const uploadResult = el("div", { hidden: true });
+  const showUploadApply = (res) => {
+    uploadResult.innerHTML = "";
+    // Only the main unit ("hivescale") has an approve-and-flash OTA path from the
+    // dashboard; HiveInside/BeeCounter releases are relayed on the sensor's next
+    // check-in, so there is nothing to apply here for those targets.
+    if (!res || res.target !== "hivescale") { uploadResult.hidden = true; return; }
+    // Approve flashes the latest release for the DEVICE's board, so a .bin
+    // registered for a different board wouldn't be the one applied — skip the
+    // button there rather than offer a misleading Apply (the Firmware panel's
+    // wrong-board note covers that case after a refresh).
+    if (res.board && fw.device_board && res.board !== fw.device_board) {
+      uploadResult.hidden = true;
+      return;
+    }
+    const label = res.version ? ` ${res.version}` : "";
+    const applyBtn = el("button", { class: "btn", type: "button" }, `Approve & flash${label}`);
+    applyBtn.addEventListener("click", () => approveAndFlash(applyBtn, res.version));
+    uploadResult.append(
+      el("p", { class: "note" }, "Uploaded — approve now to flash it over the air on the device's next check-in."),
+      el("div", { class: "form-actions" }, applyBtn));
+    uploadResult.hidden = false;
+  };
+
   const uploadForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Firmware .bin"), fileInput),
     el("div", { class: "form-row" }, el("label", {}, "Version"), versionInput),
@@ -1561,12 +1600,14 @@ function renderDevice(root, state) {
       // immediately rather than after the release fails to appear as "latest".
       const parts = [res?.version, res?.target, res?.board].filter(Boolean).join(" / ");
       state.toast(parts ? `Firmware uploaded: ${parts}` : "Firmware uploaded", "success");
-      state.reload();
+      // Reveal the Apply button in place rather than reloading — a full reload would
+      // rebuild the whole view (and drop this card) right after the upload.
+      showUploadApply(res);
     }
     catch (err) { state.toast(err.message, "error"); }
     finally { uploadBtn.disabled = false; }
   });
-  const uploadCard = el("div", { class: "card" }, el("h2", {}, "Upload firmware"), uploadForm);
+  const uploadCard = el("div", { class: "card" }, el("h2", {}, "Upload firmware"), uploadForm, uploadResult);
 
   // SD-card data import. Uploads a backup pulled off the scale in AP mode
   // (measurements.ndjson or the hivescale-sd-data.tar download) and back-fills the
