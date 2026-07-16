@@ -82,7 +82,10 @@ void markOtaChecked() {
 bool rtcHasValidTime() {
   if (!rtcOk) return false;
   DateTime now = rtc.now();
-  return now.year() >= 2024 && now.year() <= 2099;
+  // Full validity, not just the year: a wedged/failed read can decode to a
+  // plausible year but a garbage month/day (e.g. 2032-30-32), which must NOT be
+  // treated as a usable RTC time.
+  return now.isValid() && now.year() >= 2024 && now.year() <= 2099;
 }
 
 void powerUpScales() {

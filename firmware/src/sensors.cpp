@@ -46,15 +46,31 @@ void initializeTime(bool wokeFromDeepSleep) {
 }
 
 String timestampNow() {
+  // Prefer the NTP-synced system clock when we have it: it is accurate and needs
+  // no I2C, so it avoids reading the DS3231 entirely. On the radio-wedged C6 bus
+  // that read can return garbage (e.g. month 30), which previously produced an
+  // invalid timestamp the server rejects with HTTP 422.
+  if (timeSource == "ntp") {
+    struct tm tmNtp;
+    if (getLocalTime(&tmNtp, 100)) {
+      char buf[25];
+      snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+               tmNtp.tm_year + 1900, tmNtp.tm_mon + 1, tmNtp.tm_mday,
+               tmNtp.tm_hour, tmNtp.tm_min, tmNtp.tm_sec);
+      return String(buf);
+    }
+  }
+
   if (rtcOk) {
     DateTime now = rtc.now();
-    // A wedged driver makes rtc.now() return zeroed registers (year 2000). Heal
-    // once and re-read so a bus that another device wedged doesn't force the
-    // timestamp onto the NTP/1970 fallback.
-    if (!(now.year() >= 2024 && now.year() <= 2099) && i2cbus::healForRead()) {
+    // A wedged/failed read can return zeroed OR garbage registers. Heal once and
+    // re-read, and require a FULLY valid date — isValid() range-checks month, day
+    // and time, not just the year — so a corrupt read can never emit a bogus
+    // timestamp that the server would reject.
+    if (!(now.isValid() && now.year() >= 2024 && now.year() <= 2099) && i2cbus::healForRead()) {
       now = rtc.now();
     }
-    if (now.year() >= 2024 && now.year() <= 2099) {
+    if (now.isValid() && now.year() >= 2024 && now.year() <= 2099) {
       char buf[25];
       snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ", now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
       return String(buf);
