@@ -76,7 +76,11 @@ bool connectWifi(unsigned long timeoutMs) {
   prefs.end();
 
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(true);
+  // Modem sleep OFF for the short awake window. With WiFi power-save enabled the
+  // ESP32-C6 leaves the shared I2C peripheral in ESP_ERR_INVALID_STATE after
+  // radio activity — a wedge Wire.end()/begin() cannot clear. The device
+  // deep-sleeps between cycles, so keeping the modem awake here costs little.
+  WiFi.setSleep(false);
 
   for (int i = 0; i < count; i++) {
     String ssid = ssids[i];

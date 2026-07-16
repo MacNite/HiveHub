@@ -194,6 +194,18 @@ static void writeBeehiveScaleToHive(JsonObject ho, const bhgatt::ScaleReading& s
 }
 #endif
 
+// Per-hive wired-scale aggregate: filled by the pre-radio I2C pass and consumed
+// during JSON assembly, so the NAU7802 transactions all run before any BLE/WiFi
+// radio activity can wedge the C6 I2C peripheral. MAX_SCALES_PER_HIVE == 1, so
+// one aggregate per hive is sufficient.
+struct WiredScaleAgg {
+  double      weightSum       = 0.0;
+  bool        anyScale        = false;  // at least one fully valid reading
+  bool        triedWiredScale = false;  // a wired NAU7802/HX711 channel exists
+  long        firstRaw        = 0;
+  const char* scaleSrc        = "";
+};
+
 String createMeasurementJson() {
   Serial.println("[MEASURE] Reading sensors...");
 
@@ -204,37 +216,17 @@ String createMeasurementJson() {
 
   powerUpScales();
 
-  // ── In-hive BLE sensors (beacon + capped GATT) for ALL hives ───────────────
-  // One passive scan window catches every paired beacon at once; connection-based
-  // GATT reads are capped per cycle (MAX_GATT_READS_PER_CYCLE) so deep sleep stays
-  // effective even with many hives. Done before the wired sensors so per-hive
-  // arbitration (below) can skip a wired probe a BLE sensor already covers.
-#if ENABLE_BLE_SCAN
-  std::vector<String> bleMacs;
-  std::vector<bool>   bleIsGatt;
-  std::vector<int>    bleHiveOfMac;   // gHives[] index each MAC belongs to
-  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
-    const hivecfg::Hive& hive = hivecfg::gHives[h];
-    for (uint8_t b = 0; b < hive.bleCount; b++) {
-      const hivecfg::BlePairing& p = hive.ble[b];
-      // In-hive beacon/HiveInside sensors go through this bridge; HiveHeart/
-      // HiveScale/HiveTraffic are handled by their own GATT modules below.
-      if (p.type == "holyiot" || p.type == "ruuvitag" || p.type == "hiveinside") {
-        bleMacs.push_back(p.mac);
-        bleIsGatt.push_back(p.isGatt());
-        bleHiveOfMac.push_back(h);
-      }
-    }
-  }
-  std::vector<blesensor::Snapshot> bleSnaps;
-  blesensor::scanPairedSensorsMulti(bleMacs, bleIsGatt, bleSnaps, MAX_GATT_READS_PER_CYCLE);
-#endif
+  // ══ Phase 1: every wired I2C read runs FIRST, before any BLE/WiFi radio ═════
+  // On the ESP32-C6 a BLE scan (or WiFi power-save) can leave the I2C peripheral
+  // in ESP_ERR_INVALID_STATE — a wedge Wire.end()/begin() cannot clear — so the
+  // RTC timestamp, SHT4x, battery gauge and NAU7802 scales are all read here on
+  // the known-good bus. The radio (BLE beacons + GATT) runs afterwards, phase 2.
 
-  // ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) — all hives ──
-#if ENABLE_BEEHIVE_GATT
-  bhgatt::CycleResult bh;
-  bhgatt::runCycle(bh);
-#endif
+  // Resolve the timestamp now (this reads the RTC) so nothing on the I2C bus is
+  // needed once the radio starts. Falls back to NTP/system time when the RTC is
+  // absent or unreadable — see timestampNow().
+  String measuredAt;
+  if (timeSource != "invalid") measuredAt = timestampNow();
 
   // ── Wired DS18B20: a single bus conversion, then per-hive ROM reads below ───
 #if ENABLE_DS18B20_HIVE_TEMP
@@ -291,6 +283,82 @@ String createMeasurementJson() {
   }
 #endif
 
+  // ── Wired scales (NAU7802): read now, before the radio, and cache per hive.
+  // The JSON assembly below consumes these cached results instead of reading
+  // live, so no scale transaction ever runs on a radio-wedged bus.
+  WiredScaleAgg scaleAgg[MAX_HIVES];
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    WiredScaleAgg& agg = scaleAgg[h];
+    for (uint8_t s = 0; s < hive.scaleCount; s++) {
+      const hivecfg::ScaleChannel& ch = hive.scales[s];
+      if (ch.backend == hivecfg::ScaleBackend::None) continue;
+      agg.triedWiredScale = true;
+      if (s == 0) agg.scaleSrc = scaleBackendName(ch.backend);
+      if (ch.configError) {
+        Serial.printf("[MEASURE] hive %u scale %u (%s) SKIPPED: invalid/conflicting configuration (fix in portal)\n",
+                      hive.index, s, scaleBackendName(ch.backend));
+        continue;
+      }
+      scalebus::ReadResult rr = scalebus::readChannel(ch);
+      if (s == 0) agg.firstRaw = rr.raw;
+      if (!rr.ok) {
+        Serial.printf("[MEASURE] hive %u scale %u (%s addr=0x%02X mux=%d adc=%u) INVALID: %s "
+                      "(samples %u/%u, commErr %u, spread %ld, recovery %s)\n",
+                      hive.index, s, scaleBackendName(ch.backend),
+                      ch.backend == hivecfg::ScaleBackend::NAU7802 ? NAU7802_I2C_ADDRESS : 0,
+                      (int)ch.muxChannel, ch.adcChannel, scaleFailReason(rr),
+                      rr.samplesAcquired, rr.samplesRequested, rr.commErrors, rr.spread,
+                      rr.recoveryAttempted ? (rr.recoverySucceeded ? "ok" : "failed") : "none");
+        continue;
+      }
+      if (!scalemath::factorPlausible(ch.factor)) {
+        Serial.printf("[MEASURE] hive %u scale %u (%s) INVALID: calibration factor %.3f implausible\n",
+                      hive.index, s, scaleBackendName(ch.backend), (double)ch.factor);
+        continue;
+      }
+      float kg = weightFromRaw(rr.raw, ch.offset, ch.factor);
+      if (!isnan(kg)) { agg.weightSum += kg; agg.anyScale = true; }
+      Serial.printf("[MEASURE] hive %u scale %u (%s mux=%d adc=%u) raw=%ld kg=%.3f "
+                    "(samples %u/%u, spread %ld)\n",
+                    hive.index, s, scaleBackendName(ch.backend), (int)ch.muxChannel,
+                    ch.adcChannel, rr.raw, kg, rr.samplesAcquired, rr.samplesRequested,
+                    rr.spread);
+    }
+  }
+
+  // ══ Phase 2: radio (BLE beacons + GATT). No I2C transaction runs past here. ═
+  // ── In-hive BLE sensors (beacon + capped GATT) for ALL hives ───────────────
+  // One passive scan window catches every paired beacon at once; connection-based
+  // GATT reads are capped per cycle (MAX_GATT_READS_PER_CYCLE) so deep sleep stays
+  // effective even with many hives.
+#if ENABLE_BLE_SCAN
+  std::vector<String> bleMacs;
+  std::vector<bool>   bleIsGatt;
+  std::vector<int>    bleHiveOfMac;   // gHives[] index each MAC belongs to
+  for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    for (uint8_t b = 0; b < hive.bleCount; b++) {
+      const hivecfg::BlePairing& p = hive.ble[b];
+      // In-hive beacon/HiveInside sensors go through this bridge; HiveHeart/
+      // HiveScale/HiveTraffic are handled by their own GATT modules below.
+      if (p.type == "holyiot" || p.type == "ruuvitag" || p.type == "hiveinside") {
+        bleMacs.push_back(p.mac);
+        bleIsGatt.push_back(p.isGatt());
+        bleHiveOfMac.push_back(h);
+      }
+    }
+  }
+  std::vector<blesensor::Snapshot> bleSnaps;
+  blesensor::scanPairedSensorsMulti(bleMacs, bleIsGatt, bleSnaps, MAX_GATT_READS_PER_CYCLE);
+#endif
+
+  // ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) — all hives ──
+#if ENABLE_BEEHIVE_GATT
+  bhgatt::CycleResult bh;
+  bhgatt::runCycle(bh);
+#endif
+
   // ── Wired stereo mics (device-level; left=hive 1, right=hive 2) ────────────
 #if ENABLE_INMP441_MICS
   bool wiredMicUsed = true;
@@ -323,7 +391,7 @@ String createMeasurementJson() {
   JsonDocument doc;
   doc["device_id"] = deviceId;
   if (claimCode.length() > 0 && !claimRegistered) doc["claim_code"] = claimCode;
-  if (timeSource != "invalid") doc["timestamp"] = timestampNow();
+  if (timeSource != "invalid") doc["timestamp"] = measuredAt;
   doc["ambient_temp_c"] = ambientTemp;
   doc["ambient_humidity_percent"] = ambientHumidity;
   doc["network_transport"] = "wifi";
@@ -395,55 +463,17 @@ String createMeasurementJson() {
     const bhgatt::ScaleReading* bhScale = (h < MAX_HIVES && bh.scale[h].present) ? &bh.scale[h] : nullptr;
 #endif
 
-    // Scales: sum every channel mapped to this hive (usually one). Every read
-    // goes through the checked scalebus layer, which returns a structured
-    // result — a weight is produced ONLY from a verified route + verified ADC
-    // channel + complete, stable sample set. Anything else marks the hive
-    // scale_ok=false with weight_kg omitted (null), never a nonsense value.
-    double weightSum = 0.0;
-    bool   anyScale = false;         // got at least one fully valid reading
-    bool   triedWiredScale = false;  // a wired NAU7802/HX711 channel is configured
-    long   firstRaw = 0;
-    const char* scaleSrc = "";
-    for (uint8_t s = 0; s < hive.scaleCount; s++) {
-      const hivecfg::ScaleChannel& ch = hive.scales[s];
-      if (ch.backend == hivecfg::ScaleBackend::None) continue;
-      triedWiredScale = true;
-      if (s == 0) scaleSrc = scaleBackendName(ch.backend);
-      if (ch.configError) {
-        Serial.printf("[MEASURE] hive %u scale %u (%s) SKIPPED: invalid/conflicting configuration (fix in portal)\n",
-                      hive.index, s, scaleBackendName(ch.backend));
-        continue;
-      }
-      scalebus::ReadResult rr = scalebus::readChannel(ch);
-      if (s == 0) firstRaw = rr.raw;
-      if (!rr.ok) {
-        Serial.printf("[MEASURE] hive %u scale %u (%s addr=0x%02X mux=%d adc=%u) INVALID: %s "
-                      "(samples %u/%u, commErr %u, spread %ld, recovery %s)\n",
-                      hive.index, s, scaleBackendName(ch.backend),
-                      ch.backend == hivecfg::ScaleBackend::NAU7802 ? NAU7802_I2C_ADDRESS : 0,
-                      (int)ch.muxChannel, ch.adcChannel, scaleFailReason(rr),
-                      rr.samplesAcquired, rr.samplesRequested, rr.commErrors, rr.spread,
-                      rr.recoveryAttempted ? (rr.recoverySucceeded ? "ok" : "failed") : "none");
-        continue;
-      }
-      if (!scalemath::factorPlausible(ch.factor)) {
-        Serial.printf("[MEASURE] hive %u scale %u (%s) INVALID: calibration factor %.3f implausible\n",
-                      hive.index, s, scaleBackendName(ch.backend), (double)ch.factor);
-        continue;
-      }
-      float kg = weightFromRaw(rr.raw, ch.offset, ch.factor);
-      if (!isnan(kg)) { weightSum += kg; anyScale = true; }
-      Serial.printf("[MEASURE] hive %u scale %u (%s mux=%d adc=%u) raw=%ld kg=%.3f "
-                    "(samples %u/%u, spread %ld)\n",
-                    hive.index, s, scaleBackendName(ch.backend), (int)ch.muxChannel,
-                    ch.adcChannel, rr.raw, kg, rr.samplesAcquired, rr.samplesRequested,
-                    rr.spread);
-    }
-    if (anyScale) {
-      ho["weight_kg"]    = weightSum;
-      ho["raw_weight"]   = firstRaw;
-      ho["scale_source"] = scaleSrc;
+    // Scales: consume the per-hive aggregate computed in phase 1 (pre-radio).
+    // Every read went through the checked scalebus layer, which returns a
+    // structured result — a weight is produced ONLY from a verified route +
+    // verified ADC channel + complete, stable sample set. Anything else marks
+    // the hive scale_ok=false with weight_kg omitted (null), never a nonsense
+    // value.
+    const WiredScaleAgg& agg = scaleAgg[h];
+    if (agg.anyScale) {
+      ho["weight_kg"]    = agg.weightSum;
+      ho["raw_weight"]   = agg.firstRaw;
+      ho["scale_source"] = agg.scaleSrc;
       ho["scale_ok"]     = true;
     }
 #if ENABLE_BEEHIVE_GATT
@@ -453,12 +483,12 @@ String createMeasurementJson() {
       ho["scale_source"] = "hivescale_gatt";
     }
 #endif
-    else if (triedWiredScale) {
+    else if (agg.triedWiredScale) {
       // A wired scale is configured but produced no usable reading. Expose the raw
       // (the railed full-scale value or 0) for diagnostics, but omit weight_kg so
       // the DB stores null instead of a bogus weight.
-      ho["raw_weight"]   = firstRaw;
-      ho["scale_source"] = scaleSrc;
+      ho["raw_weight"]   = agg.firstRaw;
+      ho["scale_source"] = agg.scaleSrc;
       ho["scale_ok"]     = false;
     }
 
