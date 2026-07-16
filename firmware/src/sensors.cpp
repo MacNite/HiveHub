@@ -206,90 +206,84 @@ struct WiredScaleAgg {
   const char* scaleSrc        = "";
 };
 
-String createMeasurementJson() {
-  Serial.println("[MEASURE] Reading sensors...");
+// Snapshot of the wired I2C readings captured pre-radio by prefetchWiredSensors()
+// and consumed by createMeasurementJson().
+struct WiredSensorSnapshot {
+  float ambientTemp     = NAN;
+  float ambientHumidity = NAN;
+#if ENABLE_INA219_SOLAR
+  float solarBusVoltage = NAN, solarShuntVoltageMv = NAN, solarLoadVoltage = NAN;
+  float solarCurrentMa  = NAN, solarPowerMw = NAN;
+#endif
+#if ENABLE_MAX17048_BATTERY
+  float batteryVoltage = NAN, batterySoc = NAN;
+  bool  batteryAlert   = false;
+#endif
+  WiredScaleAgg scale[MAX_HIVES];
+};
 
-  // Re-arm the per-cycle I2C heal budget: each cycle's reads (RTC, SHT4x,
-  // battery, scales) may each ask the bus to clear a wedged driver once and
-  // retry, bounded so a genuinely dead bus can never spin.
+static WiredSensorSnapshot gWired;
+
+void prefetchWiredSensors() {
+  // All wired I2C acquisition happens HERE, before WiFi/BLE start — see the
+  // header note. On the ESP32-C6 radio start-up wedges the I2C peripheral into
+  // ESP_ERR_INVALID_STATE, which Wire.end()/begin() cannot clear; reading now,
+  // on the known-good bus, is the only reliable window.
+  Serial.println("[PREFETCH] Reading wired I2C sensors before radio...");
   i2cbus::resetReadHeals();
+  gWired = WiredSensorSnapshot();  // fresh each cycle (setup runs every wake)
 
+  // Power up the (HX711) scales before reading them; no-op on the C6 where the
+  // only scale backend is the I2C NAU7802 (configured by scalebus::begin()).
   powerUpScales();
 
-  // ══ Phase 1: every wired I2C read runs FIRST, before any BLE/WiFi radio ═════
-  // On the ESP32-C6 a BLE scan (or WiFi power-save) can leave the I2C peripheral
-  // in ESP_ERR_INVALID_STATE — a wedge Wire.end()/begin() cannot clear — so the
-  // RTC timestamp, SHT4x, battery gauge and NAU7802 scales are all read here on
-  // the known-good bus. The radio (BLE beacons + GATT) runs afterwards, phase 2.
-
-  // Resolve the timestamp now (this reads the RTC) so nothing on the I2C bus is
-  // needed once the radio starts. Falls back to NTP/system time when the RTC is
-  // absent or unreadable — see timestampNow().
-  String measuredAt;
-  if (timeSource != "invalid") measuredAt = timestampNow();
-
-  // ── Wired DS18B20: a single bus conversion, then per-hive ROM reads below ───
 #if ENABLE_DS18B20_HIVE_TEMP
   ds18b20.requestTemperatures();
 #endif
 
   // ── Ambient SHT4x (device-level, outside-hive) ─────────────────────────────
-  float ambientTemp = NAN;
-  float ambientHumidity = NAN;
   if (shtOk) {
     sensors_event_t humidity, temp;
-    // One heal+retry: if the read fails because an earlier transaction wedged
-    // the driver, clearing it lets this healthy sensor come back in the same
-    // cycle instead of reporting null.
     bool got = sht4.getEvent(&humidity, &temp);
     if (!got && i2cbus::healForRead()) got = sht4.getEvent(&humidity, &temp);
     if (got) {
-      ambientTemp = temp.temperature;
-      ambientHumidity = humidity.relative_humidity;
+      gWired.ambientTemp = temp.temperature;
+      gWired.ambientHumidity = humidity.relative_humidity;
     } else {
       Serial.println("[SHT4x] Read failed");
     }
   }
 
 #if ENABLE_INA219_SOLAR
-  float solarBusVoltage = NAN, solarShuntVoltageMv = NAN, solarLoadVoltage = NAN;
-  float solarCurrentMa = NAN, solarPowerMw = NAN;
   if (solarMonitorOk) {
     solarMonitor.powerSave(false);
     delay(10);
-    solarBusVoltage = solarMonitor.getBusVoltage_V();
-    solarShuntVoltageMv = solarMonitor.getShuntVoltage_mV();
-    solarCurrentMa = solarMonitor.getCurrent_mA();
-    solarPowerMw = solarMonitor.getPower_mW();
-    solarLoadVoltage = solarBusVoltage + (solarShuntVoltageMv / 1000.0f);
+    gWired.solarBusVoltage = solarMonitor.getBusVoltage_V();
+    gWired.solarShuntVoltageMv = solarMonitor.getShuntVoltage_mV();
+    gWired.solarCurrentMa = solarMonitor.getCurrent_mA();
+    gWired.solarPowerMw = solarMonitor.getPower_mW();
+    gWired.solarLoadVoltage = gWired.solarBusVoltage + (gWired.solarShuntVoltageMv / 1000.0f);
     solarMonitor.powerSave(true);
   }
 #endif
 
 #if ENABLE_MAX17048_BATTERY
-  float batteryVoltage = NAN, batterySoc = NAN;
-  bool batteryAlert = false;
   if (batteryMonitorOk) {
-    batteryVoltage = batteryGauge.getVoltage();
-    // A connected LiPo never reads 0.0 V, so 0.0 means the VCELL read failed —
-    // typically the wedged-driver state. Heal once and re-read before trusting
-    // the rest of the gauge registers.
-    if (batteryVoltage == 0.0f && i2cbus::healForRead()) {
-      batteryVoltage = batteryGauge.getVoltage();
+    gWired.batteryVoltage = batteryGauge.getVoltage();
+    // A connected LiPo never reads 0.0 V, so 0.0 means the VCELL read failed.
+    if (gWired.batteryVoltage == 0.0f && i2cbus::healForRead()) {
+      gWired.batteryVoltage = batteryGauge.getVoltage();
     }
-    batterySoc = batteryGauge.getSOC();
-    batteryAlert = batteryGauge.getAlert();
-    if (batteryAlert) batteryGauge.clearAlert();
+    gWired.batterySoc = batteryGauge.getSOC();
+    gWired.batteryAlert = batteryGauge.getAlert();
+    if (gWired.batteryAlert) batteryGauge.clearAlert();
   }
 #endif
 
-  // ── Wired scales (NAU7802): read now, before the radio, and cache per hive.
-  // The JSON assembly below consumes these cached results instead of reading
-  // live, so no scale transaction ever runs on a radio-wedged bus.
-  WiredScaleAgg scaleAgg[MAX_HIVES];
+  // ── Wired scales (NAU7802): cache one aggregate per hive. ──────────────────
   for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
     const hivecfg::Hive& hive = hivecfg::gHives[h];
-    WiredScaleAgg& agg = scaleAgg[h];
+    WiredScaleAgg& agg = gWired.scale[h];
     for (uint8_t s = 0; s < hive.scaleCount; s++) {
       const hivecfg::ScaleChannel& ch = hive.scales[s];
       if (ch.backend == hivecfg::ScaleBackend::None) continue;
@@ -326,6 +320,36 @@ String createMeasurementJson() {
                     rr.spread);
     }
   }
+}
+
+String createMeasurementJson() {
+  Serial.println("[MEASURE] Assembling upload from pre-radio wired snapshot...");
+
+  // The wired I2C sensors (SHT4x, INA219, MAX17048, NAU7802 scales) were
+  // captured by prefetchWiredSensors() BEFORE WiFi/BLE started, because radio
+  // start-up wedges the C6 I2C peripheral in a way Wire.end()/begin() cannot
+  // clear. Consume that snapshot here instead of reading live post-radio.
+  const float ambientTemp     = gWired.ambientTemp;
+  const float ambientHumidity = gWired.ambientHumidity;
+#if ENABLE_INA219_SOLAR
+  const float solarBusVoltage     = gWired.solarBusVoltage;
+  const float solarShuntVoltageMv = gWired.solarShuntVoltageMv;
+  const float solarLoadVoltage    = gWired.solarLoadVoltage;
+  const float solarCurrentMa      = gWired.solarCurrentMa;
+  const float solarPowerMw        = gWired.solarPowerMw;
+#endif
+#if ENABLE_MAX17048_BATTERY
+  const float batteryVoltage = gWired.batteryVoltage;
+  const float batterySoc     = gWired.batterySoc;
+  const bool  batteryAlert   = gWired.batteryAlert;
+#endif
+
+  // The RTC timestamp is the only I2C touched in this (post-radio) function;
+  // timestampNow() falls back to NTP/system time when the RTC is absent or its
+  // read fails, so a radio-wedged bus cannot break the timestamp.
+  i2cbus::resetReadHeals();
+  String measuredAt;
+  if (timeSource != "invalid") measuredAt = timestampNow();
 
   // ══ Phase 2: radio (BLE beacons + GATT). No I2C transaction runs past here. ═
   // ── In-hive BLE sensors (beacon + capped GATT) for ALL hives ───────────────
@@ -469,7 +493,7 @@ String createMeasurementJson() {
     // verified ADC channel + complete, stable sample set. Anything else marks
     // the hive scale_ok=false with weight_kg omitted (null), never a nonsense
     // value.
-    const WiredScaleAgg& agg = scaleAgg[h];
+    const WiredScaleAgg& agg = gWired.scale[h];
     if (agg.anyScale) {
       ho["weight_kg"]    = agg.weightSum;
       ho["raw_weight"]   = agg.firstRaw;
