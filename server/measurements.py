@@ -40,7 +40,7 @@ MEASUREMENT_INSERT_SQL = """
                     battery_alert, battery_monitor_ok, solar_monitor_ok,
                     solar_bus_voltage_v, solar_shunt_voltage_mv, solar_load_voltage_v,
                     solar_current_ma, solar_power_mw, network_transport,
-                    cellular_ok, cellular_csq, calibration_mode, boot_count,
+                    calibration_mode, boot_count,
                     time_source, rssi_dbm, firmware_version, config_version, sd_ok,
                     rtc_ok, sht_ok, scale_1_raw, scale_2_raw,
                     mic_ok, mic_sample_rate_hz, mic_sample_frames,
@@ -87,8 +87,8 @@ MEASUREMENT_INSERT_SQL = """
                     %(battery_alert)s, %(battery_monitor_ok)s, %(solar_monitor_ok)s,
                     %(solar_bus_voltage_v)s, %(solar_shunt_voltage_mv)s,
                     %(solar_load_voltage_v)s, %(solar_current_ma)s,
-                    %(solar_power_mw)s, %(network_transport)s, %(cellular_ok)s,
-                    %(cellular_csq)s, %(calibration_mode)s, %(boot_count)s,
+                    %(solar_power_mw)s, %(network_transport)s,
+                    %(calibration_mode)s, %(boot_count)s,
                     %(time_source)s, %(rssi_dbm)s, %(firmware_version)s,
                     %(config_version)s, %(sd_ok)s, %(rtc_ok)s, %(sht_ok)s,
                     %(scale_1_raw)s, %(scale_2_raw)s,
@@ -153,8 +153,6 @@ def measurement_insert_params(payload: "MeasurementIn", measured_at: datetime) -
         "solar_current_ma": payload.solar_current_ma,
         "solar_power_mw": payload.solar_power_mw,
         "network_transport": payload.network_transport,
-        "cellular_ok": payload.cellular_ok,
-        "cellular_csq": payload.cellular_csq,
         "calibration_mode": payload.calibration_mode,
         "boot_count": payload.boot_count,
         "time_source": payload.time_source,
@@ -574,103 +572,75 @@ def bulk_import_measurements(
 # ---------------------------------------------------------------------------
 # Indices for measurement_row_to_dict (keep in sync with SELECT below):
 #
-#  0  id                        17  scale_1_raw
-#  1  device_id                 18  scale_2_raw
-#  2  measured_at               19  battery_soc_percent
-#  3  received_at               20  battery_alert
-#  4  scale_1_weight_kg         21  battery_monitor_ok
-#  5  scale_2_weight_kg         22  solar_monitor_ok
-#  6  hive_1_temp_c             23  solar_bus_voltage_v
-#  7  hive_2_temp_c             24  solar_shunt_voltage_mv
-#  8  ambient_temp_c            25  solar_load_voltage_v
-#  9  ambient_humidity_percent  26  solar_current_ma
-# 10  battery_voltage           27  solar_power_mw
-# 11  rssi_dbm                  28  network_transport
-# 12  firmware_version          29  cellular_ok
-# 13  config_version            30  cellular_csq
-# 14  sd_ok                     31  calibration_mode
-# 15  rtc_ok                    32  boot_count
-# 16  sht_ok                    33  time_source
-#                               34  mic_ok
-#                               35  mic_sample_rate_hz
-#                               36  mic_sample_frames
-#                               37  mic_left_ok
-#                               38  mic_left_rms_dbfs
-#                               39  mic_left_peak_dbfs
-#                               40  mic_left_rms_normalized
-#                               41  mic_right_ok
-#                               42  mic_right_rms_dbfs
-#                               43  mic_right_peak_dbfs
-#                               44  mic_right_rms_normalized
-#                               45  mic_left_band_sub_bass_dbfs
-#                               46  mic_left_band_hum_dbfs
-#                               47  mic_left_band_piping_dbfs
-#                               48  mic_left_band_stress_dbfs
-#                               49  mic_left_band_high_dbfs
-#                               50  mic_right_band_sub_bass_dbfs
-#                               51  mic_right_band_hum_dbfs
-#                               52  mic_right_band_piping_dbfs
-#                               53  mic_right_band_stress_dbfs
-#                               54  mic_right_band_high_dbfs
-#                               55  bee_counter_1_ok
-#                               56  bee_counter_1_protocol_version
-#                               57  bee_counter_1_status_flags
-#                               58  bee_counter_1_uptime_s
-#                               59  bee_counter_1_num_gates
-#                               60  bee_counter_1_gates_healthy
-#                               61  bee_counter_1_total_in
-#                               62  bee_counter_1_total_out
-#                               63  bee_counter_1_interval_in
-#                               64  bee_counter_1_interval_out
-#                               65  bee_counter_1_glitch_count
-#                               66  bee_counter_1_busy_retries
-#                               67  bee_counter_1_read_attempts
-#                               68  bee_counter_1_latch_succeeded
-#                               69  bee_counter_2_ok
-#                               70  bee_counter_2_protocol_version
-#                               71  bee_counter_2_status_flags
-#                               72  bee_counter_2_uptime_s
-#                               73  bee_counter_2_num_gates
-#                               74  bee_counter_2_gates_healthy
-#                               75  bee_counter_2_total_in
-#                               76  bee_counter_2_total_out
-#                               77  bee_counter_2_interval_in
-#                               78  bee_counter_2_interval_out
-#                               79  bee_counter_2_glitch_count
-#                               80  bee_counter_2_busy_retries
-#                               81  bee_counter_2_read_attempts
-#                               82  bee_counter_2_latch_succeeded
-#                               83  accel_1_ok
-#                               84  accel_1_sample_rate_hz
-#                               85  accel_1_sample_count
-#                               86  accel_1_range_g
-#                               87  accel_1_rms_mg
-#                               88  accel_1_peak_mg
-#                               89  accel_1_band_swarm_mg
-#                               90  accel_1_band_fanning_mg
-#                               91  accel_1_band_activity_mg
-#                               92  accel_2_ok
-#                               93  accel_2_sample_rate_hz
-#                               94  accel_2_sample_count
-#                               95  accel_2_range_g
-#                               96  accel_2_rms_mg
-#                               97  accel_2_peak_mg
-#                               98  accel_2_band_swarm_mg
-#                               99  accel_2_band_fanning_mg
-#                              100  accel_2_band_activity_mg
-#                              101  ble_1_humidity_percent
-#                              102  ble_1_pressure_hpa
-#                              103  ble_2_humidity_percent
-#                              104  ble_2_pressure_hpa
-#                              105  hive_1_humidity_percent
-#                              106  hive_2_humidity_percent
-#  (107..130 hiveheart/hivescale fields — see SELECT order below)
-#                              131  ble_1_battery_percent
-#                              132  ble_1_rssi_dbm
-#                              133  ble_2_battery_percent
-#                              134  ble_2_rssi_dbm
-#                              135  ble_1_firmware_version
-#                              136  ble_2_firmware_version
+#   0  id                      69  bee_counter_2_status_flags
+#   1  device_id               70  bee_counter_2_uptime_s
+#   2  measured_at             71  bee_counter_2_num_gates
+#   3  received_at             72  bee_counter_2_gates_healthy
+#   4  scale_1_weight_kg       73  bee_counter_2_total_in
+#   5  scale_2_weight_kg       74  bee_counter_2_total_out
+#   6  hive_1_temp_c           75  bee_counter_2_interval_in
+#   7  hive_2_temp_c           76  bee_counter_2_interval_out
+#   8  ambient_temp_c          77  bee_counter_2_glitch_count
+#   9  ambient_humidity_percent 78  bee_counter_2_busy_retries
+#  10  battery_voltage         79  bee_counter_2_read_attempts
+#  11  rssi_dbm                80  bee_counter_2_latch_succeeded
+#  12  firmware_version        81  accel_1_ok
+#  13  config_version          82  accel_1_sample_rate_hz
+#  14  sd_ok                   83  accel_1_sample_count
+#  15  rtc_ok                  84  accel_1_range_g
+#  16  sht_ok                  85  accel_1_rms_mg
+#  17  scale_1_raw             86  accel_1_peak_mg
+#  18  scale_2_raw             87  accel_1_band_swarm_mg
+#  19  battery_soc_percent     88  accel_1_band_fanning_mg
+#  20  battery_alert           89  accel_1_band_activity_mg
+#  21  battery_monitor_ok      90  accel_2_ok
+#  22  solar_monitor_ok        91  accel_2_sample_rate_hz
+#  23  solar_bus_voltage_v     92  accel_2_sample_count
+#  24  solar_shunt_voltage_mv  93  accel_2_range_g
+#  25  solar_load_voltage_v    94  accel_2_rms_mg
+#  26  solar_current_ma        95  accel_2_peak_mg
+#  27  solar_power_mw          96  accel_2_band_swarm_mg
+#  28  network_transport       97  accel_2_band_fanning_mg
+#  29  calibration_mode        98  accel_2_band_activity_mg
+#  30  boot_count              99  ble_1_humidity_percent
+#  31  time_source            100  ble_1_pressure_hpa
+#  32  mic_ok                 101  ble_2_humidity_percent
+#  33  mic_sample_rate_hz     102  ble_2_pressure_hpa
+#  34  mic_sample_frames      103  hive_1_humidity_percent
+#  35  mic_left_ok            104  hive_2_humidity_percent
+#  36  mic_left_rms_dbfs      105  hiveheart_1_frequency_hz
+#  37  mic_left_peak_dbfs     106  hiveheart_1_energy
+#  38  mic_left_rms_normalized107  hiveheart_1_peak
+#  39  mic_right_ok           108  hiveheart_1_battery_v
+#  40  mic_right_rms_dbfs     109  hiveheart_1_temp_c
+#  41  mic_right_peak_dbfs    110  hiveheart_1_humidity_percent
+#  42  mic_right_rms_normalized111  hiveheart_2_frequency_hz
+#  43  mic_left_band_sub_bass_dbfs112  hiveheart_2_energy
+#  44  mic_left_band_hum_dbfs 113  hiveheart_2_peak
+#  45  mic_left_band_piping_dbfs114  hiveheart_2_battery_v
+#  46  mic_left_band_stress_dbfs115  hiveheart_2_temp_c
+#  47  mic_left_band_high_dbfs116  hiveheart_2_humidity_percent
+#  48  mic_right_band_sub_bass_dbfs117  hivescale_1_weight_kg
+#  49  mic_right_band_hum_dbfs118  hivescale_1_raw_weight
+#  50  mic_right_band_piping_dbfs119  hivescale_1_temp_c
+#  51  mic_right_band_stress_dbfs120  hivescale_1_humidity_percent
+#  52  mic_right_band_high_dbfs121  hivescale_1_pressure_hpa
+#  53  bee_counter_1_ok       122  hivescale_1_battery_v
+#  54  bee_counter_1_protocol_version123  hivescale_2_weight_kg
+#  55  bee_counter_1_status_flags124  hivescale_2_raw_weight
+#  56  bee_counter_1_uptime_s 125  hivescale_2_temp_c
+#  57  bee_counter_1_num_gates126  hivescale_2_humidity_percent
+#  58  bee_counter_1_gates_healthy127  hivescale_2_pressure_hpa
+#  59  bee_counter_1_total_in 128  hivescale_2_battery_v
+#  60  bee_counter_1_total_out129  ble_1_battery_percent
+#  61  bee_counter_1_interval_in130  ble_1_rssi_dbm
+#  62  bee_counter_1_interval_out131  ble_2_battery_percent
+#  63  bee_counter_1_glitch_count132  ble_2_rssi_dbm
+#  64  bee_counter_1_busy_retries133  ble_1_firmware_version
+#  65  bee_counter_1_read_attempts134  ble_2_firmware_version
+#  66  bee_counter_1_latch_succeeded135  hiveheart_1_fft
+#  67  bee_counter_2_ok       136  hiveheart_2_fft
+#  68  bee_counter_2_protocol_version
 # ---------------------------------------------------------------------------
 
 MEASUREMENT_SELECT_COLUMNS = """
@@ -690,8 +660,6 @@ MEASUREMENT_SELECT_COLUMNS = """
     COALESCE(solar_current_ma, NULLIF(raw_json->>'solar_current_ma', '')::double precision) AS solar_current_ma,
     COALESCE(solar_power_mw, NULLIF(raw_json->>'solar_power_mw', '')::double precision) AS solar_power_mw,
     COALESCE(network_transport, raw_json->>'network_transport') AS network_transport,
-    COALESCE(cellular_ok, NULLIF(raw_json->>'cellular_ok', '')::boolean) AS cellular_ok,
-    COALESCE(cellular_csq, NULLIF(raw_json->>'cellular_csq', '')::integer) AS cellular_csq,
     COALESCE(calibration_mode, NULLIF(raw_json->>'calibration_mode', '')::boolean) AS calibration_mode,
     COALESCE(boot_count, NULLIF(raw_json->>'boot_count', '')::bigint) AS boot_count,
     COALESCE(time_source, raw_json->>'time_source') AS time_source,
@@ -915,133 +883,131 @@ def measurement_row_to_dict(r):
         "solar_current_ma": r[26],
         "solar_power_mw": r[27],
         "network_transport": r[28],
-        "cellular_ok": r[29],
-        "cellular_csq": r[30],
-        "calibration_mode": r[31],
-        "boot_count": r[32],
-        "time_source": r[33],
+        "calibration_mode": r[29],
+        "boot_count": r[30],
+        "time_source": r[31],
         # mic telemetry
-        "mic_ok": r[34],
-        "mic_sample_rate_hz": r[35],
-        "mic_sample_frames": r[36],
-        "mic_left_ok": r[37],
-        "mic_left_rms_dbfs": r[38],
-        "mic_left_peak_dbfs": r[39],
-        "mic_left_rms_normalized": r[40],
-        "mic_right_ok": r[41],
-        "mic_right_rms_dbfs": r[42],
-        "mic_right_peak_dbfs": r[43],
-        "mic_right_rms_normalized": r[44],
+        "mic_ok": r[32],
+        "mic_sample_rate_hz": r[33],
+        "mic_sample_frames": r[34],
+        "mic_left_ok": r[35],
+        "mic_left_rms_dbfs": r[36],
+        "mic_left_peak_dbfs": r[37],
+        "mic_left_rms_normalized": r[38],
+        "mic_right_ok": r[39],
+        "mic_right_rms_dbfs": r[40],
+        "mic_right_peak_dbfs": r[41],
+        "mic_right_rms_normalized": r[42],
         # fft frequency band energy
-        "mic_left_band_sub_bass_dbfs":  r[45],
-        "mic_left_band_hum_dbfs":       r[46],
-        "mic_left_band_piping_dbfs":    r[47],
-        "mic_left_band_stress_dbfs":    r[48],
-        "mic_left_band_high_dbfs":      r[49],
-        "mic_right_band_sub_bass_dbfs": r[50],
-        "mic_right_band_hum_dbfs":      r[51],
-        "mic_right_band_piping_dbfs":   r[52],
-        "mic_right_band_stress_dbfs":   r[53],
-        "mic_right_band_high_dbfs":     r[54],
+        "mic_left_band_sub_bass_dbfs":  r[43],
+        "mic_left_band_hum_dbfs":       r[44],
+        "mic_left_band_piping_dbfs":    r[45],
+        "mic_left_band_stress_dbfs":    r[46],
+        "mic_left_band_high_dbfs":      r[47],
+        "mic_right_band_sub_bass_dbfs": r[48],
+        "mic_right_band_hum_dbfs":      r[49],
+        "mic_right_band_piping_dbfs":   r[50],
+        "mic_right_band_stress_dbfs":   r[51],
+        "mic_right_band_high_dbfs":     r[52],
         # bee counter (per-hive entrance counters)
-        "bee_counter_1_ok":                r[55],
-        "bee_counter_1_protocol_version":  r[56],
-        "bee_counter_1_status_flags":      r[57],
-        "bee_counter_1_uptime_s":          r[58],
-        "bee_counter_1_num_gates":         r[59],
-        "bee_counter_1_gates_healthy":     r[60],
-        "bee_counter_1_total_in":          r[61],
-        "bee_counter_1_total_out":         r[62],
-        "bee_counter_1_interval_in":       r[63],
-        "bee_counter_1_interval_out":      r[64],
-        "bee_counter_1_glitch_count":      r[65],
-        "bee_counter_1_busy_retries":      r[66],
-        "bee_counter_1_read_attempts":     r[67],
-        "bee_counter_1_latch_succeeded":   r[68],
-        "bee_counter_2_ok":                r[69],
-        "bee_counter_2_protocol_version":  r[70],
-        "bee_counter_2_status_flags":      r[71],
-        "bee_counter_2_uptime_s":          r[72],
-        "bee_counter_2_num_gates":         r[73],
-        "bee_counter_2_gates_healthy":     r[74],
-        "bee_counter_2_total_in":          r[75],
-        "bee_counter_2_total_out":         r[76],
-        "bee_counter_2_interval_in":       r[77],
-        "bee_counter_2_interval_out":      r[78],
-        "bee_counter_2_glitch_count":      r[79],
-        "bee_counter_2_busy_retries":      r[80],
-        "bee_counter_2_read_attempts":     r[81],
-        "bee_counter_2_latch_succeeded":   r[82],
+        "bee_counter_1_ok":                r[53],
+        "bee_counter_1_protocol_version":  r[54],
+        "bee_counter_1_status_flags":      r[55],
+        "bee_counter_1_uptime_s":          r[56],
+        "bee_counter_1_num_gates":         r[57],
+        "bee_counter_1_gates_healthy":     r[58],
+        "bee_counter_1_total_in":          r[59],
+        "bee_counter_1_total_out":         r[60],
+        "bee_counter_1_interval_in":       r[61],
+        "bee_counter_1_interval_out":      r[62],
+        "bee_counter_1_glitch_count":      r[63],
+        "bee_counter_1_busy_retries":      r[64],
+        "bee_counter_1_read_attempts":     r[65],
+        "bee_counter_1_latch_succeeded":   r[66],
+        "bee_counter_2_ok":                r[67],
+        "bee_counter_2_protocol_version":  r[68],
+        "bee_counter_2_status_flags":      r[69],
+        "bee_counter_2_uptime_s":          r[70],
+        "bee_counter_2_num_gates":         r[71],
+        "bee_counter_2_gates_healthy":     r[72],
+        "bee_counter_2_total_in":          r[73],
+        "bee_counter_2_total_out":         r[74],
+        "bee_counter_2_interval_in":       r[75],
+        "bee_counter_2_interval_out":      r[76],
+        "bee_counter_2_glitch_count":      r[77],
+        "bee_counter_2_busy_retries":      r[78],
+        "bee_counter_2_read_attempts":     r[79],
+        "bee_counter_2_latch_succeeded":   r[80],
         # accelerometer (per-hive vibration, mg)
-        "accel_1_ok":                r[83],
-        "accel_1_sample_rate_hz":    r[84],
-        "accel_1_sample_count":      r[85],
-        "accel_1_range_g":           r[86],
-        "accel_1_rms_mg":            r[87],
-        "accel_1_peak_mg":           r[88],
-        "accel_1_band_swarm_mg":     r[89],
-        "accel_1_band_fanning_mg":   r[90],
-        "accel_1_band_activity_mg":  r[91],
-        "accel_2_ok":                r[92],
-        "accel_2_sample_rate_hz":    r[93],
-        "accel_2_sample_count":      r[94],
-        "accel_2_range_g":           r[95],
-        "accel_2_rms_mg":            r[96],
-        "accel_2_peak_mg":           r[97],
-        "accel_2_band_swarm_mg":     r[98],
-        "accel_2_band_fanning_mg":   r[99],
-        "accel_2_band_activity_mg":  r[100],
+        "accel_1_ok":                r[81],
+        "accel_1_sample_rate_hz":    r[82],
+        "accel_1_sample_count":      r[83],
+        "accel_1_range_g":           r[84],
+        "accel_1_rms_mg":            r[85],
+        "accel_1_peak_mg":           r[86],
+        "accel_1_band_swarm_mg":     r[87],
+        "accel_1_band_fanning_mg":   r[88],
+        "accel_1_band_activity_mg":  r[89],
+        "accel_2_ok":                r[90],
+        "accel_2_sample_rate_hz":    r[91],
+        "accel_2_sample_count":      r[92],
+        "accel_2_range_g":           r[93],
+        "accel_2_rms_mg":            r[94],
+        "accel_2_peak_mg":           r[95],
+        "accel_2_band_swarm_mg":     r[96],
+        "accel_2_band_fanning_mg":   r[97],
+        "accel_2_band_activity_mg":  r[98],
         # HolyIot 25015 in-hive BLE sensor (per hive)
-        "ble_1_humidity_percent":    r[101],
-        "ble_1_pressure_hpa":        r[102],
-        "ble_2_humidity_percent":    r[103],
-        "ble_2_pressure_hpa":        r[104],
+        "ble_1_humidity_percent":    r[99],
+        "ble_1_pressure_hpa":        r[100],
+        "ble_2_humidity_percent":    r[101],
+        "ble_2_pressure_hpa":        r[102],
         # In-hive relative humidity (mirrors hive_N_temp_c; appended last).
-        "hive_1_humidity_percent":   r[105],
-        "hive_2_humidity_percent":   r[106],
+        "hive_1_humidity_percent":   r[103],
+        "hive_2_humidity_percent":   r[104],
         # beehivemonitoring.com GATT sensors (HiveHeart / HiveScale).
         # NOTE: hiveheart_N_temp_c / hiveheart_N_humidity_percent are SELECTed
         # (they are kept "independently visible" per the MeasurementIn comment)
         # and so MUST be mapped here — omitting them shifts every positional
         # index below them and silently mis-reads hiveheart_2_* / hivescale_*.
-        "hiveheart_1_frequency_hz":     r[107],
-        "hiveheart_1_energy":           r[108],
-        "hiveheart_1_peak":             r[109],
-        "hiveheart_1_battery_v":        r[110],
-        "hiveheart_1_temp_c":           r[111],
-        "hiveheart_1_humidity_percent": r[112],
-        "hiveheart_2_frequency_hz":     r[113],
-        "hiveheart_2_energy":           r[114],
-        "hiveheart_2_peak":             r[115],
-        "hiveheart_2_battery_v":        r[116],
-        "hiveheart_2_temp_c":           r[117],
-        "hiveheart_2_humidity_percent": r[118],
-        "hivescale_1_weight_kg":        r[119],
-        "hivescale_1_raw_weight":       r[120],
-        "hivescale_1_temp_c":           r[121],
-        "hivescale_1_humidity_percent": r[122],
-        "hivescale_1_pressure_hpa":     r[123],
-        "hivescale_1_battery_v":        r[124],
-        "hivescale_2_weight_kg":        r[125],
-        "hivescale_2_raw_weight":       r[126],
-        "hivescale_2_temp_c":           r[127],
-        "hivescale_2_humidity_percent": r[128],
-        "hivescale_2_pressure_hpa":     r[129],
-        "hivescale_2_battery_v":        r[130],
+        "hiveheart_1_frequency_hz":     r[105],
+        "hiveheart_1_energy":           r[106],
+        "hiveheart_1_peak":             r[107],
+        "hiveheart_1_battery_v":        r[108],
+        "hiveheart_1_temp_c":           r[109],
+        "hiveheart_1_humidity_percent": r[110],
+        "hiveheart_2_frequency_hz":     r[111],
+        "hiveheart_2_energy":           r[112],
+        "hiveheart_2_peak":             r[113],
+        "hiveheart_2_battery_v":        r[114],
+        "hiveheart_2_temp_c":           r[115],
+        "hiveheart_2_humidity_percent": r[116],
+        "hivescale_1_weight_kg":        r[117],
+        "hivescale_1_raw_weight":       r[118],
+        "hivescale_1_temp_c":           r[119],
+        "hivescale_1_humidity_percent": r[120],
+        "hivescale_1_pressure_hpa":     r[121],
+        "hivescale_1_battery_v":        r[122],
+        "hivescale_2_weight_kg":        r[123],
+        "hivescale_2_raw_weight":       r[124],
+        "hivescale_2_temp_c":           r[125],
+        "hivescale_2_humidity_percent": r[126],
+        "hivescale_2_pressure_hpa":     r[127],
+        "hivescale_2_battery_v":        r[128],
         # HolyIot 25015 / HiveInside in-hive BLE sensor battery + link RSSI.
         # Stored in raw_json on ingest; surfaced here so the app can show a
         # per-sensor charge level (HolyIot reports %, HiveInside reports % too —
         # 0% while USB-powered). Appended last in the SELECT.
-        "ble_1_battery_percent":        r[131],
-        "ble_1_rssi_dbm":               r[132],
-        "ble_2_battery_percent":        r[133],
-        "ble_2_rssi_dbm":               r[134],
-        "ble_1_firmware_version":       r[135],
-        "ble_2_firmware_version":       r[136],
+        "ble_1_battery_percent":        r[129],
+        "ble_1_rssi_dbm":               r[130],
+        "ble_2_battery_percent":        r[131],
+        "ble_2_rssi_dbm":               r[132],
+        "ble_1_firmware_version":       r[133],
+        "ble_2_firmware_version":       r[134],
         # Raw HiveHeart FFT arrays from raw_json (legacy flat rows). Decoded into
         # fft_bins by attach_hive_readings → _attach_hiveheart_fft_bins.
-        "hiveheart_1_fft":              r[137],
-        "hiveheart_2_fft":              r[138],
+        "hiveheart_1_fft":              r[135],
+        "hiveheart_2_fft":              r[136],
     }
 
 

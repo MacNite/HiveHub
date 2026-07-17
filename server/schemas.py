@@ -179,8 +179,6 @@ class MeasurementIn(BaseModel):
     solar_current_ma: Optional[float] = None
     solar_power_mw: Optional[float] = None
     network_transport: Optional[str] = None
-    cellular_ok: Optional[bool] = None
-    cellular_csq: Optional[int] = None
     calibration_mode: Optional[bool] = None
     boot_count: Optional[int] = None
     time_source: Optional[str] = None
