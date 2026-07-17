@@ -75,23 +75,53 @@ MQTT_HA_EXPIRE_AFTER = int(os.environ.get("MQTT_HA_EXPIRE_AFTER", "0"))
 # detection below.
 _MQTT_MAX_HIVES = int(os.environ.get("MQTT_MAX_HIVES", "18"))
 
-# Per-hive fields that live inside a hive's nested sensor sub-objects
-# (hiveheart / ble beacon / hivescale). These are flattened onto hive_<n>_<field>
-# keys so they ride along in the state JSON and get their own Home Assistant
-# entities, exactly the way weight/temp/humidity already do — sparing consumers
-# from scraping the REST API for them. Each field is coalesced from the listed
-# sub-objects in priority order: a hive usually carries just one of these
-# wireless in-hive sensors, so e.g. hive_3_battery_v picks up whichever of the
-# HiveHeart or HiveScale on hive 3 actually reports a battery voltage.
-# (field, [(sub_object, sub_key), ...])
-_HIVE_SUBSENSOR_FIELDS: list[tuple[str, list[tuple[str, str]]]] = [
-    ("frequency_hz",    [("hiveheart", "frequency_hz")]),
-    ("energy",          [("hiveheart", "energy")]),
-    ("peak",            [("hiveheart", "peak")]),
-    ("battery_v",       [("hiveheart", "battery_v"), ("hivescale", "battery_v")]),
-    ("battery_percent", [("ble", "battery_percent")]),
-    ("rssi_dbm",        [("hiveheart", "rssi_dbm"), ("ble", "rssi_dbm"), ("hivescale", "rssi_dbm")]),
+# In-hive wireless sensor modules a single hive can carry. Each is its own
+# physical device — a beehivemonitoring.com HiveHeart or HiveScale read over
+# GATT, or a HolyIOT BLE beacon — so each is exposed as a distinct Home Assistant
+# device (linked to the ESP32 hub via `via_device`) with its own battery and
+# link-signal entities. That way a hive carrying both a scale and a HolyIOT
+# reports a separate signal and battery for each, attributed to the right device,
+# instead of one coalesced value. Their fields are flattened onto
+# <source>_<n>_<field> keys (see _flatten_hives) — the same names the legacy flat
+# firmware already emits for hives 1–2, so both payload shapes line up.
+#
+# (source, manufacturer, model, label,
+#  [(field, metric, unit, device_class, state_class, icon), ...])
+_HIVE_SUBDEVICES: list[tuple[str, str, str, str, list]] = [
+    ("hiveheart", "beehivemonitoring.com", "HiveHeart", "HiveHeart", [
+        ("frequency_hz", "sound frequency", "Hz",  "frequency",       "measurement", "mdi:sine-wave"),
+        ("energy",       "sound energy",    None,  None,              "measurement", "mdi:flash"),
+        ("peak",         "sound peak",      None,  None,              "measurement", "mdi:chart-bell-curve"),
+        ("battery_v",    "battery",         "V",   "voltage",         "measurement", None),
+        ("rssi_dbm",     "signal",          "dBm", "signal_strength", "measurement", None),
+    ]),
+    ("hivescale", "beehivemonitoring.com", "HiveScale", "scale", [
+        ("battery_v",    "battery",         "V",   "voltage",         "measurement", None),
+        ("rssi_dbm",     "signal",          "dBm", "signal_strength", "measurement", None),
+    ]),
+    ("ble", "HolyIOT", "In-hive BLE sensor", "HolyIOT", [
+        ("battery_percent", "battery",      "%",   "battery",         "measurement", None),
+        ("rssi_dbm",        "signal",       "dBm", "signal_strength", "measurement", None),
+    ]),
 ]
+
+# source -> flat field names, derived from the catalogue above (used by the
+# flattener and the present-hive detection).
+_SUBDEVICE_FIELDS: dict[str, list[str]] = {
+    source: [f[0] for f in fields] for source, _, _, _, fields in _HIVE_SUBDEVICES
+}
+
+
+def _hive_subdevices(n: int):
+    """Yield (source, manufacturer, model, label, sensors) for hive ``n``'s
+    in-hive devices, where ``sensors`` are (key, name, unit, device_class,
+    state_class, icon) tuples keyed on the flat ``<source>_<n>_<field>`` keys."""
+    for source, manufacturer, model, label, fields in _HIVE_SUBDEVICES:
+        sensors = [
+            (f"{source}_{n}_{field}", f"Hive {n} {label} {metric}", unit, dclass, sclass, icon)
+            for field, metric, unit, dclass, sclass, icon in fields
+        ]
+        yield source, manufacturer, model, label, sensors
 
 # Tuple: (json_key, friendly_name, unit, device_class, state_class, icon)
 # Device-level sensors (one set per device, published once).
@@ -117,15 +147,9 @@ def _hive_sensors(n: int):
         (f"bee_counter_{n}_total_out",  f"Hive {n} bees out (total)",  None, None,          "total_increasing", "mdi:bee"),
         (f"bee_counter_{n}_interval_in",  f"Hive {n} bees in",         None, None,          "measurement",      "mdi:bee"),
         (f"bee_counter_{n}_interval_out", f"Hive {n} bees out",        None, None,          "measurement",      "mdi:bee"),
-        # In-hive wireless-sensor telemetry (HiveHeart / BLE beacon / HiveScale),
-        # flattened from the per-hive sub-objects by _flatten_hives. Absent on
-        # hives without such a sensor — the value_template then renders nothing.
-        (f"hive_{n}_frequency_hz",        f"Hive {n} sound frequency", "Hz",  "frequency",       "measurement", "mdi:sine-wave"),
-        (f"hive_{n}_energy",              f"Hive {n} sound energy",    None,  None,              "measurement", "mdi:flash"),
-        (f"hive_{n}_peak",                f"Hive {n} sound peak",      None,  None,              "measurement", "mdi:chart-bell-curve"),
-        (f"hive_{n}_battery_v",           f"Hive {n} sensor battery",  "V",   "voltage",         "measurement", None),
-        (f"hive_{n}_battery_percent",     f"Hive {n} sensor battery %", "%",  "battery",         "measurement", None),
-        (f"hive_{n}_rssi_dbm",            f"Hive {n} sensor signal",   "dBm", "signal_strength", "measurement", None),
+        # The in-hive wireless-sensor telemetry (HiveHeart sound + each module's
+        # battery/signal) is published separately, per physical device, via
+        # _hive_subdevices — see _HIVE_SUBDEVICES.
     ]
     # Temperature-compensated weight. The backend's compensation model carries a
     # coefficient only for scales 1 and 2 (scale{1,2}_tempco_kg_per_c), so the
@@ -157,27 +181,16 @@ def _flatten_hives(payload: dict) -> None:
         for k in ("total_in", "total_out", "interval_in", "interval_out"):
             if bc.get(k) is not None:
                 payload[f"bee_counter_{n}_{k}"] = bc[k]
-        # In-hive wireless-sensor fields (HiveHeart / BLE beacon / HiveScale),
-        # coalesced from the hive's sensor sub-objects (see _HIVE_SUBSENSOR_FIELDS).
-        for field, sources in _HIVE_SUBSENSOR_FIELDS:
-            for sub, key in sources:
-                val = (h.get(sub) or {}).get(key)
-                if val is not None:
-                    payload[f"hive_{n}_{field}"] = val
-                    break
-    # Legacy flat firmware (hives 1–2) reports these same sub-sensor fields as
-    # top-level hiveheart_N_/ble_N_/hivescale_N_ keys rather than a hives[] array;
-    # bridge them onto the same hive_N_<field> keys so both payload shapes expose
-    # identical entities. Never overwrite a value already flattened from hives[].
-    for n in (1, 2):
-        for field, sources in _HIVE_SUBSENSOR_FIELDS:
-            if payload.get(f"hive_{n}_{field}") is not None:
-                continue
-            for sub, key in sources:
-                val = payload.get(f"{sub}_{n}_{key}")
-                if val is not None:
-                    payload[f"hive_{n}_{field}"] = val
-                    break
+        # In-hive wireless sensor modules (HiveHeart / HiveScale / HolyIOT BLE) —
+        # each flattened onto its own <source>_<n>_<field> keys so every physical
+        # device keeps a distinct battery/signal entity (see _HIVE_SUBDEVICES).
+        # Legacy flat firmware (hives 1–2) already emits these exact keys at the
+        # top level, so nothing extra is needed for that payload shape.
+        for source, fields in _SUBDEVICE_FIELDS.items():
+            sub_obj = h.get(source) or {}
+            for field in fields:
+                if sub_obj.get(field) is not None:
+                    payload[f"{source}_{n}_{field}"] = sub_obj[field]
 
 
 def _present_hive_indices(payload: dict) -> set[int]:
@@ -190,6 +203,13 @@ def _present_hive_indices(payload: dict) -> set[int]:
     for n in range(1, _MQTT_MAX_HIVES + 1):
         if payload.get(f"scale_{n}_weight_kg") is not None or payload.get(f"hive_{n}_temp_c") is not None:
             idx.add(n)
+            continue
+        # A hive may carry only an in-hive module (e.g. a HolyIOT- or HiveScale-
+        # only hive with no wired probe); detect those from their flat keys too.
+        for source, fields in _SUBDEVICE_FIELDS.items():
+            if any(payload.get(f"{source}_{n}_{field}") is not None for field in fields):
+                idx.add(n)
+                break
     return idx
 
 
@@ -240,6 +260,10 @@ class MqttPublisher:
         # Per-device set of hive indices we have published hive discovery for, so
         # a hive that appears later (e.g. added in the portal) still gets entities.
         self._discovered_hives: dict[str, set[int]] = {}
+        # Per-device set of "<hive>:<source>" tags for in-hive sub-devices already
+        # announced, so each module (scale / HiveHeart / HolyIOT) is discovered
+        # only once it actually reports.
+        self._discovered_subdevices: dict[str, set[str]] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -333,6 +357,7 @@ class MqttPublisher:
         # after a broker restart that dropped the retained discovery configs.
         self._discovered.clear()
         self._discovered_hives.clear()
+        self._discovered_subdevices.clear()
 
     def _on_disconnect(self, client, userdata, *args) -> None:
         self._connected = False
@@ -391,10 +416,27 @@ class MqttPublisher:
                     self._discovered.add(device_id)
                 # Publish per-hive discovery for any hive index not yet seen.
                 seen = self._discovered_hives.setdefault(device_id, set())
+                seen_sub = self._discovered_subdevices.setdefault(device_id, set())
                 for n in sorted(_present_hive_indices(payload)):
                     if n not in seen:
                         self._publish_sensor_configs(client, device_id, display_name, _hive_sensors(n))
                         seen.add(n)
+                    # Announce each in-hive module (scale / HiveHeart / HolyIOT) as
+                    # its own HA device, but only once it actually reports — so a
+                    # hive without a HiveHeart never sprouts empty sound entities.
+                    for source, manufacturer, model, label, sensors in _hive_subdevices(n):
+                        tag = f"{n}:{source}"
+                        if tag in seen_sub:
+                            continue
+                        if not any(payload.get(s[0]) is not None for s in sensors):
+                            continue
+                        block = self._subdevice_block(
+                            device_id, display_name, n, source, manufacturer, model, label
+                        )
+                        self._publish_sensor_configs(
+                            client, device_id, display_name, sensors, device_block=block
+                        )
+                        seen_sub.add(tag)
 
             client.publish(
                 self._device_availability_topic(device_id),
@@ -416,11 +458,25 @@ class MqttPublisher:
             "model": "ESP32 Dual Beehive Scale",
         }
 
+    def _subdevice_block(self, device_id: str, display_name: Optional[str], n: int,
+                         source: str, manufacturer: str, model: str, label: str) -> dict[str, Any]:
+        """HA device block for an in-hive module, nested under the ESP32 hub via
+        ``via_device`` so it shows up as a child of the hub it is bridged through."""
+        node = device_id.replace("/", "_").replace("+", "_").replace("#", "_")
+        return {
+            "identifiers": [f"hivescale_{node}_hive{n}_{source}"],
+            "name": f"{display_name or device_id} Hive {n} {label}",
+            "manufacturer": manufacturer,
+            "model": model,
+            "via_device": f"hivescale_{device_id}",
+        }
+
     def _publish_sensor_configs(self, client, device_id: str, display_name: Optional[str],
-                                sensors) -> None:
+                                sensors, device_block: Optional[dict[str, Any]] = None) -> None:
         state_topic = self._device_state_topic(device_id)
         availability_topic = self._device_availability_topic(device_id)
-        device_block = self._device_block(device_id, display_name)
+        if device_block is None:
+            device_block = self._device_block(device_id, display_name)
 
         for key, name, unit, device_class, state_class, icon in sensors:
             node = device_id.replace("/", "_").replace("+", "_").replace("#", "_")
