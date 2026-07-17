@@ -75,6 +75,24 @@ MQTT_HA_EXPIRE_AFTER = int(os.environ.get("MQTT_HA_EXPIRE_AFTER", "0"))
 # detection below.
 _MQTT_MAX_HIVES = int(os.environ.get("MQTT_MAX_HIVES", "18"))
 
+# Per-hive fields that live inside a hive's nested sensor sub-objects
+# (hiveheart / ble beacon / hivescale). These are flattened onto hive_<n>_<field>
+# keys so they ride along in the state JSON and get their own Home Assistant
+# entities, exactly the way weight/temp/humidity already do — sparing consumers
+# from scraping the REST API for them. Each field is coalesced from the listed
+# sub-objects in priority order: a hive usually carries just one of these
+# wireless in-hive sensors, so e.g. hive_3_battery_v picks up whichever of the
+# HiveHeart or HiveScale on hive 3 actually reports a battery voltage.
+# (field, [(sub_object, sub_key), ...])
+_HIVE_SUBSENSOR_FIELDS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("frequency_hz",    [("hiveheart", "frequency_hz")]),
+    ("energy",          [("hiveheart", "energy")]),
+    ("peak",            [("hiveheart", "peak")]),
+    ("battery_v",       [("hiveheart", "battery_v"), ("hivescale", "battery_v")]),
+    ("battery_percent", [("ble", "battery_percent")]),
+    ("rssi_dbm",        [("hiveheart", "rssi_dbm"), ("ble", "rssi_dbm"), ("hivescale", "rssi_dbm")]),
+]
+
 # Tuple: (json_key, friendly_name, unit, device_class, state_class, icon)
 # Device-level sensors (one set per device, published once).
 _HA_SENSORS: list[tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]]] = [
@@ -99,6 +117,15 @@ def _hive_sensors(n: int):
         (f"bee_counter_{n}_total_out",  f"Hive {n} bees out (total)",  None, None,          "total_increasing", "mdi:bee"),
         (f"bee_counter_{n}_interval_in",  f"Hive {n} bees in",         None, None,          "measurement",      "mdi:bee"),
         (f"bee_counter_{n}_interval_out", f"Hive {n} bees out",        None, None,          "measurement",      "mdi:bee"),
+        # In-hive wireless-sensor telemetry (HiveHeart / BLE beacon / HiveScale),
+        # flattened from the per-hive sub-objects by _flatten_hives. Absent on
+        # hives without such a sensor — the value_template then renders nothing.
+        (f"hive_{n}_frequency_hz",        f"Hive {n} sound frequency", "Hz",  "frequency",       "measurement", "mdi:sine-wave"),
+        (f"hive_{n}_energy",              f"Hive {n} sound energy",    None,  None,              "measurement", "mdi:flash"),
+        (f"hive_{n}_peak",                f"Hive {n} sound peak",      None,  None,              "measurement", "mdi:chart-bell-curve"),
+        (f"hive_{n}_battery_v",           f"Hive {n} sensor battery",  "V",   "voltage",         "measurement", None),
+        (f"hive_{n}_battery_percent",     f"Hive {n} sensor battery %", "%",  "battery",         "measurement", None),
+        (f"hive_{n}_rssi_dbm",            f"Hive {n} sensor signal",   "dBm", "signal_strength", "measurement", None),
     ]
     # Temperature-compensated weight. The backend's compensation model carries a
     # coefficient only for scales 1 and 2 (scale{1,2}_tempco_kg_per_c), so the
@@ -130,6 +157,27 @@ def _flatten_hives(payload: dict) -> None:
         for k in ("total_in", "total_out", "interval_in", "interval_out"):
             if bc.get(k) is not None:
                 payload[f"bee_counter_{n}_{k}"] = bc[k]
+        # In-hive wireless-sensor fields (HiveHeart / BLE beacon / HiveScale),
+        # coalesced from the hive's sensor sub-objects (see _HIVE_SUBSENSOR_FIELDS).
+        for field, sources in _HIVE_SUBSENSOR_FIELDS:
+            for sub, key in sources:
+                val = (h.get(sub) or {}).get(key)
+                if val is not None:
+                    payload[f"hive_{n}_{field}"] = val
+                    break
+    # Legacy flat firmware (hives 1–2) reports these same sub-sensor fields as
+    # top-level hiveheart_N_/ble_N_/hivescale_N_ keys rather than a hives[] array;
+    # bridge them onto the same hive_N_<field> keys so both payload shapes expose
+    # identical entities. Never overwrite a value already flattened from hives[].
+    for n in (1, 2):
+        for field, sources in _HIVE_SUBSENSOR_FIELDS:
+            if payload.get(f"hive_{n}_{field}") is not None:
+                continue
+            for sub, key in sources:
+                val = payload.get(f"{sub}_{n}_{key}")
+                if val is not None:
+                    payload[f"hive_{n}_{field}"] = val
+                    break
 
 
 def _present_hive_indices(payload: dict) -> set[int]:

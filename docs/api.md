@@ -78,7 +78,7 @@ Health check. No authentication required. `version` is the backend server
 version (`SERVER_VERSION` in `server/config.py`).
 
 ```json
-{ "status": "ok", "version": "0.1.0" }
+{ "status": "ok", "version": "0.2.0" }
 ```
 
 ### `GET /api/v1/time`

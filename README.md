@@ -353,8 +353,10 @@ When `MQTT_HA_DISCOVERY=true`, the bridge publishes
 configs the first time it sees each device. Home Assistant then automatically
 creates one device per scale with a curated set of sensors — scale weights,
 hive/ambient temperature & humidity, battery voltage/charge, solar power, Wi-Fi
-signal, and bee-counter totals. All other fields remain available in the raw
-`state` JSON for custom templated sensors. Just make sure the
+signal, bee-counter totals, and — per hive — the in-hive wireless sensor
+telemetry (HiveHeart sound frequency/energy/peak, plus the in-hive sensor's
+battery voltage, battery %, and link signal). All other fields remain available
+in the raw `state` JSON for custom templated sensors. Just make sure the
 [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) is set up
 and pointed at the same broker.
 
