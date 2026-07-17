@@ -355,11 +355,13 @@ creates one device per scale with a curated set of sensors — scale weights,
 hive/ambient temperature & humidity, battery voltage/charge, solar power, Wi-Fi
 signal, and bee-counter totals. Any in-hive wireless modules (a
 beehivemonitoring.com HiveHeart/HiveScale or a HolyIOT BLE sensor) are exposed
-as their own Home Assistant devices, nested under the hub, each with its own
-battery and link-signal entities (and, for the HiveHeart, sound
-frequency/energy/peak) — so a hive carrying several modules reports a distinct
-signal and battery per device. All other fields remain available in the raw
-`state` JSON for custom templated sensors. Just make sure the
+as their own Home Assistant devices, nested under the hub, each carrying its own
+full telemetry — temperature, humidity, battery and link signal (plus weight and
+pressure for the scale, and sound frequency/energy/peak for the HiveHeart). Those
+per-device temperature/humidity entities are published even though the hive's
+resolved temperature/humidity also appear on the hub device, so a hive fitted
+with several modules surfaces each one's readings separately. All other fields
+remain available in the raw `state` JSON for custom templated sensors. Just make sure the
 [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) is set up
 and pointed at the same broker.
 

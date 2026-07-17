@@ -85,23 +85,40 @@ _MQTT_MAX_HIVES = int(os.environ.get("MQTT_MAX_HIVES", "18"))
 # <source>_<n>_<field> keys (see _flatten_hives) — the same names the legacy flat
 # firmware already emits for hives 1–2, so both payload shapes line up.
 #
+# Every scalar a module reports is exposed on its own device — including
+# temperature/humidity, even though the hive's resolved temp/humidity also appear
+# on the main hub device. This keeps each physical device self-contained and, when
+# a hive carries both a HiveHeart and a HiveScale (each with its own temp/humidity
+# probe), surfaces both readings instead of only the one the hive resolves to.
+#
 # (source, manufacturer, model, label,
 #  [(field, metric, unit, device_class, state_class, icon), ...])
 _HIVE_SUBDEVICES: list[tuple[str, str, str, str, list]] = [
     ("hiveheart", "beehivemonitoring.com", "HiveHeart", "HiveHeart", [
-        ("frequency_hz", "sound frequency", "Hz",  "frequency",       "measurement", "mdi:sine-wave"),
-        ("energy",       "sound energy",    None,  None,              "measurement", "mdi:flash"),
-        ("peak",         "sound peak",      None,  None,              "measurement", "mdi:chart-bell-curve"),
-        ("battery_v",    "battery",         "V",   "voltage",         "measurement", None),
-        ("rssi_dbm",     "signal",          "dBm", "signal_strength", "measurement", None),
+        ("temp_c",           "temperature",     "°C",  "temperature",     "measurement", None),
+        ("humidity_percent", "humidity",        "%",   "humidity",        "measurement", None),
+        ("frequency_hz",     "sound frequency", "Hz",  "frequency",       "measurement", "mdi:sine-wave"),
+        ("energy",           "sound energy",    None,  None,              "measurement", "mdi:flash"),
+        ("peak",             "sound peak",      None,  None,              "measurement", "mdi:chart-bell-curve"),
+        ("battery_v",        "battery",         "V",   "voltage",         "measurement", None),
+        ("rssi_dbm",         "signal",          "dBm", "signal_strength", "measurement", None),
     ]),
     ("hivescale", "beehivemonitoring.com", "HiveScale", "scale", [
-        ("battery_v",    "battery",         "V",   "voltage",         "measurement", None),
-        ("rssi_dbm",     "signal",          "dBm", "signal_strength", "measurement", None),
+        ("weight_kg",        "weight",          "kg",  "weight",          "measurement", "mdi:scale"),
+        ("temp_c",           "temperature",     "°C",  "temperature",     "measurement", None),
+        ("humidity_percent", "humidity",        "%",   "humidity",        "measurement", None),
+        ("pressure_hpa",     "pressure",        "hPa", "pressure",        "measurement", None),
+        ("battery_v",        "battery",         "V",   "voltage",         "measurement", None),
+        ("rssi_dbm",         "signal",          "dBm", "signal_strength", "measurement", None),
     ]),
+    # The HolyIOT beacon has no dedicated temperature field — its temperature is
+    # promoted to the hive-level reading (hive_<n>_temp_c on the hub device), so
+    # only its humidity/pressure/battery/signal are attributable to this device.
     ("ble", "HolyIOT", "In-hive BLE sensor", "HolyIOT", [
-        ("battery_percent", "battery",      "%",   "battery",         "measurement", None),
-        ("rssi_dbm",        "signal",       "dBm", "signal_strength", "measurement", None),
+        ("humidity_percent", "humidity",        "%",   "humidity",        "measurement", None),
+        ("pressure_hpa",     "pressure",        "hPa", "pressure",        "measurement", None),
+        ("battery_percent",  "battery",         "%",   "battery",         "measurement", None),
+        ("rssi_dbm",         "signal",          "dBm", "signal_strength", "measurement", None),
     ]),
 ]
 
