@@ -72,6 +72,14 @@ g++ -std=c++17 -I firmware/include test-data/test_beehive_decode.cpp -o /tmp/t &
 | weight_kg | 9, 10 | `int16(b9 \| b10<<8)` ÷100 |
 | raw_weight | 11–13 | 24-bit signed `b11 \| b12<<8 \| b13<<16` |
 
+> **Pressure usually reads a flat 1000 hPa.** On most HiveScale units the
+> barometer is **not activated by the manufacturer**, so `pressure_hpa` sits at
+> its idle default of **1000.0 hPa** (as in the validated capture above) rather
+> than reporting real ambient pressure. Treat a constant 1000 hPa as "no
+> barometer", not as a plausible reading — and expect the HiveScale's
+> `pressure` entity in Home Assistant / the MQTT bridge to be flat at 1000 hPa
+> unless your unit has it enabled.
+
 ## Server
 
 Migration `server/migrations/009_beehivemonitoring_gatt.sql` adds the
