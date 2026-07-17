@@ -1150,8 +1150,7 @@ function renderConnectivity(root, state) {
   const m = state.latest || {};
   const cards = [
     metricCard("Signal", fmt(m.rssi_dbm, 0), "dBm", "Wi-Fi / radio RSSI"),
-    metricCard("Transport", m.network_transport || DASH, "", m.cellular_ok != null ? (m.cellular_ok ? "Cellular OK" : "Cellular down") : "Uplink"),
-    metricCard("Cellular CSQ", fmtInt(m.cellular_csq), "", "GSM signal quality"),
+    metricCard("Transport", m.network_transport || DASH, "", "Uplink"),
     metricCard("Time source", m.time_source || DASH, "", m.rtc_ok != null ? (m.rtc_ok ? "RTC OK" : "RTC fault") : "Clock"),
   ];
   const charts = [
@@ -1278,6 +1277,66 @@ function collapsible(title, open, ...children) {
   return el("details", { class: "collapsible-panel", open: open ? true : null },
     el("summary", { class: "collapsible-summary" }, title),
     el("div", { class: "collapsible-body" }, ...children));
+}
+
+// A small "?" / "!" affordance that reveals `text` on hover or keyboard focus.
+// The bubble is the primary surface; the native `title` and `aria-label` keep it
+// reachable for touch and assistive tech. `icon` picks the glyph ("?" or "!").
+// Update the text later with setTipText() (used for the board note, which
+// changes with the selected target).
+function infoTip(text, icon = "?") {
+  return el("span", { class: "info-tip", tabindex: "0", role: "note", "aria-label": text || "", title: text || "" },
+    el("span", { class: "info-tip-icon", "aria-hidden": "true" }, icon),
+    el("span", { class: "info-tip-bubble" }, text || ""));
+}
+
+function setTipText(tip, text) {
+  tip.setAttribute("aria-label", text || "");
+  tip.setAttribute("title", text || "");
+  const bubble = tip.querySelector(".info-tip-bubble");
+  if (bubble) bubble.textContent = text || "";
+}
+
+// Sensor-health panel for the Device & admin page: one row per subsystem the
+// device reports a health flag for, OK vs Fault. A subsystem whose flag is null
+// (not fitted / not configured) is omitted rather than shown as a false fault.
+function sensorStatusCard(state) {
+  const m = state.latest || {};
+  const checks = [];
+  const add = (label, ok) => { if (ok != null) checks.push({ label, ok: !!ok }); };
+  add("Ambient temp/humidity (SHT40)", m.sht_ok);
+  add("Real-time clock", m.rtc_ok);
+  add("SD card", m.sd_ok);
+  add("Microphone", m.mic_ok);
+  add("Microphone · left", m.mic_left_ok);
+  add("Microphone · right", m.mic_right_ok);
+  add("Battery monitor", m.battery_monitor_ok);
+  add("Solar monitor", m.solar_monitor_ok);
+  // Per-hive vibration and entrance sensors (hives 1–2 carry dedicated columns).
+  for (const n of availableHives(state).filter((h) => h <= 2)) {
+    add(`Accelerometer ${n}`, m[`accel_${n}_ok`]);
+    add(`Bee counter ${n}`, m[`bee_counter_${n}_ok`]);
+  }
+  const faults = checks.filter((c) => !c.ok).length;
+  const badge = !checks.length
+    ? el("span", { class: "badge muted" }, "No sensor data")
+    : faults
+      ? el("span", { class: "badge danger" }, `${faults} fault${faults === 1 ? "" : "s"}`)
+      : el("span", { class: "badge good" }, "All OK");
+  const body = checks.length
+    ? el("div", { class: "rows" },
+        ...checks.map((c) => el("div", { class: "row" },
+          el("span", { class: "k" }, c.label),
+          el("span", { class: "v" },
+            el("span", { class: `badge ${c.ok ? "good" : "danger"}` }, c.ok ? "OK" : "Fault")))))
+    : el("p", { class: "muted-text" },
+        "No sensor health reported yet — it appears once the device sends its first reading.");
+  return el("div", { class: "card" },
+    el("div", { class: "spread" }, el("h2", {}, "Status"), badge),
+    el("p", { class: "note" },
+      m.measured_at ? `Sensor health from the last check-in · ${relAge(m.measured_at)}.`
+                    : "Per-sensor health as reported by the device."),
+    body);
 }
 
 function renderDevice(root, state) {
@@ -1440,17 +1499,23 @@ function renderDevice(root, state) {
   });
   const channelsCard = el("div", { class: "card" }, el("h2", {}, "Hive names"), chForm);
 
-  // Firmware panel
+  // Firmware panel — status + over-the-air approve, shown at the top of the same
+  // card as the upload form below (Uploading registers a release; Approve & flash
+  // installs it). Status leads with a 2×2 grid: Current / Latest, Approved / Board.
   const fwBadgeCls = fw.update_available ? (fw.pending_approval ? "warn" : "info") : "good";
-  const fwPanel = el("div", { class: "card" },
+  const fwStat = (label, value) =>
+    el("div", { class: "fw-stat" },
+      el("span", { class: "fw-stat-k" }, label),
+      el("span", { class: "fw-stat-v" }, value || DASH));
+  const fwInfo = el("div", { class: "fw-info" },
     el("div", { class: "spread" }, el("h2", {}, "Firmware"),
       el("span", { class: `badge ${fwBadgeCls}` },
         fw.update_available ? (fw.pending_approval ? "Update pending approval" : "Up to date soon") : "Up to date")),
-    el("div", { class: "rows" },
-      el("div", { class: "row" }, el("span", { class: "k" }, "Current"), el("span", { class: "v" }, fw.current_version || DASH)),
-      el("div", { class: "row" }, el("span", { class: "k" }, "Latest"), el("span", { class: "v" }, fw.latest_version || DASH)),
-      el("div", { class: "row" }, el("span", { class: "k" }, "Approved"), el("span", { class: "v" }, fw.approved_version || DASH)),
-      el("div", { class: "row" }, el("span", { class: "k" }, "Board"), el("span", { class: "v" }, fw.device_board || DASH))));
+    el("div", { class: "fw-grid" },
+      fwStat("Current", fw.current_version),
+      fwStat("Latest", fw.latest_version),
+      fwStat("Approved", fw.approved_version),
+      fwStat("Board", fw.device_board)));
 
   // Explain a wrong-board upload: releases exist for a board other than the one
   // this device reports, so they are (correctly) not offered here. Without this
@@ -1458,7 +1523,7 @@ function renderDevice(root, state) {
   if (Array.isArray(fw.other_board_releases) && fw.other_board_releases.length) {
     const others = fw.other_board_releases.map((r) => `${r.board} ${r.version}`).join(", ");
     const forBoard = fw.device_board ? ` this ${fw.device_board} device` : " this device";
-    fwPanel.append(el("p", { class: "note warn" },
+    fwInfo.append(el("p", { class: "note warn" },
       `Also uploaded for another board (not applied to${forBoard}): ${others}. ` +
       "A build only reaches a device whose board matches — check the Board field when uploading."));
   }
@@ -1485,7 +1550,7 @@ function renderDevice(root, state) {
   if (fw.update_available && fw.pending_approval) {
     const approveBtn = el("button", { class: "btn", type: "button" }, "Approve & flash latest");
     approveBtn.addEventListener("click", () => approveAndFlash(approveBtn, fw.latest_version));
-    fwPanel.append(el("div", { class: "form-actions" }, approveBtn));
+    fwInfo.append(el("div", { class: "form-actions" }, approveBtn));
   }
 
   // Firmware upload form. The main-unit ("hivescale") target ships for two
@@ -1526,8 +1591,12 @@ function renderDevice(root, state) {
     ],
   };
   const boardSelect = el("select", { class: "full" });
-  const boardRow = el("div", { class: "form-row" }, el("label", {}, "Board"), boardSelect);
-  const boardNote = el("p", { class: "note" });
+  // The board guidance lives in a hover/focus tooltip next to the Board label
+  // rather than a paragraph below the field. The text depends on the target, so
+  // syncBoardRow() rewrites the tip whenever the target changes.
+  const boardTip = infoTip("");
+  const boardRow = el("div", { class: "form-row" },
+    el("label", {}, el("span", {}, "Board "), boardTip), boardSelect);
   const BOARD_NOTES = {
     hivescale: "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.",
     hiveinside: "HiveInside now has two boards — pick the one this image targets, or keep auto-detect when the file is named like hiveinside_nrf54lm20a_1.0.0.bin. A board-stamped release is only ever relayed to a matching sensor.",
@@ -1535,11 +1604,10 @@ function renderDevice(root, state) {
   const syncBoardRow = () => {
     const opts = BOARDS_BY_TARGET[targetSelect.value];
     boardRow.hidden = !opts;
-    boardNote.hidden = !opts;
     if (!opts) return;
     boardSelect.innerHTML = "";
     opts.forEach(([v, label]) => boardSelect.appendChild(el("option", { value: v }, label)));
-    boardNote.textContent = BOARD_NOTES[targetSelect.value];
+    setTipText(boardTip, BOARD_NOTES[targetSelect.value]);
   };
   targetSelect.addEventListener("change", syncBoardRow);
   const uploadBtn = el("button", { class: "btn", type: "submit" }, "Upload firmware");
@@ -1573,14 +1641,16 @@ function renderDevice(root, state) {
     uploadResult.hidden = false;
   };
 
+  // What "Upload" does lives in a tooltip next to the button rather than a
+  // paragraph — the Firmware status above is where the release is installed from.
+  const uploadTip = infoTip(
+    "Uploading registers a new firmware release for this target. To install it, use the “Approve & flash” button in the Firmware panel — it appears there once the upload is a newer version than the device currently runs, and the device flashes on its next check-in.");
   const uploadForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Firmware .bin"), fileInput),
     el("div", { class: "form-row" }, el("label", {}, "Version"), versionInput),
     el("div", { class: "form-row" }, el("label", {}, "Target"), targetSelect),
     boardRow,
-    boardNote,
-    el("p", { class: "note" }, "Uploading registers a new firmware release for this target. To install it, use the “Approve & flash” button in the Firmware panel — it appears there once the upload is a newer version than the device currently runs, and the device flashes on its next check-in."),
-    el("div", { class: "form-actions" }, uploadBtn));
+    el("div", { class: "form-actions" }, uploadBtn, uploadTip));
   syncBoardRow();
   uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1607,7 +1677,11 @@ function renderDevice(root, state) {
     catch (err) { state.toast(err.message, "error"); }
     finally { uploadBtn.disabled = false; }
   });
-  const uploadCard = el("div", { class: "card" }, el("h2", {}, "Upload firmware"), uploadForm, uploadResult);
+  // One "Firmware" card: status/approve (fwInfo) on top, then the upload form.
+  const firmwareCard = el("div", { class: "card" },
+    fwInfo,
+    el("h3", { class: "fw-upload-head" }, "Upload firmware"),
+    uploadForm, uploadResult);
 
   // SD-card data import. Uploads a backup pulled off the scale in AP mode
   // (measurements.ndjson or the hivescale-sd-data.tar download) and back-fills the
@@ -1731,25 +1805,25 @@ function renderDevice(root, state) {
     el("div", { class: "form-actions" }, startBtn, stopBtn));
 
   // ── Layout ────────────────────────────────────────────────────────────────
-  // Top: five always-visible panels balanced across the three columns so none is
-  // left empty — Calibration + Firmware · Hive names + Import SD card data ·
-  // Upload firmware. Each panel sizes to its own content rather than stretching.
-  // Below: a full-width collapsible "Configuration" (general + per-scale
-  // calibration/compensation + fit), and at the very bottom a full-width
-  // collapsible "Admin" grouping the account and admin-only management panels.
+  // Top: three columns — Status (per-sensor health) · Hive names + Import SD card
+  // data · Firmware (status/approve + upload). Each panel sizes to its own
+  // content rather than stretching. Below: a full-width collapsible
+  // "Configuration" (general + per-scale calibration/compensation + fit, plus the
+  // Calibration-mode controls), collapsed by default; and at the very bottom a
+  // full-width collapsible "Admin" grouping the account and admin-only panels.
   const isAdmin = state.authUser?.role === "admin";
 
   const topGrid = el("div", { class: "admin-cols" },
-    el("div", { class: "admin-col" }, calCard, fwPanel),
+    el("div", { class: "admin-col" }, sensorStatusCard(state)),
     el("div", { class: "admin-col" }, channelsCard, sdCard),
-    el("div", { class: "admin-col" }, uploadCard));
+    el("div", { class: "admin-col" }, firmwareCard));
 
   const adminCards = [accountCard(state), notificationsCard(state)];
   if (isAdmin) adminCards.push(usersCard(state), visibleDevicesCard(state), deleteMeasurementsCard(state));
 
   node.append(
     topGrid,
-    collapsible("Configuration", true, cfgForm),
+    collapsible("Configuration", false, cfgForm, calCard),
     collapsible("Admin", false, el("div", { class: "admin-cols" }, ...adminCards)));
   root.append(node);
 }

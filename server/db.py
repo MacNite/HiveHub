@@ -89,8 +89,6 @@ def init_db():
                     solar_current_ma DOUBLE PRECISION,
                     solar_power_mw DOUBLE PRECISION,
                     network_transport TEXT,
-                    cellular_ok BOOLEAN,
-                    cellular_csq INTEGER,
                     calibration_mode BOOLEAN,
                     boot_count BIGINT,
                     time_source TEXT,
@@ -191,8 +189,6 @@ def init_db():
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS solar_current_ma DOUBLE PRECISION;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS solar_power_mw DOUBLE PRECISION;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS network_transport TEXT;
-                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS cellular_ok BOOLEAN;
-                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS cellular_csq INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS calibration_mode BOOLEAN;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS boot_count BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS time_source TEXT;
