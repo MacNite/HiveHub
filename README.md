@@ -365,6 +365,9 @@ remain available in the raw `state` JSON for custom templated sensors. Just make
 [MQTT integration](https://www.home-assistant.io/integrations/mqtt/) is set up
 and pointed at the same broker.
 
+See [docs/mqtt.md](docs/mqtt.md) for the full topic layout, every configuration
+variable, and the per-hive / per-module Home Assistant discovery details.
+
 ---
 
 ## API overview

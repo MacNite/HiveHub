@@ -9,9 +9,11 @@ default. Enable it per device in `firmware/include/secrets.h`.
 > modem for cellular transport. That has been removed — the ESP32 firmware is now
 > **Wi-Fi only**. LTE/NB-IoT, solar charging, and battery management are handled
 > by a separate **Power Module** that connects to the Scale Module over
-> I2C/ESP-NOW. The backend still accepts `network_transport`, `cellular_ok`, and
-> `cellular_csq` so that Power Module can report cellular status later; on-device
-> firmware reports `network_transport: "wifi"`.
+> I2C/ESP-NOW. The backend still accepts `network_transport` so that Power Module
+> can report its transport later (on-device firmware reports
+> `network_transport: "wifi"`). The old `cellular_ok` / `cellular_csq` fields are
+> no longer accepted — they were dropped from the measurement schema; the unused
+> database columns are left in place to avoid a destructive migration.
 
 ---
 

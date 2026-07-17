@@ -58,10 +58,12 @@ curl -X POST http://HOST:31115/api/v1/measurements \
   }'
 ```
 
-### Off-grid (cellular + solar + LiPo) payload
+### Off-grid (solar + LiPo) payload
 
-> `network_transport`/`cellular_*` are accepted by the backend for the future
-> Power Module; the current ESP32 firmware is Wi-Fi only.
+> `network_transport` is accepted by the backend for the future Power Module; the
+> current ESP32 firmware is Wi-Fi only. The old `cellular_ok` / `cellular_csq`
+> fields are no longer accepted (dropped from the schema) and are silently
+> ignored if sent.
 
 ```bash
 curl -X POST http://HOST:31115/api/v1/measurements \
@@ -76,9 +78,7 @@ curl -X POST http://HOST:31115/api/v1/measurements \
     "hive_2_temp_c": 33.7,
     "ambient_temp_c": 18.4,
     "ambient_humidity_percent": 61.2,
-    "network_transport": "sim7080g",
-    "cellular_ok": true,
-    "cellular_csq": 18,
+    "network_transport": "wifi",
     "rssi_dbm": -77,
     "battery_voltage_v": 3.94,
     "battery_soc_percent": 73.2,
@@ -92,7 +92,7 @@ curl -X POST http://HOST:31115/api/v1/measurements \
     "solar_power_mw": 960.0,
     "calibration_mode": false,
     "boot_count": 128,
-    "time_source": "cellular",
+    "time_source": "ntp",
     "firmware_version": "0.9.2",
     "config_version": 3,
     "sd_ok": true,
