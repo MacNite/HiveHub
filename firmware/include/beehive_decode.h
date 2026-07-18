@@ -71,9 +71,12 @@ inline bool decodeHeart(const uint8_t* p, size_t len, HeartReading& out) {
   if (p == nullptr || len < 12 || len > 32) return false;
 
   // Battery: the longer (FFT-bearing) payload uses a different scale.
+  // len>11: (2000 + b4·1500/255) mV — validated against the real capture above
+  // (0x89 -> 2.81 V); shorter payloads use (2500 + b4·1000/255) mV. See
+  // docs/beehivemonitoring-gatt.md.
   float battery_v;
   if (len > 11)
-    battery_v = 2.0f + ((float)p[4] / 128.0f);
+    battery_v = (2000.0f + p[4] * 1500.0f / 255.0f) / 1000.0f;
   else
     battery_v = (2500.0f + p[4] * 1000.0f / 255.0f) / 1000.0f;
 
@@ -118,7 +121,8 @@ inline bool decodeScale(const uint8_t* p, size_t len, ScaleReading& out) {
   // a HiveScale frame.
   if (p == nullptr || len < 14 || len > 32) return false;
 
-  float battery_v    = 2.5f + ((float)p[4] / 128.0f);
+  // Battery: (2500 + b4·2000/255) mV per the documented decoder (0xCC -> 4.10 V).
+  float battery_v    = (2500.0f + p[4] * 2000.0f / 255.0f) / 1000.0f;
   float humidity_pct = p[5] * 100.0f / 255.0f;
 
   uint32_t tRaw = (uint32_t)p[6] | ((uint32_t)(p[7] & 0x0F) << 8);
