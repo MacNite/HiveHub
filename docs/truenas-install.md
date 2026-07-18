@@ -40,7 +40,7 @@ TrueNAS Custom App uses a Docker Compose-compatible YAML editor. Paste the follo
 ```yaml
 services:
   hivescale-api:
-    image: ghcr.io/macnite/hivescale-api:latest
+    image: ghcr.io/macnite/hivehub:latest
     depends_on:
       hivescale-db:
         condition: service_healthy
@@ -192,7 +192,7 @@ When a new version of the Docker image is published:
 
 Alternatively, from the TrueNAS shell:
 ```bash
-docker pull ghcr.io/macnite/hivescale-api:latest
+docker pull ghcr.io/macnite/hivehub:latest
 # Then restart the app from the UI
 ```
 

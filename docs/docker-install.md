@@ -79,7 +79,7 @@ Copy the compose file from the repo or create `/opt/hivescale/docker-compose.yml
 ```yaml
 services:
   hivescale-api:
-    image: ghcr.io/macnite/hivescale-api:latest
+    image: ghcr.io/macnite/hivehub:latest
     depends_on:
       hivescale-db:
         condition: service_healthy

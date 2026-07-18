@@ -34,7 +34,7 @@ keeps using the authenticated `/api/v1/app/*` API.
 
 ## Enable it
 
-Set the flag (see `server/.env.example` / `docker/env.example`):
+Set the flag (see `server/.env.example` / `docker/.env.example`):
 
 ```bash
 ENABLE_LOCAL_DASHBOARD=true

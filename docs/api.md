@@ -160,8 +160,6 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | `solar_current_ma` | number | No | Solar/load current |
 | `solar_power_mw` | number | No | Solar/load power |
 | `network_transport` | string | No | `wifi` (current firmware), `sim7080g`, or another future transport label |
-| `cellular_ok` | boolean | No | Cellular data connection status (Power Module) |
-| `cellular_csq` | integer | No | Cellular signal quality (CSQ) value (Power Module) |
 | `calibration_mode` | boolean | No | Whether firmware was in calibration mode for this reading |
 | `boot_count` | integer | No | ESP32 RTC boot counter |
 | `time_source` | string | No | Time source such as `rtc`, `server`, `cellular`, or `compile` |
@@ -248,9 +246,10 @@ any field the model does not know about is silently dropped, not preserved in
 `raw_json`. When adding a new telemetry field (e.g. a new GATT field), declare
 it on `MeasurementIn` or it will be discarded on ingest.
 
-> `network_transport`, `cellular_ok`, and `cellular_csq` are accepted and stored
-> for the future Power Module. The current ESP32 firmware is Wi-Fi only and
-> reports `network_transport: "wifi"`.
+> `network_transport` is accepted and stored for the future Power Module. The
+> current ESP32 firmware is Wi-Fi only and reports `network_transport: "wifi"`.
+> The old `cellular_ok` / `cellular_csq` fields were **removed from the schema**
+> and are silently ignored if sent (`extra="ignore"`).
 
 #### Example Wi-Fi payload
 
@@ -287,8 +286,6 @@ it on `MeasurementIn` or it will be discarded on ingest.
   "scale_1_weight_kg": 42.5,
   "scale_2_weight_kg": 38.2,
   "network_transport": "sim7080g",
-  "cellular_ok": true,
-  "cellular_csq": 18,
   "rssi_dbm": -77,
   "battery_voltage_v": 3.94,
   "battery_soc_percent": 73.2,
@@ -973,7 +970,7 @@ The backend auto-creates and updates the schema on startup.
 | `device_commands` | Pending, claimed, done, and failed commands |
 | `insight_alerts` | Persisted lifecycle of insight alerts (first/last seen, peak severity, resolution) powering the history endpoint |
 
-The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), cellular status, calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, and the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields; `firmware_releases` gains `target`, `crc32`, and `owner_user_id`. The SQL files in `server/migrations/` (`001`–`011`, from `001_offgrid_telemetry.sql` through `011_firmware_owner_scoping.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
+The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields, the normalized per-hive `hive_readings` table (multi-hive payloads), and the dashboard-auth tables (`dashboard_users`, `dashboard_settings`, `push_subscriptions`); `firmware_releases` gains `target`, `crc32`, `owner_user_id`, and `board`. The SQL files in `server/migrations/` (`001_offgrid_telemetry.sql` through `018_notifications.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
 
 ---
 
