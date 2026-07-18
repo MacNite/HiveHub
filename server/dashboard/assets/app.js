@@ -385,10 +385,18 @@ function renderPicker() {
 
     const onCount = allHives.filter((n) => hasSel(dev.device_id, n)).length;
     const allOn = allHives.length > 0 && onCount === allHives.length;
-    const headCb = el("input", { type: "checkbox" });
+    // The checkbox is purely visual — the wrapping button is the control. Hide
+    // it from AT and keyboard so screen readers hear one labelled toggle
+    // instead of a nested checkbox-in-button.
+    const headCb = el("input", { type: "checkbox", "aria-hidden": "true", tabindex: "-1" });
     headCb.checked = allOn;
     headCb.indeterminate = onCount > 0 && !allOn;
-    const head = el("button", { class: "hive-dev-head", type: "button" },
+    const head = el("button", {
+      class: "hive-dev-head",
+      type: "button",
+      "aria-pressed": String(allOn),
+      "aria-label": `${allOn ? "Deselect" : "Select"} all hives on ${dev.display_name || dev.device_id} (${onCount} of ${allHives.length} selected)`,
+    },
       headCb,
       el("span", { class: "hive-dev-name" }, dev.display_name || dev.device_id),
       el("span", { class: "hive-dev-id" }, dev.device_id),
@@ -502,9 +510,13 @@ function openPicker() {
   ui.hiveSearch.focus();
 }
 function closePicker() {
+  // If focus is still inside the popover (Done button, search box, a row),
+  // hiding it would drop keyboard focus on <body>; hand it back to the trigger.
+  const hadFocus = ui.hivePop.contains(document.activeElement);
   ui.hivePop.hidden = true;
   ui.hiveTrigger.setAttribute("aria-expanded", "false");
   ui.hiveSearch.value = "";
+  if (hadFocus) ui.hiveTrigger.focus();
 }
 
 function wireEvents() {

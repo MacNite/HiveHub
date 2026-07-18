@@ -320,6 +320,26 @@ function makeLegendToggle(item, prefs, key, what) {
 // opens the inline range editor instead of scrubbing.
 function attachChartCursor(chart) {
   const canvas = chart.canvas;
+  // Keyboard scrubbing: the cursor readout is otherwise pointer-only. Arrow
+  // keys step through the range (Shift = fine step), Home/End jump to the
+  // edges, Escape clears. tabIndex makes the canvas reachable by Tab.
+  canvas.tabIndex = 0;
+  canvas.addEventListener("keydown", (e) => {
+    const scale = canvas._xScale;
+    if (!scale) return;
+    const span = scale.tMax - scale.tMin;
+    const step = span * (e.shiftKey ? 0.002 : 0.02);
+    let t = cursorT;
+    if (e.key === "ArrowLeft") t = (t == null ? scale.tMax : t) - step;
+    else if (e.key === "ArrowRight") t = (t == null ? scale.tMax : t) + step;
+    else if (e.key === "Home") t = scale.tMin;
+    else if (e.key === "End") t = scale.tMax;
+    else if (e.key === "Escape") t = null;
+    else return;
+    e.preventDefault();
+    cursorT = t == null ? null : Math.min(scale.tMax, Math.max(scale.tMin, t));
+    drawCharts();
+  });
   canvas.addEventListener("pointerdown", (e) => {
     const zone = yEditZone(canvas, e);
     if (zone) { e.preventDefault(); openYEdit(chart, zone); return; }
@@ -365,7 +385,10 @@ function attachSpectrumCursor(chart) {
 }
 
 function chartCard(title, sub, series, opts = {}) {
-  const canvas = el("canvas", { role: "img", "aria-label": `${title} chart` });
+  const canvas = el("canvas", {
+    role: "img",
+    "aria-label": `${title} chart — focus and use arrow keys to inspect values`,
+  });
   const wrap = el("div", { class: "chart-wrap" }, canvas);
   const prefs = prefsFor(title);
   const legendItems = series.map((s) => {

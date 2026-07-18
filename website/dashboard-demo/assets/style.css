@@ -427,7 +427,7 @@ select {
 
 /* Visible keyboard-focus ring (controls otherwise only signal state on hover) */
 .btn:focus-visible, .nav-item:focus-visible, .range-group button:focus-visible,
-select:focus-visible, input:focus-visible {
+select:focus-visible, input:focus-visible, canvas:focus-visible {
   outline: 2px solid var(--honey-dark, var(--honey));
   outline-offset: 2px;
 }

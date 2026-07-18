@@ -35,10 +35,11 @@ The audit still found real defects — all now fixed on this branch:
    migration 015. A reader could reasonably decide not to enable a feature that
    is in fact safe, or worse, assume other docs are equally outdated.
 
-Remaining high-priority work (deferred, needs owner decisions): migrating
+Remaining high-priority work (deferred, needs owner decisions): a
 `measurements.raw_json` retention policy for long-running installs, a
-`SECURITY.md` contact, and frontend keyboard operability of the custom chart
-interactions.
+`SECURITY.md` contact, dashboard session revocation, and screen-reader
+data-table equivalents for the charts (keyboard scrubbing itself is now
+implemented for line charts).
 
 **Confidence:** High for the backend and deployment configuration (read in
 full, tests executed). Medium for the ~5.7k-line dashboard/website JS and the
@@ -219,16 +220,18 @@ hive maximum is 16 (the 18-slot registry is internal headroom).
 - Evidence: `el("canvas")` produced unlabeled `<canvas>` elements; screen-reader users get nothing.
 - Action taken: **fixed** — charts now render with `role="img"` and `aria-label="<title> chart"` (both the live dashboard and the demo copy). Numeric equivalents remain available in the Overview metric cards.
 
-### [A11Y-002] Chart interactions are pointer-only; no reduced-motion handling needed
+### [A11Y-002] Chart interactions were pointer-only
 - Severity: Low · Confidence: Medium · Category: Accessibility
-- Evidence: cursor scrubbing, y-axis pinning and the legend toggles are mouse/touch driven; legend toggles are focusable (buttons) but the scrub readout is unreachable by keyboard. No animations exist, so `prefers-reduced-motion` is moot. Focus-visible styles and `aria-pressed`/`aria-expanded`/`role="dialog"`/`aria-live` usage elsewhere are notably good.
-- Recommendation (deferred): arrow-key scrubbing on a focused chart; a visually-hidden data table would be the thorough fix.
+- Evidence: cursor scrubbing and y-axis pinning were mouse/touch driven; legend toggles are focusable (buttons) but the scrub readout was unreachable by keyboard. No animations exist, so `prefers-reduced-motion` is moot. Focus-visible styles and `aria-pressed`/`aria-expanded`/`role="dialog"`/`aria-live` usage elsewhere are notably good.
+- Action taken: **fixed (line charts)** — chart canvases are now focusable (`tabindex=0`, focus-visible ring) and scrub with ←/→ (Shift for fine steps), Home/End jump to the range edges, Escape clears; the `aria-label` advertises the keys. Spectrum (frequency-band) charts remain pointer-only.
+- Remaining risk: a visually-hidden data table would be the thorough screen-reader fix; keyboard scrubbing chiefly serves sighted keyboard users.
 
 ### [UX-001] Hive-picker popover: solid, with two rough edges
 - Severity: Low · Confidence: Medium · Category: UX
 - Affected screens: top bar hive picker (`app.js` renderPicker/openPicker)
-- Evidence (code-level): Escape/outside-click close and `aria-expanded` are handled; focus moves into the search box on open. But focus is not trapped or restored on outside-click close, and the "device header ticks all hives" button nests a checkbox inside a `<button>` (works with click handlers, but is semantically odd for AT users).
-- Recommendation (deferred): restore focus to the trigger on any close; make the header row a labeled checkbox instead of a button-wrapping-checkbox.
+- Evidence (code-level): Escape/outside-click close and `aria-expanded` are handled; focus moves into the search box on open. But focus was not restored when the popover closed with focus inside it (Done button, search box), dropping keyboard users on `<body>`; and the "device header ticks all hives" button nested a checkbox inside a `<button>` — semantically confusing for AT users.
+- Action taken: **fixed** — `closePicker()` returns focus to the trigger whenever focus was inside the popover; the header checkbox is now `aria-hidden` decoration and the button carries `aria-pressed` plus a state-bearing `aria-label` ("Select/Deselect all hives on <device> (n of m selected)").
+- Remaining risk: full focus *trapping* inside the popover was not added (it is a light popover, not a modal); verify tab order once in a browser.
 
 ### [UX-002] Destructive actions are well-confirmed (positive finding)
 - Evidence: measurement deletion requires the device claim code server-side plus a typed `window.confirm`; user deletion, calibration stop, and SD force-import all confirm with specific copy; the SD import device-mismatch guard (HTTP 409 with structured detail, `force` override) is exemplary.
@@ -285,17 +288,19 @@ flash including canvas redraw on theme change; excellent destructive-action
 confirmation patterns; PWA + push handled as progressive enhancement.
 
 **Weak points:** canvas charts were screen-reader-invisible (fixed: A11Y-001);
-chart scrubbing is pointer-only (A11Y-002); hive-picker focus management gaps
-(UX-001); 60 s auto-refresh is not user-controllable; the demo copy of the
-dashboard must be hand-synced (MAINT-001).
+chart scrubbing was pointer-only (fixed for line charts: A11Y-002); hive-picker
+focus management gaps (fixed: UX-001); 60 s auto-refresh is not
+user-controllable; the demo copy of the dashboard must be hand-synced
+(MAINT-001).
 
 **Responsive behavior:** flex/grid layout with `overflow-x` on tables and a
 narrow-viewport breakpoint in style.css; charts resize on `resize` events.
 Verified in code only — a device-matrix pass in a browser remains to be done.
 
-**Prioritized UX recommendations:** (1) keyboard access to chart data,
-(2) focus restore in the picker, (3) a visible "auto-refresh in Ns / pause"
-affordance, (4) browser-matrix smoke test of the admin forms on mobile.
+**Prioritized UX recommendations (remaining):** (1) keyboard access for the
+spectrum charts and a hidden data-table equivalent for screen readers, (2) a
+visible "auto-refresh in Ns / pause" affordance, (3) browser-matrix smoke test
+of the admin forms and the new keyboard interactions on mobile/desktop.
 
 ## Changes implemented
 
@@ -319,7 +324,10 @@ affordance, (4) browser-matrix smoke test of the admin forms on mobile.
    COMPAT-001).
 7. `server/dashboard/assets/views.js` + demo copy — `role="img"` /
    `aria-label` on all chart canvases (A11Y-001).
-8. This audit report.
+8. `server/dashboard/assets/{views.js,app.js,style.css}` + demo copies —
+   keyboard chart scrubbing with a focus-visible ring (A11Y-002) and
+   hive-picker focus restore + accessible select-all header (UX-001).
+9. This audit report.
 
 ## Deferred recommendations
 
@@ -327,8 +335,8 @@ affordance, (4) browser-matrix smoke test of the admin forms on mobile.
   (token versioning vs server-side sessions).
 - Authenticated / tokenized firmware downloads (SEC-001) — needs a coordinated
   firmware release.
-- Keyboard-accessible chart data (A11Y-002) and picker focus management
-  (UX-001).
+- Screen-reader data-table equivalents for charts and keyboard access for the
+  spectrum charts (line-chart scrubbing and picker focus are now done).
 - De-duplicate the dashboard demo build (MAINT-001).
 - Naive-datetime normalization on measurement range params (CODE-003).
 - A `SECURITY.md` with a private contact channel.
@@ -360,7 +368,7 @@ of the dashboard (desktop + phone); demo-build de-duplication; naive-datetime
 normalization.
 
 **Longer term:** measurement retention/partitioning strategy (e.g. monthly
-partitions or a `raw_json` TTL); keyboard-accessible charts; tokenized OTA
+partitions or a `raw_json` TTL); spectrum-chart keyboard access; tokenized OTA
 downloads; a small integration-test harness that boots the API against a
 throwaway Postgres (docker) so the ingest→read→insights path is CI-covered
 end-to-end.
