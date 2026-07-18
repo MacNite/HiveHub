@@ -365,7 +365,7 @@ function attachSpectrumCursor(chart) {
 }
 
 function chartCard(title, sub, series, opts = {}) {
-  const canvas = el("canvas");
+  const canvas = el("canvas", { role: "img", "aria-label": `${title} chart` });
   const wrap = el("div", { class: "chart-wrap" }, canvas);
   const prefs = prefsFor(title);
   const legendItems = series.map((s) => {
@@ -398,7 +398,7 @@ function chartCard(title, sub, series, opts = {}) {
 // selected time range (not just the downsampled snapshots), used for the
 // hover cursor's range readout (see spectrumSnapshots/bandMinMax below).
 function spectrumChartCard(title, sub, categories, snapshots, bandStats, color, opts = {}) {
-  const canvas = el("canvas");
+  const canvas = el("canvas", { role: "img", "aria-label": `${title} chart` });
   const wrap = el("div", { class: "chart-wrap" }, canvas);
   const prefs = prefsFor(title);
   const oldest = snapshots[0], newest = snapshots[snapshots.length - 1];
