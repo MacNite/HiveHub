@@ -1,25 +1,44 @@
 services:
   hivescale-api:
-    image: ghcr.io/macnite/hivescale-api:latest
+    # NOTE: CI (.github/workflows/backend-image.yml) publishes the backend as
+    # ghcr.io/macnite/hivehub — the old hivescale-api image name is no longer
+    # updated, so pulling it would silently pin you to a stale backend.
+    image: ghcr.io/macnite/hivehub:latest
     depends_on:
       hivescale-db:
         condition: service_healthy
     environment:
-      API_KEY: '${API_KEY:-Super-Secret-Key}'
+      # Required secrets — set them in .env (cp .env.example .env). The
+      # ":?" makes compose fail fast instead of starting with a known default.
+      API_KEY: '${API_KEY:?set API_KEY in .env (openssl rand -hex 32)}'
       HIVEPAL_SERVICE_API_KEY: '${HIVEPAL_SERVICE_API_KEY:-}'
       HIVEPAL_JWT_SECRET: '${HIVEPAL_JWT_SECRET:-}'
-      DATABASE_URL: '${DATABASE_URL:-postgresql://hivescale:Strong-Password@hivescale-db:5432/hivescale}'
-      TZ: Europe/Berlin
+      # Defaults to the bundled hivescale-db service, reusing POSTGRES_PASSWORD
+      # so the two can never drift apart. Override only for an external DB.
+      DATABASE_URL: '${DATABASE_URL:-postgresql://hivescale:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@hivescale-db:5432/hivescale}'
+      # Public base URL used to build OTA firmware download links (HTTPS in
+      # production). Without it, download URLs are relative and OTA from a
+      # device will not work.
+      PUBLIC_BASE_URL: '${PUBLIC_BASE_URL:-}'
+      TZ: '${TZ:-Europe/Berlin}'
       # Built-in login-protected local dashboard at /dashboard (single-owner
       # self-host; the first visit runs a setup wizard that creates the admin
       # account). It exposes every device on this server behind that login, so
       # leave it false on multi-tenant deployments.
       ENABLE_LOCAL_DASHBOARD: '${ENABLE_LOCAL_DASHBOARD:-false}'
+      DASHBOARD_SESSION_SECRET: '${DASHBOARD_SESSION_SECRET:-}'
+      DASHBOARD_SESSION_TTL_HOURS: '${DASHBOARD_SESSION_TTL_HOURS:-168}'
+      DASHBOARD_COOKIE_SECURE: '${DASHBOARD_COOKIE_SECURE:-false}'
       # Rate limiter: trust CF-Connecting-IP / X-Forwarded-For for the client
       # IP. Keep true behind a reverse proxy (the documented setup); set false
       # when the API port is exposed directly, otherwise clients can spoof the
       # header to bypass rate limiting.
       TRUST_PROXY_HEADERS: '${TRUST_PROXY_HEADERS:-true}'
+      # ── Abuse / DoS protection knobs ──
+      RATE_LIMIT_ENABLED: '${RATE_LIMIT_ENABLED:-true}'
+      RATE_LIMIT_DEFAULT: '${RATE_LIMIT_DEFAULT:-120/minute}'
+      MAX_BODY_BYTES: '${MAX_BODY_BYTES:-262144}'
+      MAX_FIRMWARE_BYTES: '${MAX_FIRMWARE_BYTES:-16777216}'
       # ── Optional MQTT bridge (Home Assistant etc.) — disabled by default ──
       MQTT_ENABLED: '${MQTT_ENABLED:-false}'
       MQTT_HOST: '${MQTT_HOST:-localhost}'
@@ -37,14 +56,19 @@ services:
     ports:
       - "31115:8000"
     restart: unless-stopped
+    volumes:
+      # Uploaded OTA firmware binaries live in FIRMWARE_DIR (/app/firmware).
+      # Without a volume they are lost on every container recreation while the
+      # firmware_releases DB rows survive — leaving releases that 404.
+      - firmware-data:/app/firmware
 
   hivescale-db:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: hivescale
       POSTGRES_USER: hivescale
-      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD:-Strong-Password}'
-      TZ: Europe/Berlin
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}'
+      TZ: '${TZ:-Europe/Berlin}'
     healthcheck:
       test:
         - CMD-SHELL
@@ -54,4 +78,8 @@ services:
       retries: 5
     restart: unless-stopped
     volumes:
+      # Bind-mount a host path for the database. Adjust to your system.
       - /mnt/path-to-db-data:/var/lib/postgresql/data
+
+volumes:
+  firmware-data:

@@ -12,7 +12,7 @@ The implementation is `server/mqtt_publisher.py`.
 ## Enabling
 
 Set `MQTT_ENABLED=true` and point `MQTT_HOST` at your broker. All configuration
-is via environment variables (see `server/.env.example` / `docker/env.example`):
+is via environment variables (see `server/.env.example` / `docker/.env.example`):
 
 | Variable | Default | Purpose |
 |---|---|---|

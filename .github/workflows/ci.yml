@@ -43,6 +43,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run host tests
         run: ./firmware/host_test/run_tests.sh
+      # The pure BLE-decoder headers also have host unit tests (real captured
+      # payloads). They were previously not run in CI, which let a decode
+      # regression ship unnoticed — keep them wired in here.
+      - name: Build and run BLE decoder tests
+        run: |
+          set -e
+          g++ -std=gnu++17 -Wall -Wextra -Werror -I firmware/include \
+              -o /tmp/test_ruuvi_decode test-data/test_ruuvi_decode.cpp
+          /tmp/test_ruuvi_decode
+          g++ -std=gnu++17 -Wall -Wextra -Werror -I firmware/include \
+              -o /tmp/test_beehive_decode test-data/test_beehive_decode.cpp
+          /tmp/test_beehive_decode
 
   # The wired I2C BeeCounter path was removed for good. Fail the build if any
   # of its symbols ever reappear in the firmware, so a stray revert or cherry

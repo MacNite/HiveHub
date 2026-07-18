@@ -70,7 +70,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Insight alert notifications (optional)** — get swarm / robbing / winter-risk alerts by **e-mail (SMTP)** and/or **Web Push** to your phone or an installable dashboard PWA (Android, iOS 16.4+, desktop) when an insight first fires or escalates. Off by default; see [Insight alert notifications](docs/notifications.md).
 - **Optional off-grid mode** — solar/LiPo charging (CN3791 MPPT + TPS63020) with MAX17048 LiPo telemetry.
 - **Optional entrance bee counters** — wireless [HiveTraffic](docs/hivetraffic-bee-counter.md) counters over **BLE/GATT only** (wired I2C BeeCounters are no longer supported).
-- **Built-in web dashboard (optional)** — a login-free, dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts: device dropdown, per-hive selection, charts for every data group, plus device-config editing, hive renaming, firmware/OTA and calibration controls. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
+- **Built-in web dashboard (optional)** — a dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts, protected by **username + password login** (first visit runs a setup wizard; admin/viewer roles): cross-device hive comparison, charts for every data group, plus device-config editing, hive renaming, firmware/OTA and calibration controls, SD-backup import, and user management. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
 - **[HivePal](https://github.com/martinhrvn/hive-pal) integration** — dedicated `/api/v1/app/...` endpoints using a HivePal service key, per-user JWTs, and per-user access roles.
 - **Optional MQTT bridge** — mirror every reading to an MQTT broker (Home Assistant, Node-RED, openHAB…) with Home Assistant auto-discovery, alongside the built-in PostgreSQL store. Off by default; see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration).
 - **PCB designs (tested and working)** — KiCad ESP32-C6 Scale Module (recommended) and NAU7802 breakout board with fabrication outputs, plus the Power Module and legacy 30-pin Scale Module.
@@ -84,7 +84,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 HiveHub/
 ├── firmware/                   # ESP32 PlatformIO project (src/, include/)
 ├── server/                     # Python FastAPI backend, insights, migrations
-│   └── dashboard/              # Built-in login-free web dashboard (served at /dashboard)
+│   └── dashboard/              # Built-in login-protected web dashboard (served at /dashboard)
 ├── docker/                     # Docker Compose deployment
 ├── website/                    # Static site + secrets.h configurator (GitHub Pages)
 │   └── dashboard-demo/         # Backend-free dashboard demo (sample data)
@@ -263,20 +263,24 @@ The portal is organised **by hive**: it edits Wi-Fi networks, backend URL, devic
 ```bash
 cd docker
 cp .env.example .env
-# edit API_KEY, HIVEPAL_SERVICE_API_KEY, HIVEPAL_JWT_SECRET, database password, and volume paths
+# edit API_KEY, HIVEPAL_SERVICE_API_KEY, HIVEPAL_JWT_SECRET, POSTGRES_PASSWORD,
+# PUBLIC_BASE_URL, and the database volume path in docker-compose.yml
 docker compose up -d
 ```
 
-The API listens on port `31115` by default.
+The API listens on port `31115` by default. `API_KEY` and `POSTGRES_PASSWORD`
+are **required** — compose refuses to start without them rather than falling
+back to insecure defaults. Uploaded OTA firmware binaries persist in the
+`firmware-data` volume.
 
 | Setting | Default |
 |---|---|
-| API image | `ghcr.io/macnite/hivescale-api:latest` |
+| API image | `ghcr.io/macnite/hivehub:latest` |
 | API port | `31115` |
 | Database image | `postgres:16-alpine` |
 | Database name/user | `hivescale` |
 
-Change `API_KEY`, `HIVEPAL_SERVICE_API_KEY`, `HIVEPAL_JWT_SECRET`, and the PostgreSQL password before exposing the service. See [docs/docker-install.md](docs/docker-install.md) and [docs/truenas-install.md](docs/truenas-install.md) for full guides.
+See [docs/docker-install.md](docs/docker-install.md) and [docs/truenas-install.md](docs/truenas-install.md) for full guides.
 
 ### Manual / local
 
@@ -304,7 +308,9 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | Optional | DB connection pool bounds (default `1` / `10`) |
 | `RATE_LIMIT_ENABLED` / `RATE_LIMIT_DEFAULT` | Optional | Per-client-IP rate limit (default on, `120/minute`) |
 | `MAX_BODY_BYTES` / `MAX_FIRMWARE_BYTES` | Optional | Request-body and firmware-upload size caps (default 256 KiB / 16 MiB) |
-| `ENABLE_LOCAL_DASHBOARD` | Optional | Serve the built-in login-free dashboard at `/dashboard` and the auth-free `/api/v1/local/*` read API (default off — single-owner self-hosts on a trusted LAN only) |
+| `ENABLE_LOCAL_DASHBOARD` | Optional | Serve the built-in **login-protected** dashboard at `/dashboard` and its `/api/v1/local/*` API (default off). It serves every device on the server behind one login, so keep it off on multi-tenant deployments. |
+| `DASHBOARD_SESSION_SECRET` / `DASHBOARD_SESSION_TTL_HOURS` / `DASHBOARD_COOKIE_SECURE` | Optional | Dashboard login-session settings: signing secret (auto-generated and persisted when blank), session lifetime (default `168` h), HTTPS-only cookie flag |
+| `TRUST_PROXY_HEADERS` | Optional | Trust `CF-Connecting-IP` / `X-Forwarded-For` for rate-limit client IPs (default `true`; set `false` when the API port is exposed directly) |
 | `INSIGHTS_RECONCILE_*` | Optional | Background insight-history reconciliation (see `server/.env.example`) |
 | `SMTP_*` / `NOTIFY_MIN_SEVERITY` | Optional | E-mail channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
 | `WEB_PUSH_ENABLED` / `VAPID_*` | Optional | Web Push channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
@@ -325,7 +331,7 @@ background thread and is fail-soft, so a broker outage never affects ingestion
 or the API.
 
 Enable it by setting `MQTT_ENABLED=true` and pointing `MQTT_HOST` at your broker
-(see `server/.env.example` / `docker/env.example` for the full list):
+(see `server/.env.example` / `docker/.env.example` for the full list):
 
 ```bash
 MQTT_ENABLED=true
@@ -413,20 +419,33 @@ Require both `X-HivePal-Service-Key` and a per-user `Authorization: Bearer <hive
 | `POST` | `/api/v1/app/devices/{id}/commands/update-hiveinside` | Trigger a HiveInside OTA relay |
 | `GET` | `/api/v1/app/devices/{id}/insights[/summary\|/history]` | Rule-based colony insights, summary, and history |
 
-### Local dashboard endpoints (optional, auth-free)
+### Local dashboard endpoints (optional, login-protected)
 
-Enabled only when `ENABLE_LOCAL_DASHBOARD=true`. **No authentication** and **not scoped to a user** — they serve every device on the server, so keep them on a trusted LAN / behind your own reverse proxy. They power the built-in `/dashboard` UI and mirror the read paths above. When disabled, every route returns `404`.
+Enabled only when `ENABLE_LOCAL_DASHBOARD=true`; every route returns `404` when
+disabled. Access is gated by **username + password login** (HttpOnly session
+cookie): the first visit runs a setup wizard that creates the initial admin
+account, read endpoints need any valid session, and write/control endpoints
+need the `admin` role. The API is **not scoped per user** — one login covers
+every device on the server — so keep it off on multi-tenant deployments. These
+endpoints power the built-in `/dashboard` UI; see
+[server/dashboard/README.md](server/dashboard/README.md).
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/v1/local/devices` | List all devices + scale-channel names |
-| `GET` | `/api/v1/local/devices/{id}/measurements[/latest]` | Measurements (date filter) / latest |
+| `GET`/`POST` | `/api/v1/local/auth/status` · `/setup` · `/login` · `/logout` | Session status / first-run wizard / sign in / sign out |
+| `POST` | `/api/v1/local/auth/password` · `/email` | Change own password / set alert e-mail |
+| `GET`/`POST`/`DELETE` | `/api/v1/local/auth/users[/{id}]` | Manage dashboard accounts (admin) |
+| `GET` | `/api/v1/local/devices` | List all devices + hive display names |
+| `PATCH` | `/api/v1/local/devices/{id}/visibility` | Hide / show a device in the hive picker (admin) |
+| `GET` | `/api/v1/local/devices/{id}/measurements[/latest]` | Measurements (date filter, down-sampled for charts) / latest |
+| `POST` | `/api/v1/local/devices/{id}/measurements/import` | Import an SD-card backup (`.ndjson` / `.tar`, admin) |
+| `POST` | `/api/v1/local/devices/{id}/measurements/delete` | Delete readings in a time range (admin + device claim code) |
 | `GET`/`PATCH` | `/api/v1/local/devices/{id}/config` | Read / update device config (interval, scale offsets/factors, temp comp) |
-| `GET`/`PATCH` | `/api/v1/local/devices/{id}/channels` | Read / rename the scale-channel (hive) display names |
-| `GET` | `/api/v1/local/devices/{id}/insights/summary` | Highest-severity insight summary |
-| `GET`/`POST` | `/api/v1/local/devices/{id}/firmware/status` · (upload) · `/approve` | OTA status / upload binary / approve |
-| `POST` | `/api/v1/local/devices/{id}/calibration/start` · `/stop` | Start / stop calibration mode |
-| `POST` | `/api/v1/local/devices/{id}/temp-compensation/fit` | Fit a load-cell temperature coefficient |
+| `GET`/`PATCH` | `/api/v1/local/devices/{id}/channels` | Read / rename the hive display names |
+| `GET` | `/api/v1/local/devices/{id}/insights/summary` · `/history` | Highest-severity insight summary / persisted alert history |
+| `GET`/`POST` | `/api/v1/local/devices/{id}/firmware/status` · (upload) · `/approve` | OTA status / upload binary / approve (admin) |
+| `POST` | `/api/v1/local/devices/{id}/calibration/start` · `/stop` | Start / stop calibration mode (admin) |
+| `POST` | `/api/v1/local/devices/{id}/temp-compensation/fit` | Fit a load-cell temperature coefficient (admin) |
 | `GET` | `/api/v1/local/notifications/config` | Which alert channels are enabled + VAPID public key |
 | `POST` | `/api/v1/local/notifications/subscribe` · `/unsubscribe` | Register / forget this browser's Web Push subscription |
 | `POST` | `/api/v1/local/notifications/test` | Send a test alert over every enabled channel |
@@ -444,7 +463,7 @@ Core fields include weights, hive/ambient temperatures and humidity, raw HX711 v
 - **Power telemetry:** `battery_*` (MAX17048) fields; the backend also still accepts the legacy `solar_*` fields.
 - **Status:** `network_transport`, `calibration_mode`, `boot_count`, `time_source`.
 
-The backend also accepts `cellular_ok` / `cellular_csq` for the future Power Module; on-device firmware reports `network_transport: "wifi"`. Fields are stored in dedicated PostgreSQL columns (plus `raw_json`) and returned through the latest-measurements and HivePal app APIs.
+The backend accepts `network_transport` for the future Power Module; on-device firmware reports `network_transport: "wifi"`. (The old `cellular_ok` / `cellular_csq` fields were removed from the schema and are silently ignored if sent.) Fields are stored in dedicated PostgreSQL columns (plus `raw_json`) and returned through the latest-measurements and HivePal app APIs.
 
 ---
 
@@ -507,6 +526,69 @@ A full index is in [docs/README.md](docs/README.md). Highlights:
 - [docs/docker-install.md](docs/docker-install.md) · [docs/truenas-install.md](docs/truenas-install.md) · [docs/test-commands.md](docs/test-commands.md) — deployment & testing.
 
 ---
+
+## Testing and quality checks
+
+CI (`.github/workflows/ci.yml`) builds both firmware targets, runs the host-level
+I2C-hardening and BLE-decoder tests, the Python server suite, and syntax-checks
+every website/dashboard script. To run the same checks locally:
+
+```bash
+# Server / insights suite (no database needed)
+pip install -r server/requirements.txt pytest
+DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_counter_rules.py
+DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_accel_rules.py
+DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_ble_sensor_rules.py
+DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_sd_import.py
+DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py
+
+# Firmware host tests (plain g++, no Arduino toolchain)
+./firmware/host_test/run_tests.sh
+g++ -std=gnu++17 -I firmware/include -o /tmp/t1 test-data/test_ruuvi_decode.cpp   && /tmp/t1
+g++ -std=gnu++17 -I firmware/include -o /tmp/t2 test-data/test_beehive_decode.cpp && /tmp/t2
+
+# Firmware builds (needs PlatformIO)
+cd firmware && pio run -e esp32dev && pio run -e xiao_esp32c6
+```
+
+`curl` examples for exercising a running backend are in
+[docs/test-commands.md](docs/test-commands.md); a mock server with sample data
+lives in [test-data/mock-server/](test-data/mock-server/).
+
+---
+
+## Troubleshooting
+
+- **Device shows no data** — check `docker compose logs hivescale-api` for
+  ingest errors; verify the device's `API_BASE_URL` is HTTPS with a valid
+  certificate (the firmware verifies TLS) and NTP (UDP 123) is reachable.
+- **OTA never triggers** — updates need three things: the release's `board`
+  must match the device (`esp32` vs `esp32-c6`), the version must be newer, and
+  the owner must have **approved** it (accept-to-apply gate). Also make sure
+  `PUBLIC_BASE_URL` is set, otherwise download URLs are relative.
+- **Firmware downloads 404 after a container rebuild** — uploaded binaries live
+  in `FIRMWARE_DIR`; make sure the `firmware-data` volume (or a bind mount) is
+  attached.
+- **Dashboard says "Local dashboard is disabled"** — set
+  `ENABLE_LOCAL_DASHBOARD=true` on the API container.
+- **Locked out of the dashboard** — accounts live in the `dashboard_users`
+  table; deleting all rows re-runs the first-visit setup wizard.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. Please run the test suite above before
+submitting, keep the docs in sync with behavior changes, and note that
+`CLAUDE.md` documents repository conventions for AI-assisted contributions.
+To request support for a new hive sensor, see
+[docs/device-not-supported-yet.md](docs/device-not-supported-yet.md).
+
+## Reporting security issues
+
+Please do not open public issues for security vulnerabilities. Report them
+privately to the maintainer (see the commit history / GitHub profile for
+contact) so a fix can be released first.
 
 ## License
 
