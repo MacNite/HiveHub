@@ -168,7 +168,8 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | `config_version` | integer | No | Config version currently applied by the device |
 | `sd_ok` | boolean | No | SD card status |
 | `rtc_ok` | boolean | No | RTC status |
-| `sht_ok` | boolean | No | SHT4x status |
+| `sht_ok` | boolean | No | Whether the current cycle produced a valid SHT4x ambient measurement (false when `ambient_temp_c`/`ambient_humidity_percent` are null because the read failed) |
+| `sht_detected` | boolean | No | Whether the SHT4x was detected/initialized at boot (diagnostic; ignored by the backend, retained in the raw upload) |
 | `scale_1_raw` | integer | No | Raw HX711 reading for scale 1 |
 | `scale_2_raw` | integer | No | Raw HX711 reading for scale 2 |
 

@@ -9,6 +9,7 @@
 #include "i2c_bus.h"
 #include "scale_bus.h"
 #include "scale_math.h"
+#include "sht4x_recovery.h"
 
 #include <WiFi.h>
 #include <time.h>
@@ -206,11 +207,13 @@ struct WiredScaleAgg {
   const char* scaleSrc        = "";
 };
 
-// Snapshot of the wired I2C readings captured pre-radio by prefetchWiredSensors()
+// Snapshot of the wired I2C readings captured pre-radio by the prefetch pass
 // and consumed by createMeasurementJson().
 struct WiredSensorSnapshot {
   float ambientTemp     = NAN;
   float ambientHumidity = NAN;
+  bool  shtRead         = false;  // THIS cycle's SHT4x measurement was valid
+                                  // (distinct from shtOk = detected at boot)
 #if ENABLE_INA219_SOLAR
   float solarBusVoltage = NAN, solarShuntVoltageMv = NAN, solarLoadVoltage = NAN;
   float solarCurrentMa  = NAN, solarPowerMw = NAN;
@@ -224,18 +227,54 @@ struct WiredSensorSnapshot {
 
 static WiredSensorSnapshot gWired;
 
-void prefetchWiredSensors() {
-  // All wired I2C acquisition happens HERE, before WiFi/BLE start — see the
-  // header note. On the ESP32-C6 radio start-up wedges the I2C peripheral into
-  // ESP_ERR_INVALID_STATE, which Wire.end()/begin() cannot clear; reading now,
-  // on the known-good bus, is the only reliable window.
-  Serial.println("[PREFETCH] Reading wired I2C sensors before radio...");
+// Binds the Arduino-free acquisition sequence in sht4x_recovery.h to the real
+// SHT4x/I2C calls. On the first read failure it heals the wedged ESP32-C6 driver
+// and — crucially — FULLY reinitializes the Adafruit SHT4x object before the one
+// bounded retry (Wire.end()/begin() invalidates the cached I2C device the driver
+// holds, so getEvent() alone cannot recover). read() stores the values on
+// success. See sht4x_recovery.h for why the ordering matters.
+struct Sht4xOps {
+  float& tempC;
+  float& humidity;
+  bool read() {
+    sensors_event_t humidityEvt, tempEvt;
+    if (!sht4.getEvent(&humidityEvt, &tempEvt)) return false;
+    tempC = tempEvt.temperature;
+    humidity = humidityEvt.relative_humidity;
+    return true;
+  }
+  bool heal() { return i2cbus::healForRead(); }
+  bool ack()  { return i2cbus::deviceResponds(SHT4X_I2C_ADDRESS); }
+  bool reinit() {
+    if (!sht4.begin(&Wire)) return false;
+    sht4.setPrecision(SHT4X_HIGH_PRECISION);
+    sht4.setHeater(SHT4X_NO_HEATER);
+    return true;
+  }
+  void onInitialFail() { Serial.println("[SHT4x] Initial read failed"); }
+  void onAck(bool ok)  { Serial.printf("[SHT4x] ACK after I2C heal: %s\n", ok ? "yes" : "no"); }
+  void onReinit(bool ok) { Serial.printf("[SHT4x] Reinitialization after I2C heal: %s\n", ok ? "OK" : "FAILED"); }
+  void onRetry(bool ok)  { Serial.printf("[SHT4x] Retry read: %s\n", ok ? "OK" : "FAILED"); }
+};
+
+// Returns true (and fills tempC/humidity) only when a real measurement was
+// obtained, on the first try or the single post-heal retry.
+static bool readAmbientSht4x(float& tempC, float& humidity) {
+  Sht4xOps ops{tempC, humidity};
+  return sht4xrec::acquire(ops).ok;
+}
+
+void prefetchAmbientSensors() {
+  // Phase 1: device-level ambient I2C sensors. This runs BEFORE
+  // scalebus::begin() probes the optional TCA9548A and before WiFi/BLE start —
+  // see the header note. On the ESP32-C6 a transaction to an absent device (the
+  // mux probe) or radio start-up wedges the I2C peripheral into
+  // ESP_ERR_INVALID_STATE; capturing the ambient SHT4x here, on the known-good
+  // bus, is the only reliable window. Resets the per-cycle snapshot and heal
+  // budget for the whole prefetch (phase 3 shares them).
+  Serial.println("[PREFETCH] Reading ambient wired I2C sensors before scale probe/radio...");
   i2cbus::resetReadHeals();
   gWired = WiredSensorSnapshot();  // fresh each cycle (setup runs every wake)
-
-  // Power up the (HX711) scales before reading them; no-op on the C6 where the
-  // only scale backend is the I2C NAU7802 (configured by scalebus::begin()).
-  powerUpScales();
 
 #if ENABLE_DS18B20_HIVE_TEMP
   ds18b20.requestTemperatures();
@@ -243,15 +282,7 @@ void prefetchWiredSensors() {
 
   // ── Ambient SHT4x (device-level, outside-hive) ─────────────────────────────
   if (shtOk) {
-    sensors_event_t humidity, temp;
-    bool got = sht4.getEvent(&humidity, &temp);
-    if (!got && i2cbus::healForRead()) got = sht4.getEvent(&humidity, &temp);
-    if (got) {
-      gWired.ambientTemp = temp.temperature;
-      gWired.ambientHumidity = humidity.relative_humidity;
-    } else {
-      Serial.println("[SHT4x] Read failed");
-    }
+    gWired.shtRead = readAmbientSht4x(gWired.ambientTemp, gWired.ambientHumidity);
   }
 
 #if ENABLE_INA219_SOLAR
@@ -279,6 +310,17 @@ void prefetchWiredSensors() {
     if (gWired.batteryAlert) batteryGauge.clearAlert();
   }
 #endif
+}
+
+void prefetchWiredScales() {
+  // Phase 3: wired scales. Runs AFTER scalebus::begin() so no scale read is
+  // attempted before scale state has been initialized, and after phase 1 so the
+  // ambient SHT4x was captured before any absent-device probe. Shares the
+  // snapshot and heal budget prefetchAmbientSensors() reset at the cycle start.
+
+  // Power up the (HX711) scales before reading them; no-op on the C6 where the
+  // only scale backend is the I2C NAU7802 (configured by scalebus::begin()).
+  powerUpScales();
 
   // ── Wired scales (NAU7802): cache one aggregate per hive. ──────────────────
   for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
@@ -326,11 +368,13 @@ String createMeasurementJson() {
   Serial.println("[MEASURE] Assembling upload from pre-radio wired snapshot...");
 
   // The wired I2C sensors (SHT4x, INA219, MAX17048, NAU7802 scales) were
-  // captured by prefetchWiredSensors() BEFORE WiFi/BLE started, because radio
+  // captured by prefetchAmbientSensors()/prefetchWiredScales() BEFORE WiFi/BLE
+  // started, because radio
   // start-up wedges the C6 I2C peripheral in a way Wire.end()/begin() cannot
   // clear. Consume that snapshot here instead of reading live post-radio.
   const float ambientTemp     = gWired.ambientTemp;
   const float ambientHumidity = gWired.ambientHumidity;
+  const bool  shtRead         = gWired.shtRead;
 #if ENABLE_INA219_SOLAR
   const float solarBusVoltage     = gWired.solarBusVoltage;
   const float solarShuntVoltageMv = gWired.solarShuntVoltageMv;
@@ -427,7 +471,13 @@ String createMeasurementJson() {
   doc["hive_count"] = hivecfg::gHiveCount;
   doc["sd_ok"] = sdOk;
   doc["rtc_ok"] = rtcOk;
-  doc["sht_ok"] = shtOk;
+  // sht_ok reports whether THIS cycle produced a valid SHT4x measurement — it is
+  // false whenever the ambient values are null because the read failed (e.g. a
+  // wedged C6 I2C driver), never the boot-time detection result. sht_detected
+  // preserves that detection/initialization diagnostic separately (the backend
+  // ignores unknown fields, so this is upload-safe).
+  doc["sht_ok"] = shtRead;
+  doc["sht_detected"] = shtOk;
 #if ENABLE_INA219_SOLAR
   doc["solar_monitor_ok"] = solarMonitorOk;
   doc["solar_bus_voltage_v"] = solarBusVoltage;

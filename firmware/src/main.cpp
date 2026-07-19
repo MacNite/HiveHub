@@ -181,10 +181,15 @@ void setup() {
   Serial.println("[HX711] Initialized");
 #endif
 
+  // Wired I2C acquisition, all before radio and before SD/SPI, in three ordered
+  // phases: (1) device-level ambient sensors (SHT4x/INA219/MAX17048) on the
+  // known-good bus, BEFORE any optional/absent-device probe; (2) scale-bus
+  // init, which probes the optional TCA9548A; (3) wired scale reads. Keeping the
+  // ambient SHT4x read ahead of the mux probe stops an absent TCA9548A from
+  // wedging the ESP32-C6 I2C-NG driver before the ambient measurement is taken.
+  prefetchAmbientSensors();
   scalebus::begin();
-
-  // All wired I2C sensor acquisition happens before radio and before SD/SPI.
-  prefetchWiredSensors();
+  prefetchWiredScales();
 
   // The hardware log shows SD.begin() is the boundary after which the C6 I2C-NG
   // driver starts returning ESP_ERR_INVALID_STATE. Resolve time first, and do not
@@ -237,7 +242,13 @@ void loop() {
 
   if (now - lastCycleMs >= activeIntervalMs) {
     lastCycleMs = now;
-    prefetchWiredSensors();
+    // Awake/calibration mode: scalebus::begin() already ran once in setup() and
+    // its chip state persists, so re-acquire both wired phases (ambient then
+    // scales) without re-initializing the scale bus. Each cycle resets the
+    // snapshot, so a failed read reports null/sht_ok:false rather than a stale
+    // value even though WiFi is already up.
+    prefetchAmbientSensors();
+    prefetchWiredScales();
     runUploadCycle();
   }
 

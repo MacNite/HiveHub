@@ -10,3 +10,7 @@ mkdir -p build
 "$CXX" -std=gnu++17 -Wall -Wextra -Werror -I../include \
        -o build/test_i2c_hardening test_i2c_hardening.cpp
 ./build/test_i2c_hardening
+
+"$CXX" -std=gnu++17 -Wall -Wextra -Werror -I../include \
+       -o build/test_sht4x_recovery test_sht4x_recovery.cpp
+./build/test_sht4x_recovery
