@@ -10,6 +10,7 @@
 #include "scale_bus.h"
 #include "scale_math.h"
 #include "sht4x_recovery.h"
+#include "sht4x_measure.h"
 
 #include <WiFi.h>
 #include <time.h>
@@ -227,22 +228,64 @@ struct WiredSensorSnapshot {
 
 static WiredSensorSnapshot gWired;
 
+// Checked native SHT4x high-precision read. Talks to the sensor directly through
+// the shared Wire-backed I2C interface (i2cbus::iface(), whose endTransmission()
+// issues the STOP the SHT4x needs between command and read-back) instead of the
+// Adafruit getEvent() path, which collapses a command NACK, a short read and a
+// CRC failure into one indistinguishable boolean. Logs the exact failing stage
+// and, on success, stores the converted values. Returns true only for a fully
+// CRC-valid measurement.
+static bool readSht4xChecked(float& tempC, float& humidity) {
+  sht4xmeas::Result m = sht4xmeas::measure(i2cbus::iface());
+
+  if (!m.commandWritten || m.endTransmission != 0) {
+    Serial.printf("[SHT4x] Measurement command failed: endTransmission=%u (command buffered: %s)\n",
+                  m.endTransmission, m.commandWritten ? "yes" : "no");
+    return false;
+  }
+
+  Serial.printf("[SHT4x] Measurement response: requested=%u received=%u available=%d\n",
+                m.requested, m.received, m.available);
+
+  if (!m.haveRaw) {
+    // Fewer than six bytes: log ONLY the bytes that actually arrived (never the
+    // uninitialized tail of the buffer).
+    Serial.print("[SHT4x] Short response, received bytes:");
+    for (uint8_t i = 0; i < m.readCount; i++) Serial.printf(" %02X", m.raw[i]);
+    Serial.println(m.readCount == 0 ? " (none)" : "");
+    return false;
+  }
+
+  Serial.printf("[SHT4x] Raw response: %02X %02X %02X %02X %02X %02X\n",
+                m.raw[0], m.raw[1], m.raw[2], m.raw[3], m.raw[4], m.raw[5]);
+  Serial.printf("[SHT4x] CRC temperature: recv=0x%02X calc=0x%02X (%s); humidity: recv=0x%02X calc=0x%02X (%s)\n",
+                m.raw[2], sht4xmeas::crc8(&m.raw[0], 2), m.tempCrcOk ? "OK" : "BAD",
+                m.raw[5], sht4xmeas::crc8(&m.raw[3], 2), m.humidityCrcOk ? "OK" : "BAD");
+
+  if (!m.ok) {
+    Serial.printf("[SHT4x] CRC failure: temperature=%s humidity=%s\n",
+                  m.tempCrcOk ? "OK" : "BAD", m.humidityCrcOk ? "OK" : "BAD");
+    return false;
+  }
+
+  tempC = m.tempC;
+  humidity = m.humidity;
+  Serial.printf("[SHT4x] Measurement OK: temperature=%.2f C humidity=%.1f %%\n",
+                (double)tempC, (double)humidity);
+  return true;
+}
+
 // Binds the Arduino-free acquisition sequence in sht4x_recovery.h to the real
 // SHT4x/I2C calls. On the first read failure it heals the wedged ESP32-C6 driver
 // and — crucially — FULLY reinitializes the Adafruit SHT4x object before the one
 // bounded retry (Wire.end()/begin() invalidates the cached I2C device the driver
-// holds, so getEvent() alone cannot recover). read() stores the values on
-// success. See sht4x_recovery.h for why the ordering matters.
+// holds, so a bare re-read alone cannot recover). read() performs the checked
+// native measurement (readSht4xChecked) and stores the values on success. See
+// sht4x_recovery.h for why the ordering matters.
 struct Sht4xOps {
   float& tempC;
   float& humidity;
-  bool read() {
-    sensors_event_t humidityEvt, tempEvt;
-    if (!sht4.getEvent(&humidityEvt, &tempEvt)) return false;
-    tempC = tempEvt.temperature;
-    humidity = humidityEvt.relative_humidity;
-    return true;
-  }
+  bool read() { return readSht4xChecked(tempC, humidity); }
   bool heal() { return i2cbus::healForRead(); }
   bool ack()  { return i2cbus::deviceResponds(SHT4X_I2C_ADDRESS); }
   bool reinit() {

@@ -14,3 +14,7 @@ mkdir -p build
 "$CXX" -std=gnu++17 -Wall -Wextra -Werror -I../include \
        -o build/test_sht4x_recovery test_sht4x_recovery.cpp
 ./build/test_sht4x_recovery
+
+"$CXX" -std=gnu++17 -Wall -Wextra -Werror -I../include \
+       -o build/test_sht4x_measure test_sht4x_measure.cpp
+./build/test_sht4x_measure

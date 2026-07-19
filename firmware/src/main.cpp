@@ -146,6 +146,10 @@ void setup() {
   if (shtOk) {
     sht4.setPrecision(SHT4X_HIGH_PRECISION);
     sht4.setHeater(SHT4X_NO_HEATER);
+    // Let the sensor settle after configuration before the first checked
+    // measurement (the high-precision command times out otherwise on a cold
+    // cross-radio start). Small and bounded — see sht4x_measure.h.
+    delay(20);
   }
 
 #if ENABLE_INA219_SOLAR
