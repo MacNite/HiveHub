@@ -206,6 +206,15 @@
 #define I2C_CLOCK_HZ 100000UL
 #endif
 
+// Ambient SHT4x (temp/humidity) fixed I2C address. Named — like the other
+// *_I2C_ADDRESS constants — so the read-path recovery can re-probe the sensor
+// (i2cbus::deviceResponds) after healing a wedged ESP32-C6 I2C-NG driver, and
+// re-run sht4.begin() at a known address, instead of scattering the raw 0x44.
+// 0x44 is the Adafruit SHT4x default (SHT4x_DEFAULT_ADDR).
+#ifndef SHT4X_I2C_ADDRESS
+#define SHT4X_I2C_ADDRESS 0x44
+#endif
+
 // ==============================
 // NAU7802 24-bit I2C LOAD-CELL ADC (alternative to HX711)
 // ==============================
