@@ -6,7 +6,7 @@
 // The shared bus carries: DS3231 RTC, SHT4x, NAU7802 (direct or behind a
 // TCA9548A), optional INA219 and MAX17048. Nothing on it may change the bus
 // clock — the former BeeCounter 400 kHz OTA path is gone; the bus runs at
-// I2C_CLOCK_HZ (100 kHz) from begin() to end().
+// I2C_CLOCK_HZ (50 kHz) from begin() to end().
 #pragma once
 
 #include <Arduino.h>

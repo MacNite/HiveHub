@@ -57,64 +57,99 @@ bool recover() {
   gDiag.recoveryAttempts++;
   rtcRecoveryAttempts++;
 
-  // Release both lines as open-drain/inputs; external pull-ups define idle.
+  // Release BOTH lines as inputs with internal pull-ups. This is the only safe
+  // way to sample the true idle state: we never actively drive a line high, so
+  // a line the hardware is already holding at 3.3 V reads high instead of being
+  // masked by a push-pull HIGH we drove ourselves (the old code drove SCL HIGH
+  // and could then misread a physically-high SCL as "stuck low"). Give the pads
+  // a moment to settle through the pull-ups before sampling.
   pinMode(I2C_SDA, INPUT_PULLUP);
-  pinMode(I2C_SCL, OUTPUT_OPEN_DRAIN);
-  digitalWrite(I2C_SCL, HIGH);
-  delayMicroseconds(5);
+  pinMode(I2C_SCL, INPUT_PULLUP);
+  delayMicroseconds(20);
 
-  const bool sdaLowBefore = digitalRead(I2C_SDA) == LOW;
-  const bool sclLowBefore = digitalRead(I2C_SCL) == LOW;
+  const int sdaLevel = digitalRead(I2C_SDA);
+  const int sclLevel = digitalRead(I2C_SCL);
+
+  Serial.printf(
+      "[I2C] Recovery initial levels: SDA=%d SCL=%d, pins SDA=%d SCL=%d\n",
+      sdaLevel,
+      sclLevel,
+      static_cast<int>(I2C_SDA),
+      static_cast<int>(I2C_SCL)
+  );
+
+  const bool sdaLowBefore = sdaLevel == LOW;
+  const bool sclLowBefore = sclLevel == LOW;
 
   if (!sdaLowBefore && !sclLowBefore) {
-    pinMode(I2C_SDA, INPUT);
-    pinMode(I2C_SCL, INPUT);
-    return true;  // bus already idle — nothing to recover
+    // Bus already idle — leave both lines released (pull-ups hold them high).
+    pinMode(I2C_SDA, INPUT_PULLUP);
+    pinMode(I2C_SCL, INPUT_PULLUP);
+    return true;  // nothing to recover
   }
 
   // SCL held low by a slave (or a short) is unrecoverable from the master
-  // side: we cannot clock anything. Report and fail.
+  // side: we cannot clock anything. Report and fail closed.
   if (sclLowBefore && !waitSclHigh(10000)) {
     Serial.println("[I2C] Bus recovery FAILED: SCL stuck low (slave power-cycle or wiring fix required)");
     gDiag.recoveryFailures++;
     rtcRecoveryFailures++;
-    pinMode(I2C_SDA, INPUT);
-    pinMode(I2C_SCL, INPUT);
+    pinMode(I2C_SDA, INPUT_PULLUP);
+    pinMode(I2C_SCL, INPUT_PULLUP);
     return false;
   }
 
   // Standard rescue: up to 9 SCL pulses lets a slave stuck mid-byte finish and
-  // release SDA. Only pulse while SCL actually rises (bounded stretch wait).
+  // release SDA. Open-drain safe — SCL is only ever driven LOW or released to
+  // its pull-up, never actively driven high. Only pulse while SCL actually
+  // rises after release (bounded clock-stretch wait).
   int cycles = 0;
   while (digitalRead(I2C_SDA) == LOW && cycles < 9) {
+    pinMode(I2C_SCL, OUTPUT_OPEN_DRAIN);
     digitalWrite(I2C_SCL, LOW);
     delayMicroseconds(5);
-    digitalWrite(I2C_SCL, HIGH);   // released; pull-up raises SCL
-    if (!waitSclHigh(1000)) break; // stretch/stuck — stop pulsing
+
+    pinMode(I2C_SCL, INPUT_PULLUP);  // release; pull-up raises SCL
+    if (!waitSclHigh(1000)) break;   // stretch/stuck — stop pulsing
     delayMicroseconds(5);
     cycles++;
   }
 
   // Manufacture a STOP (SDA low->high while SCL high) so any listening slave
-  // sees a clean end-of-transaction before the Wire driver takes over.
+  // sees a clean end-of-transaction before the Wire driver takes over. Both
+  // lines stay open-drain safe: SDA is driven low then released to its pull-up,
+  // SCL is only released and waited on — neither is ever actively driven high.
+  bool stopSclHigh = true;
   pinMode(I2C_SDA, OUTPUT_OPEN_DRAIN);
   digitalWrite(I2C_SDA, LOW);
   delayMicroseconds(5);
-  digitalWrite(I2C_SCL, HIGH);
-  delayMicroseconds(5);
-  digitalWrite(I2C_SDA, HIGH);
+
+  pinMode(I2C_SCL, INPUT_PULLUP);    // release SCL; require it to truly read high
+  if (!waitSclHigh(1000)) stopSclHigh = false;
   delayMicroseconds(5);
 
-  const bool sdaHigh = digitalRead(I2C_SDA) == HIGH;
-  const bool sclHigh = digitalRead(I2C_SCL) == HIGH;
-  Serial.printf("[I2C] Bus recovery: %d SCL pulse(s); SDA %s, SCL %s\n",
-                cycles, sdaHigh ? "high" : "STILL LOW", sclHigh ? "high" : "STILL LOW");
+  pinMode(I2C_SDA, INPUT_PULLUP);    // release SDA -> rising edge = STOP
+  delayMicroseconds(5);
 
-  // Return the pins to inputs so Wire.begin() reconfigures them cleanly.
-  pinMode(I2C_SDA, INPUT);
-  pinMode(I2C_SCL, INPUT);
+  const int sdaAfter = digitalRead(I2C_SDA);
+  const int sclAfter = digitalRead(I2C_SCL);
+  const bool sdaHigh = sdaAfter == HIGH;
+  const bool sclHigh = sclAfter == HIGH && stopSclHigh;
+
+  Serial.printf("[I2C] Bus recovery: %d SCL pulse(s); final SDA=%d SCL=%d (SDA %s, SCL %s)\n",
+                cycles, sdaAfter, sclAfter,
+                sdaHigh ? "high" : "STILL LOW",
+                sclHigh ? "high" : "STILL LOW");
+
+  // Leave the pins released with pull-ups; begin() reconfigures them for Wire.
+  pinMode(I2C_SDA, INPUT_PULLUP);
+  pinMode(I2C_SCL, INPUT_PULLUP);
 
   if (!sdaHigh || !sclHigh) {
+    const char* reason = (!sdaHigh && !sclHigh) ? "SDA and SCL both remained low"
+                         : !sdaHigh              ? "SDA remained low"
+                                                 : "SCL remained low";
+    Serial.printf("[I2C] Bus recovery FAILED: %s\n", reason);
     gDiag.recoveryFailures++;
     rtcRecoveryFailures++;
     return false;
@@ -131,6 +166,11 @@ bool begin() {
     return false;
   }
 
+  // Hand Wire a clean, idle bus: both lines released (inputs with pull-ups),
+  // not a pin we are still driving from the recovery sequence.
+  pinMode(I2C_SDA, INPUT_PULLUP);
+  pinMode(I2C_SCL, INPUT_PULLUP);
+
   if (!Wire.begin(I2C_SDA, I2C_SCL, I2C_CLOCK_HZ)) {
     Serial.println("[I2C] Wire.begin FAILED");
     gDiag.initFailures++;
@@ -146,7 +186,7 @@ bool begin() {
     return false;
   }
 
-  Serial.printf("[I2C] Started on SDA=%d SCL=%d at %lu Hz (reported %lu Hz)\n",
+  Serial.printf("[I2C] Started on SDA=GPIO%d SCL=GPIO%d, configured %lu Hz, reported %lu Hz\n",
                 (int)I2C_SDA, (int)I2C_SCL,
                 (unsigned long)I2C_CLOCK_HZ, (unsigned long)Wire.getClock());
   gBusOk = true;

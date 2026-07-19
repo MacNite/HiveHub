@@ -197,13 +197,14 @@
 // SHARED I2C BUS
 // ==============================
 // The single shared bus (DS3231, SHT4x, NAU7802/TCA9548A, optional INA219 /
-// MAX17048) runs at an EXPLICIT 100 kHz — never the framework default, and
+// MAX17048) runs at an EXPLICIT 50 kHz — never the framework default, and
 // nothing is allowed to change it at runtime (the old BeeCounter OTA path that
 // temporarily switched the bus to 400 kHz has been removed together with all
-// wired-BeeCounter support). Initialization is checked and logged; see
-// firmware/src/i2c_bus.cpp.
+// wired-BeeCounter support). The lower 50 kHz clock buys extra margin against
+// long, noisy hive wiring and weak pull-ups, improving startup reliability.
+// Initialization is checked and logged; see firmware/src/i2c_bus.cpp.
 #ifndef I2C_CLOCK_HZ
-#define I2C_CLOCK_HZ 100000UL
+#define I2C_CLOCK_HZ 50000UL
 #endif
 
 // Ambient SHT4x (temp/humidity) fixed I2C address. Named — like the other
