@@ -20,7 +20,17 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #endif
+// Exactly one ambient temp/humidity[/pressure] sensor family (see config.h).
+#if ENABLE_SHT4X_AMBIENT
 #include <Adafruit_SHT4x.h>
+#endif
+#if ENABLE_SHT3X_AMBIENT
+#include <Adafruit_SHT31.h>
+#endif
+#if ENABLE_BME280_AMBIENT
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
+#endif
 #include <RTClib.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
@@ -48,7 +58,16 @@ extern HX711 scale2;
 extern OneWire oneWire;
 extern DallasTemperature ds18b20;
 #endif
+// The selected ambient sensor object (only one family is compiled — see config.h).
+#if ENABLE_SHT4X_AMBIENT
 extern Adafruit_SHT4x sht4;
+#endif
+#if ENABLE_SHT3X_AMBIENT
+extern Adafruit_SHT31 sht3;
+#endif
+#if ENABLE_BME280_AMBIENT
+extern Adafruit_BME280 bme;
+#endif
 extern RTC_DS3231 rtc;
 extern Preferences prefs;
 extern WebServer setupServer;

@@ -85,11 +85,26 @@
 // ==============================
 // DS18B20 WIRED IN-HIVE TEMPERATURE (optional)
 // ==============================
-// The two 1-Wire DS18B20 probes (hive_1_temp_c / hive_2_temp_c) are optional and
-// OFF by default. Set to 1 on builds that fit the wired probes; otherwise in-hive
-// temperature comes from a paired in-hive BLE sensor instead (see below). When
-// both are present the wired probe wins and the BLE temperature is the fallback.
+// The 1-Wire DS18B20 probes (hive_N_temp_c) are optional and OFF by default on
+// EVERY board (including the XIAO C6, which defaulted them ON before v0.24.0).
+// Otherwise in-hive temperature comes from a paired in-hive BLE sensor (see
+// below); when both are present the wired probe wins and BLE is the fallback.
+// NOTE: setting this to 1 ALSO requires uncommenting the OneWire +
+// DallasTemperature libraries in the matching platformio.ini env, or the build
+// will fail to find <OneWire.h>/<DallasTemperature.h>.
 #define ENABLE_DS18B20_HIVE_TEMP 0
+
+// ==============================
+// AMBIENT SENSOR — TEMP / HUMIDITY / PRESSURE (pick exactly one)
+// ==============================
+// The device-level ambient (outside-hive) sensor on the shared I2C bus. Exactly
+// one family may be enabled; SHT4x is the default. Switching to SHT3x or BME280
+// ALSO requires uncommenting that library in platformio.ini (see the notes
+// there). The BME280 additionally reports barometric pressure as
+// ambient_pressure_hpa. Defaults live in config.h — uncomment to override:
+// #define ENABLE_SHT4X_AMBIENT 1   // Sensirion SHT40 (default)
+// #define ENABLE_SHT3X_AMBIENT 1   // Sensirion SHT31/SHT35 (set SHT4x to 0)
+// #define ENABLE_BME280_AMBIENT 1  // Bosch BME280, adds ambient pressure (set SHT4x to 0)
 
 // ==============================
 // HOLYIOT 25015 IN-HIVE BLE SENSOR (optional)

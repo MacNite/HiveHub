@@ -146,8 +146,9 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | `hive_2_temp_c` | number | No | Hive 2 internal temperature |
 | `hive_1_humidity_percent` | number | No | Hive 1 internal relative humidity (from a paired in-hive BLE sensor) |
 | `hive_2_humidity_percent` | number | No | Hive 2 internal relative humidity (from a paired in-hive BLE sensor) |
-| `ambient_temp_c` | number | No | Ambient temperature |
-| `ambient_humidity_percent` | number | No | Ambient relative humidity |
+| `ambient_temp_c` | number | No | Ambient temperature (SHT4x by default; SHT3x or BME280 if configured) |
+| `ambient_humidity_percent` | number | No | Ambient relative humidity (SHT4x/SHT3x/BME280) |
+| `ambient_pressure_hpa` | number | No | Ambient barometric pressure. Only sent when a pressure-capable ambient sensor (BME280) is compiled in; currently not persisted to a dedicated column, so the ingest schema ignores it |
 | `battery_voltage` | number | No | Legacy battery/supply voltage field |
 | `battery_voltage_v` | number | No | Battery voltage from MAX17048; preferred off-grid field |
 | `battery_soc_percent` | number | No | LiPo state-of-charge percentage |
@@ -168,8 +169,8 @@ Submit a measurement from a device. On the first measurement from a new `device_
 | `config_version` | integer | No | Config version currently applied by the device |
 | `sd_ok` | boolean | No | SD card status |
 | `rtc_ok` | boolean | No | RTC status |
-| `sht_ok` | boolean | No | Whether the current cycle produced a valid SHT4x ambient measurement (false when `ambient_temp_c`/`ambient_humidity_percent` are null because the read failed) |
-| `sht_detected` | boolean | No | Whether the SHT4x was detected/initialized at boot (diagnostic; ignored by the backend, retained in the raw upload) |
+| `sht_ok` | boolean | No | Whether the current cycle produced a valid ambient measurement (SHT4x/SHT3x/BME280; false when `ambient_temp_c`/`ambient_humidity_percent` are null because the read failed). Field name kept `sht_*` for backward compatibility |
+| `sht_detected` | boolean | No | Whether the ambient sensor was detected/initialized at boot (diagnostic; ignored by the backend, retained in the raw upload) |
 | `scale_1_raw` | integer | No | Raw HX711 reading for scale 1 |
 | `scale_2_raw` | integer | No | Raw HX711 reading for scale 2 |
 

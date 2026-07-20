@@ -215,10 +215,13 @@ void appendLastSensorPanel(String& html) {
   addMeasurementRow(html, "Hives configured", jsonNumberOrNA(doc, "hive_count", 0, ""));
   addMeasurementRow(html, "Ambient temperature", jsonNumberOrNA(doc, "ambient_temp_c", 2, "C"));
   addMeasurementRow(html, "Ambient humidity", jsonNumberOrNA(doc, "ambient_humidity_percent", 1, "%"));
+#if AMBIENT_HAS_PRESSURE
+  addMeasurementRow(html, "Ambient pressure", jsonNumberOrNA(doc, "ambient_pressure_hpa", 1, "hPa"));
+#endif
   addMeasurementRow(html, "WiFi RSSI", jsonNumberOrNA(doc, "rssi_dbm", 0, "dBm"));
   addMeasurementRow(html, "SD card OK", jsonBoolOrNA(doc, "sd_ok"));
   addMeasurementRow(html, "RTC OK", jsonBoolOrNA(doc, "rtc_ok"));
-  addMeasurementRow(html, "SHT4x OK", jsonBoolOrNA(doc, "sht_ok"));
+  addMeasurementRow(html, "Ambient sensor OK", jsonBoolOrNA(doc, "sht_ok"));
 
   if (!doc["solar_load_voltage_v"].isNull() || !doc["solar_current_ma"].isNull() || !doc["solar_power_mw"].isNull()) {
     addMeasurementRow(html, "Solar voltage", jsonNumberOrNA(doc, "solar_load_voltage_v", 3, "V"));

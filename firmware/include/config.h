@@ -39,9 +39,12 @@
 //   - INMP441 I2S microphone: no spare I2S-capable pins.
 //
 // A single DS18B20 1-Wire bus IS supported on the C6. With HX711 removed, D1 is
-// free, so the V0.4 breakout wires the DS18B20 there (ONE_WIRE_PIN in the C6 pin
-// map below) and ENABLE_DS18B20_HIVE_TEMP defaults ON for this board. It stays
-// optional: in-hive temperature can still come from a paired BLE sensor instead.
+// free, so the V0.4 breakout can wire a DS18B20 there (ONE_WIRE_PIN in the C6 pin
+// map below). As of v0.24.0 the DS18B20 stack is OPTIONAL and defaults OFF on
+// every board (in-hive temperature comes from a paired BLE sensor instead), and
+// its OneWire/DallasTemperature libraries are commented out in platformio.ini.
+// To use a wired probe, set ENABLE_DS18B20_HIVE_TEMP 1 in secrets.h AND
+// uncomment those two libraries for the matching env — see the notes there.
 //
 // Two guards for the same condition:
 //   HIVEHUB_BOARD_XIAO_C6  — set by [env:xiao_esp32c6] build_flags; available
@@ -119,15 +122,15 @@
 // DS18B20 WIRED IN-HIVE TEMPERATURE (optional)
 // ==============================
 // The 1-Wire DS18B20 probes are an OPTIONAL sensor: in-hive temperature can
-// instead come from a paired in-hive BLE sensor (see below). Default OFF on the
-// classic board; default ON for the XIAO C6, whose V0.4 breakout always wires a
-// DS18B20 to D1. Override either way in secrets.h.
+// instead come from a paired in-hive BLE sensor (see below). As of v0.24.0 this
+// defaults OFF on EVERY board — including the XIAO C6, which previously defaulted
+// it ON — and the OneWire/DallasTemperature libraries are commented out in
+// platformio.ini so nothing 1-Wire is compiled by default. To bring the probe
+// back, set ENABLE_DS18B20_HIVE_TEMP 1 here (or in secrets.h) AND uncomment the
+// two DS18B20 libraries in the matching platformio.ini env, otherwise the build
+// will fail to find <OneWire.h>/<DallasTemperature.h>.
 #ifndef ENABLE_DS18B20_HIVE_TEMP
-#  if defined(HIVEHUB_BOARD_XIAO_C6) || defined(CONFIG_IDF_TARGET_ESP32C6)
-#    define ENABLE_DS18B20_HIVE_TEMP 1
-#  else
-#    define ENABLE_DS18B20_HIVE_TEMP 0
-#  endif
+#  define ENABLE_DS18B20_HIVE_TEMP 0
 #endif
 
 // ==============================
@@ -206,6 +209,42 @@
 #define I2C_CLOCK_HZ 100000UL
 #endif
 
+// ==============================
+// AMBIENT (OUTSIDE-HIVE) TEMPERATURE / HUMIDITY / PRESSURE SENSOR
+// ==============================
+// HiveHub reads ONE device-level ambient sensor on the shared I2C bus, captured
+// pre-radio by prefetchAmbientSensors() and reported as ambient_temp_c /
+// ambient_humidity_percent (and ambient_pressure_hpa for pressure-capable parts).
+// Exactly ONE of the three families below may be enabled at a time — they share
+// the ambient read path (and the SHT4x/SHT3x even share I2C address 0x44):
+//
+//   * SHT4x (Sensirion, Adafruit SHT4x lib)  — DEFAULT. Temp + humidity.
+//   * SHT3x (Sensirion, Adafruit SHT31 lib)  — optional. Temp + humidity.
+//   * BME280 (Bosch, Adafruit BME280 lib)    — optional. Temp + humidity +
+//                                              barometric PRESSURE.
+//
+// Each family's Arduino library is commented out per-env in platformio.ini; to
+// switch sensors, flip the flag here (or in secrets.h) AND uncomment the matching
+// library for the env you build. The Adafruit BusIO + Unified Sensor deps every
+// one of these needs are already pinned, so only the top-level lib is toggled.
+#ifndef ENABLE_SHT4X_AMBIENT
+#define ENABLE_SHT4X_AMBIENT 1
+#endif
+#ifndef ENABLE_SHT3X_AMBIENT
+#define ENABLE_SHT3X_AMBIENT 0
+#endif
+#ifndef ENABLE_BME280_AMBIENT
+#define ENABLE_BME280_AMBIENT 0
+#endif
+// Mutually exclusive: two ambient drivers would fight over the same read path and
+// (SHT4x/SHT3x) the same 0x44 address. Catch a bad secrets.h at compile time.
+#if (ENABLE_SHT4X_AMBIENT + ENABLE_SHT3X_AMBIENT + ENABLE_BME280_AMBIENT) > 1
+#  error "Enable at most one ambient sensor: SHT4x, SHT3x, or BME280"
+#endif
+// True when the selected ambient sensor also reports barometric pressure. Only
+// the BME280 does today; used to gate ambient_pressure_hpa in the payload.
+#define AMBIENT_HAS_PRESSURE ENABLE_BME280_AMBIENT
+
 // Ambient SHT4x (temp/humidity) fixed I2C address. Named — like the other
 // *_I2C_ADDRESS constants — so the read-path recovery can re-probe the sensor
 // (i2cbus::deviceResponds) after healing a wedged ESP32-C6 I2C-NG driver, and
@@ -213,6 +252,16 @@
 // 0x44 is the Adafruit SHT4x default (SHT4x_DEFAULT_ADDR).
 #ifndef SHT4X_I2C_ADDRESS
 #define SHT4X_I2C_ADDRESS 0x44
+#endif
+// Ambient SHT3x (SHT31/SHT35) I2C address — 0x44 with ADDR tied low (Adafruit
+// breakout default), 0x45 with ADDR high. Same recovery re-probe as the SHT4x.
+#ifndef SHT3X_I2C_ADDRESS
+#define SHT3X_I2C_ADDRESS 0x44
+#endif
+// Ambient BME280 I2C address — 0x76 with SDO low (Adafruit/most breakouts), 0x77
+// with SDO high. Note 0x76/0x77 do not collide with the DS3231/SHT4x/NAU7802.
+#ifndef BME280_I2C_ADDRESS
+#define BME280_I2C_ADDRESS 0x76
 #endif
 
 // ==============================
