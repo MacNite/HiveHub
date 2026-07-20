@@ -141,12 +141,40 @@ void setup() {
     rtcOk = false;
   }
 
+  // Ambient temp/humidity[/pressure] sensor. Exactly one family is compiled in
+  // (see config.h); shtOk / the sht_ok payload field stay the generic "ambient
+  // sensor detected/read OK" signal regardless of which part is fitted, so the
+  // backend schema is unchanged.
+#if ENABLE_SHT4X_AMBIENT
   shtOk = i2cOk && sht4.begin();
-  Serial.printf("[SHT4x] %s\n", shtOk ? "OK" : "MISSING");
+  Serial.printf("[AMBIENT] SHT4x %s\n", shtOk ? "OK" : "MISSING");
   if (shtOk) {
     sht4.setPrecision(SHT4X_HIGH_PRECISION);
     sht4.setHeater(SHT4X_NO_HEATER);
   }
+#elif ENABLE_SHT3X_AMBIENT
+  shtOk = i2cOk && sht3.begin(SHT3X_I2C_ADDRESS);
+  Serial.printf("[AMBIENT] SHT3x %s\n", shtOk ? "OK" : "MISSING");
+  if (shtOk) {
+    sht3.heater(false);  // keep the on-chip heater off (matches SHT4x_NO_HEATER)
+  }
+#elif ENABLE_BME280_AMBIENT
+  shtOk = i2cOk && bme.begin(BME280_I2C_ADDRESS, &Wire);
+  Serial.printf("[AMBIENT] BME280 %s\n", shtOk ? "OK" : "MISSING");
+  if (shtOk) {
+    // Weather-station / low-power profile: 1x oversampling, forced mode, filter
+    // off. Forced mode takes one measurement per read then sleeps — ideal for the
+    // once-per-cycle deep-sleep duty cycle (no continuous conversion current).
+    bme.setSampling(Adafruit_BME280::MODE_FORCED,
+                    Adafruit_BME280::SAMPLING_X1,   // temperature
+                    Adafruit_BME280::SAMPLING_X1,   // pressure
+                    Adafruit_BME280::SAMPLING_X1,   // humidity
+                    Adafruit_BME280::FILTER_OFF);
+  }
+#else
+  shtOk = false;
+  Serial.println("[AMBIENT] No ambient sensor compiled (all families disabled)");
+#endif
 
 #if ENABLE_INA219_SOLAR
   solarMonitorOk = i2cOk && i2cbus::deviceResponds(INA219_I2C_ADDRESS) &&

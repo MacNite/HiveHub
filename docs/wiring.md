@@ -73,8 +73,8 @@ The firmware logs the active antenna selection on every boot:
 | HX711 weight cells | ❌ no pins available — use the NAU7802 |
 | SD card (cache + backup) | ✅ |
 | DS3231 RTC | ✅ |
-| SHT4x ambient temp/humidity | ✅ |
-| DS18B20 wired in-hive probes | ✅ (1-Wire bus on D1) |
+| SHT4x ambient temp/humidity | ✅ (default; SHT3x or BME280 selectable — BME280 adds ambient pressure) |
+| DS18B20 wired in-hive probes | ⚙️ optional, **off by default** since v0.24.0 (1-Wire bus on D1) — enable `ENABLE_DS18B20_HIVE_TEMP` + its libraries |
 | BLE wireless in-hive sensors (HolyIot, RuuviTag, HiveInside) | ✅ |
 | HiveTraffic BeeCounter (BLE/GATT — the only supported bee-counter transport) | ✅ |
 | OTA firmware update over WiFi | ✅ |
@@ -209,6 +209,19 @@ Both sensors are connected in parallel. Waterproof probes often use red for VDD,
 | SCL | GPIO22 |
 
 Place the SHT4x outside the electronics box but shield it from rain and direct sunlight.
+
+The SHT4x is the **default** ambient sensor, but the firmware can drive one of
+three families on this same I2C bus (pick exactly one — see `ENABLE_*_AMBIENT` in
+`config.h`, and uncomment the matching library in `platformio.ini`):
+
+| Sensor | Flag | I2C address | Notes |
+|---|---|---|---|
+| SHT4x | `ENABLE_SHT4X_AMBIENT` (default) | `0x44` | Temp + humidity |
+| SHT3x (SHT31/SHT35) | `ENABLE_SHT3X_AMBIENT` | `0x44` (ADDR low) / `0x45` | Temp + humidity |
+| BME280 | `ENABLE_BME280_AMBIENT` | `0x76` (SDO low) / `0x77` | Temp + humidity + **barometric pressure** (`ambient_pressure_hpa`) |
+
+All three share the same wiring (VCC/GND/SDA/SCL) and reuse the pinned Adafruit
+BusIO + Unified Sensor dependencies, so switching sensors is a flag + one library.
 
 ---
 

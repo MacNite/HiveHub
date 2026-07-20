@@ -1,7 +1,7 @@
 // globals.cpp — single definition point for everything declared in globals.h.
 #include "globals.h"
 
-const char* const FIRMWARE_VERSION = "0.23.15";
+const char* const FIRMWARE_VERSION = "0.24.0";
 
 #if ENABLE_HX711
 HX711 scale1;
@@ -11,7 +11,15 @@ HX711 scale2;
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature ds18b20(&oneWire);
 #endif
+#if ENABLE_SHT4X_AMBIENT
 Adafruit_SHT4x sht4;
+#endif
+#if ENABLE_SHT3X_AMBIENT
+Adafruit_SHT31 sht3;
+#endif
+#if ENABLE_BME280_AMBIENT
+Adafruit_BME280 bme;
+#endif
 RTC_DS3231 rtc;
 Preferences prefs;
 WebServer setupServer(80);

@@ -212,7 +212,9 @@ struct WiredScaleAgg {
 struct WiredSensorSnapshot {
   float ambientTemp     = NAN;
   float ambientHumidity = NAN;
-  bool  shtRead         = false;  // THIS cycle's SHT4x measurement was valid
+  float ambientPressure = NAN;  // hPa; only a pressure-capable ambient sensor
+                                // (BME280) fills this, else stays NAN/omitted
+  bool  shtRead         = false;  // THIS cycle's ambient sensor read was valid
                                   // (distinct from shtOk = detected at boot)
 #if ENABLE_INA219_SOLAR
   float solarBusVoltage = NAN, solarShuntVoltageMv = NAN, solarLoadVoltage = NAN;
@@ -227,12 +229,15 @@ struct WiredSensorSnapshot {
 
 static WiredSensorSnapshot gWired;
 
-// Binds the Arduino-free acquisition sequence in sht4x_recovery.h to the real
-// SHT4x/I2C calls. On the first read failure it heals the wedged ESP32-C6 driver
-// and — crucially — FULLY reinitializes the Adafruit SHT4x object before the one
-// bounded retry (Wire.end()/begin() invalidates the cached I2C device the driver
-// holds, so getEvent() alone cannot recover). read() stores the values on
-// success. See sht4x_recovery.h for why the ordering matters.
+// Each *Ops struct binds the Arduino-free acquisition sequence in sht4x_recovery.h
+// to one ambient sensor family's real driver/I2C calls. On the first read failure
+// the template heals the wedged ESP32-C6 driver and — crucially — FULLY
+// reinitializes the driver object before the one bounded retry (Wire.end()/begin()
+// invalidates the cached I2C device the driver holds, so a bare re-read cannot
+// recover). read() stores the values on success. See sht4x_recovery.h for why the
+// ordering matters. Exactly one family is compiled (config.h), so at most one of
+// these structs exists in any build.
+#if ENABLE_SHT4X_AMBIENT
 struct Sht4xOps {
   float& tempC;
   float& humidity;
@@ -256,12 +261,88 @@ struct Sht4xOps {
   void onReinit(bool ok) { Serial.printf("[SHT4x] Reinitialization after I2C heal: %s\n", ok ? "OK" : "FAILED"); }
   void onRetry(bool ok)  { Serial.printf("[SHT4x] Retry read: %s\n", ok ? "OK" : "FAILED"); }
 };
+#endif
 
-// Returns true (and fills tempC/humidity) only when a real measurement was
-// obtained, on the first try or the single post-heal retry.
-static bool readAmbientSht4x(float& tempC, float& humidity) {
+#if ENABLE_SHT3X_AMBIENT
+struct Sht3xOps {
+  float& tempC;
+  float& humidity;
+  bool read() {
+    float t = sht3.readTemperature();
+    float h = sht3.readHumidity();
+    if (isnan(t) || isnan(h)) return false;
+    tempC = t;
+    humidity = h;
+    return true;
+  }
+  bool heal() { return i2cbus::healForRead(); }
+  bool ack()  { return i2cbus::deviceResponds(SHT3X_I2C_ADDRESS); }
+  bool reinit() {
+    if (!sht3.begin(SHT3X_I2C_ADDRESS)) return false;
+    sht3.heater(false);
+    return true;
+  }
+  void onInitialFail() { Serial.println("[SHT3x] Initial read failed"); }
+  void onAck(bool ok)  { Serial.printf("[SHT3x] ACK after I2C heal: %s\n", ok ? "yes" : "no"); }
+  void onReinit(bool ok) { Serial.printf("[SHT3x] Reinitialization after I2C heal: %s\n", ok ? "OK" : "FAILED"); }
+  void onRetry(bool ok)  { Serial.printf("[SHT3x] Retry read: %s\n", ok ? "OK" : "FAILED"); }
+};
+#endif
+
+#if ENABLE_BME280_AMBIENT
+struct Bme280Ops {
+  float& tempC;
+  float& humidity;
+  float& pressureHpa;
+  bool read() {
+    // Forced mode: kick a single conversion, then read the registers.
+    if (!bme.takeForcedMeasurement()) return false;
+    float t = bme.readTemperature();
+    float h = bme.readHumidity();
+    float p = bme.readPressure();  // Pa
+    if (isnan(t) || isnan(h) || isnan(p)) return false;
+    tempC = t;
+    humidity = h;
+    pressureHpa = p / 100.0f;  // Pa -> hPa
+    return true;
+  }
+  bool heal() { return i2cbus::healForRead(); }
+  bool ack()  { return i2cbus::deviceResponds(BME280_I2C_ADDRESS); }
+  bool reinit() {
+    if (!bme.begin(BME280_I2C_ADDRESS, &Wire)) return false;
+    bme.setSampling(Adafruit_BME280::MODE_FORCED,
+                    Adafruit_BME280::SAMPLING_X1,
+                    Adafruit_BME280::SAMPLING_X1,
+                    Adafruit_BME280::SAMPLING_X1,
+                    Adafruit_BME280::FILTER_OFF);
+    return true;
+  }
+  void onInitialFail() { Serial.println("[BME280] Initial read failed"); }
+  void onAck(bool ok)  { Serial.printf("[BME280] ACK after I2C heal: %s\n", ok ? "yes" : "no"); }
+  void onReinit(bool ok) { Serial.printf("[BME280] Reinitialization after I2C heal: %s\n", ok ? "OK" : "FAILED"); }
+  void onRetry(bool ok)  { Serial.printf("[BME280] Retry read: %s\n", ok ? "OK" : "FAILED"); }
+};
+#endif
+
+// Returns true (and fills tempC/humidity, plus pressureHpa on pressure-capable
+// parts) only when a real measurement was obtained, on the first try or the
+// single post-heal retry. Dispatches to whichever ambient family is compiled.
+static bool readAmbientSensor(float& tempC, float& humidity, float& pressureHpa) {
+#if ENABLE_SHT4X_AMBIENT
+  (void)pressureHpa;
   Sht4xOps ops{tempC, humidity};
   return sht4xrec::acquire(ops).ok;
+#elif ENABLE_SHT3X_AMBIENT
+  (void)pressureHpa;
+  Sht3xOps ops{tempC, humidity};
+  return sht4xrec::acquire(ops).ok;
+#elif ENABLE_BME280_AMBIENT
+  Bme280Ops ops{tempC, humidity, pressureHpa};
+  return sht4xrec::acquire(ops).ok;
+#else
+  (void)tempC; (void)humidity; (void)pressureHpa;
+  return false;
+#endif
 }
 
 void prefetchAmbientSensors() {
@@ -280,9 +361,10 @@ void prefetchAmbientSensors() {
   ds18b20.requestTemperatures();
 #endif
 
-  // ── Ambient SHT4x (device-level, outside-hive) ─────────────────────────────
+  // ── Ambient sensor (device-level, outside-hive: SHT4x/SHT3x/BME280) ─────────
   if (shtOk) {
-    gWired.shtRead = readAmbientSht4x(gWired.ambientTemp, gWired.ambientHumidity);
+    gWired.shtRead = readAmbientSensor(gWired.ambientTemp, gWired.ambientHumidity,
+                                       gWired.ambientPressure);
   }
 
 #if ENABLE_INA219_SOLAR
@@ -367,13 +449,16 @@ void prefetchWiredScales() {
 String createMeasurementJson() {
   Serial.println("[MEASURE] Assembling upload from pre-radio wired snapshot...");
 
-  // The wired I2C sensors (SHT4x, INA219, MAX17048, NAU7802 scales) were
+  // The wired I2C sensors (ambient SHT4x/SHT3x/BME280, INA219, MAX17048, NAU7802 scales) were
   // captured by prefetchAmbientSensors()/prefetchWiredScales() BEFORE WiFi/BLE
   // started, because radio
   // start-up wedges the C6 I2C peripheral in a way Wire.end()/begin() cannot
   // clear. Consume that snapshot here instead of reading live post-radio.
   const float ambientTemp     = gWired.ambientTemp;
   const float ambientHumidity = gWired.ambientHumidity;
+#if AMBIENT_HAS_PRESSURE
+  const float ambientPressure = gWired.ambientPressure;
+#endif
   const bool  shtRead         = gWired.shtRead;
 #if ENABLE_INA219_SOLAR
   const float solarBusVoltage     = gWired.solarBusVoltage;
@@ -462,6 +547,12 @@ String createMeasurementJson() {
   if (timeSource != "invalid") doc["timestamp"] = measuredAt;
   doc["ambient_temp_c"] = ambientTemp;
   doc["ambient_humidity_percent"] = ambientHumidity;
+#if AMBIENT_HAS_PRESSURE
+  // Barometric pressure from a pressure-capable ambient sensor (BME280). Emitted
+  // only when such a sensor is compiled; the ingest schema ignores it if the
+  // backend has no ambient_pressure_hpa column yet, so this is upload-safe.
+  doc["ambient_pressure_hpa"] = ambientPressure;
+#endif
   doc["network_transport"] = "wifi";
   doc["rssi_dbm"] = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
   doc["firmware_version"] = FIRMWARE_VERSION;
@@ -471,11 +562,12 @@ String createMeasurementJson() {
   doc["hive_count"] = hivecfg::gHiveCount;
   doc["sd_ok"] = sdOk;
   doc["rtc_ok"] = rtcOk;
-  // sht_ok reports whether THIS cycle produced a valid SHT4x measurement — it is
-  // false whenever the ambient values are null because the read failed (e.g. a
-  // wedged C6 I2C driver), never the boot-time detection result. sht_detected
-  // preserves that detection/initialization diagnostic separately (the backend
-  // ignores unknown fields, so this is upload-safe).
+  // sht_ok reports whether THIS cycle produced a valid ambient-sensor measurement
+  // (SHT4x/SHT3x/BME280) — it is false whenever the ambient values are null
+  // because the read failed (e.g. a wedged C6 I2C driver), never the boot-time
+  // detection result. sht_detected preserves that detection/initialization
+  // diagnostic separately (the field names stay sht_* for backend compatibility;
+  // the backend ignores unknown fields, so this is upload-safe).
   doc["sht_ok"] = shtRead;
   doc["sht_detected"] = shtOk;
 #if ENABLE_INA219_SOLAR
