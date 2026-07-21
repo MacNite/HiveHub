@@ -53,6 +53,19 @@
 #define MAX17048_ALERT_PERCENT   20
 
 // ==============================
+// POWER / DEEP SLEEP
+// ==============================
+// Deep-sleep behavior. Defaults live in config.h (deep sleep ON, button wake ON,
+// 30 s minimum sleep); config.h only defines each if it is NOT already set here,
+// so any override below wins and survives every git pull. Keep 0/1 numeric —
+// the firmware uses preprocessor #if / plain boolean tests.
+//
+// Uncomment to override:
+// #define DEEP_SLEEP_ENABLED          0            // stay awake (bench / mains-powered node)
+// #define WAKE_BUTTON_FROM_DEEP_SLEEP 0            // ignore the setup button as a wake source
+// #define MIN_DEEP_SLEEP_MS           (30UL*1000UL) // floor on a single sleep, in ms
+
+// ==============================
 // INMP441 STEREO MICROPHONES
 // ==============================
 // Two INMP441 I2S MEMS microphones sharing a single I2S bus.

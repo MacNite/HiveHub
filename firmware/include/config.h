@@ -787,9 +787,22 @@ static const unsigned long CALIBRATION_MODE_MAX_TIMEOUT_MS = 30UL * 60UL * 1000U
 
 // Power saving behavior. With deep sleep enabled, the ESP32 wakes for one
 // measurement/upload cycle, then sleeps until the next send interval.
-static const bool DEEP_SLEEP_ENABLED = true;
-static const bool WAKE_BUTTON_FROM_DEEP_SLEEP = true;
-static const unsigned long MIN_DEEP_SLEEP_MS = 30UL * 1000UL;
+//
+// These three are overridable per-device from secrets.h (gitignored, included
+// at the top of this file) — like the ENABLE_* feature flags above, each is
+// only defined here if secrets.h did not already, so a value placed in secrets.h
+// wins over the default and survives every git pull. Define DEEP_SLEEP_ENABLED /
+// WAKE_BUTTON_FROM_DEEP_SLEEP as 0 or 1 and MIN_DEEP_SLEEP_MS as a millisecond
+// count (e.g. a bench node that should stay awake: #define DEEP_SLEEP_ENABLED 0).
+#ifndef DEEP_SLEEP_ENABLED
+#define DEEP_SLEEP_ENABLED 1
+#endif
+#ifndef WAKE_BUTTON_FROM_DEEP_SLEEP
+#define WAKE_BUTTON_FROM_DEEP_SLEEP 1
+#endif
+#ifndef MIN_DEEP_SLEEP_MS
+#define MIN_DEEP_SLEEP_MS (30UL * 1000UL)
+#endif
 static const uint64_t US_PER_MS = 1000ULL;
 
 static const char* CACHE_FILE = "/cache.ndjson";
