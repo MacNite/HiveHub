@@ -63,6 +63,9 @@ RATE_LIMIT_DEFAULT=120/minute
 MAX_BODY_BYTES=262144
 # Max uploaded firmware binary (bytes); 16777216 = 16 MiB
 MAX_FIRMWARE_BYTES=16777216
+# Trust CF-Connecting-IP / X-Forwarded-For — set true ONLY behind a reverse
+# proxy that overwrites them (see "Exposing to the internet" below)
+TRUST_PROXY_HEADERS=false
 ```
 
 > Generate strong random keys with:
@@ -96,8 +99,14 @@ services:
       RATE_LIMIT_DEFAULT: ${RATE_LIMIT_DEFAULT:-120/minute}
       MAX_BODY_BYTES: ${MAX_BODY_BYTES:-262144}
       MAX_FIRMWARE_BYTES: ${MAX_FIRMWARE_BYTES:-16777216}
+      # Off by default — set true ONLY behind a reverse proxy that overwrites
+      # these headers (see "Exposing to the internet" below).
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     ports:
-      - "31115:8000"
+      # Loopback-only by default: reach the API through a reverse proxy that
+      # terminates TLS. Change to "31115:8000" to expose it directly on the LAN
+      # (not recommended — set TRUST_PROXY_HEADERS=false if you do).
+      - "127.0.0.1:31115:8000"
     volumes:
       - /opt/hivescale/firmware:/app/firmware
     restart: unless-stopped
@@ -155,7 +164,12 @@ Expected:
 { "status": "ok" }
 ```
 
-Interactive API docs: `http://your-server-ip:31115/docs`
+The port is bound to loopback by default, so `localhost` works from the server
+itself but `http://your-server-ip:31115` will **not** be reachable from another
+machine until you put a reverse proxy in front of it (see
+[Exposing to the internet](#exposing-to-the-internet-optional)). Interactive API
+docs are then served at `https://your-domain.example/docs` through the proxy (or
+`http://localhost:31115/docs` on the server itself).
 
 ---
 
@@ -230,21 +244,31 @@ docker compose exec -T hivescale-db psql -U hivescale hivescale < hivescale-back
 
 ## Exposing to the internet (optional)
 
-The firmware verifies the backend's TLS certificate, so devices must reach the
-API over **HTTPS with a valid certificate**. The recommended setup:
+The compose file binds the API to **loopback (`127.0.0.1:31115`) by default**, so
+it is not directly reachable from the network until you deliberately put
+something in front of it. The firmware also verifies the backend's TLS
+certificate, so devices must reach the API over **HTTPS with a valid
+certificate**. The recommended setup:
 
-- **Reverse proxy with HTTPS (recommended)** — run Nginx or Caddy in front of the API and obtain a TLS certificate via Let's Encrypt. Caddy does this automatically with a single config line. The bundled `firmware/include/ca_cert.h` already trusts the Let's Encrypt root, so no firmware change is needed.
+- **Reverse proxy with HTTPS (recommended)** — run Nginx or Caddy on the same host and forward to `127.0.0.1:31115`; obtain a TLS certificate via Let's Encrypt. Caddy does this automatically with a single config line. The bundled `firmware/include/ca_cert.h` already trusts the Let's Encrypt root, so no firmware change is needed.
 - **Tailscale / WireGuard** — put both the server and the ESP32 (via a companion device or router) on a private VPN. You still need a valid TLS certificate the device will trust on the address it connects to.
-- **Port forwarding** — forward port `31115` on your router to the server, but terminate TLS in front of it (e.g. via a proxy) so the device can verify the certificate; the firmware will reject a plain-HTTP endpoint or an untrusted certificate.
+- **Port forwarding** — if you must expose the port directly, change the mapping from `127.0.0.1:31115:8000` back to `31115:8000` and forward it on your router, but still terminate TLS in front of it (e.g. via a proxy) so the device can verify the certificate; the firmware rejects a plain-HTTP endpoint or an untrusted certificate. Leave `TRUST_PROXY_HEADERS=false` in this case.
+
+> **Enable proxy-header trust behind the proxy.** Per-client rate limiting keys
+> off the client IP. With the API behind a reverse proxy, set
+> `TRUST_PROXY_HEADERS=true` so it reads the real client IP from
+> `CF-Connecting-IP` / `X-Forwarded-For` instead of lumping everyone under the
+> proxy's address. This is **off by default** because trusting those headers is
+> only safe when a proxy overwrites them — if the API is reachable directly, a
+> client can spoof them to dodge the limiter. Make sure the proxy actually sets
+> the forwarded-IP header and does not pass a client-supplied one through.
 
 > **Rate limiting & request size:** the API enforces a per-client-IP rate limit
 > and a request-body cap out of the box (see the environment variables above).
-> When running behind a reverse proxy or Cloudflare, the API reads the real
-> client IP from `CF-Connecting-IP` / `X-Forwarded-For`, so per-device limits
-> work correctly. For defence in depth, also enable limits at the proxy — e.g.
-> Nginx `limit_req` + `client_max_body_size 256k`, Caddy `rate_limit`, or a
-> Cloudflare WAF rate-limiting rule on `/api/v1/*`. Make sure the proxy sets the
-> forwarded-IP header and that Cloudflare SSL/TLS mode is **Full (strict)**.
+> For defence in depth, also enable limits at the proxy — e.g. Nginx `limit_req`
+> + `client_max_body_size 256k`, Caddy `rate_limit`, or a Cloudflare WAF
+> rate-limiting rule on `/api/v1/*`. Set Cloudflare SSL/TLS mode to
+> **Full (strict)**.
 
 ---
 
@@ -261,7 +285,7 @@ Common causes: wrong `DATABASE_URL` password, missing environment variable, or p
 ```bash
 sudo ss -tlnp | grep 31115
 ```
-Change the host-side port mapping in the compose file (e.g. `"31116:8000"`) if something else is using `31115`.
+Change the host-side port mapping in the compose file (e.g. `"127.0.0.1:31116:8000"`) if something else is using `31115`.
 
 **Measurements not stored:**
 Use the test commands in [test-commands.md](test-commands.md) to verify the API key and payload format.

@@ -51,6 +51,11 @@ services:
       DATABASE_URL: postgresql://hivescale:<db-password>@hivescale-db:5432/hivescale
       PUBLIC_BASE_URL: http://<truenas-ip-or-hostname>:31115
       TZ: Europe/Berlin
+      # This app is reached directly on the LAN (no reverse proxy in front), so
+      # do NOT trust client-supplied forwarded-IP headers — a client could spoof
+      # them to bypass rate limiting. Only set this true if you add a proxy that
+      # overwrites CF-Connecting-IP / X-Forwarded-For.
+      TRUST_PROXY_HEADERS: "false"
     ports:
       - "31115:8000"
     restart: unless-stopped

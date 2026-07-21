@@ -28,12 +28,20 @@ services:
       ENABLE_LOCAL_DASHBOARD: '${ENABLE_LOCAL_DASHBOARD:-false}'
       DASHBOARD_SESSION_SECRET: '${DASHBOARD_SESSION_SECRET:-}'
       DASHBOARD_SESSION_TTL_HOURS: '${DASHBOARD_SESSION_TTL_HOURS:-168}'
-      DASHBOARD_COOKIE_SECURE: '${DASHBOARD_COOKIE_SECURE:-false}'
+      # Secure by default: the session cookie is only sent over HTTPS, so it can
+      # never leak over a plain-HTTP hop. This assumes the dashboard is reached
+      # through the reverse proxy that terminates TLS (the documented setup). Set
+      # it to false only for plain-HTTP local testing, where a secure cookie
+      # would otherwise never be sent and login would appear to fail.
+      DASHBOARD_COOKIE_SECURE: '${DASHBOARD_COOKIE_SECURE:-true}'
       # Rate limiter: trust CF-Connecting-IP / X-Forwarded-For for the client
-      # IP. Keep true behind a reverse proxy (the documented setup); set false
-      # when the API port is exposed directly, otherwise clients can spoof the
-      # header to bypass rate limiting.
-      TRUST_PROXY_HEADERS: '${TRUST_PROXY_HEADERS:-true}'
+      # IP. Off by default because it is only safe when a trusted proxy in front
+      # of the API overwrites these headers — otherwise a client that can reach
+      # the API directly can spoof them to bypass the limiter or poison another
+      # client's bucket. Set this to true once (and only once) the API sits
+      # behind a reverse proxy / Cloudflare, so per-client rate limiting keys off
+      # the real client IP instead of the proxy's.
+      TRUST_PROXY_HEADERS: '${TRUST_PROXY_HEADERS:-false}'
       # ── Abuse / DoS protection knobs ──
       RATE_LIMIT_ENABLED: '${RATE_LIMIT_ENABLED:-true}'
       RATE_LIMIT_DEFAULT: '${RATE_LIMIT_DEFAULT:-120/minute}'
@@ -54,7 +62,14 @@ services:
       MQTT_HA_DISCOVERY_PREFIX: '${MQTT_HA_DISCOVERY_PREFIX:-homeassistant}'
       MQTT_HA_EXPIRE_AFTER: '${MQTT_HA_EXPIRE_AFTER:-0}'
     ports:
-      - "31115:8000"
+      # Bound to loopback by default so the API is NOT directly reachable from
+      # the network. Put a reverse proxy (Nginx / Caddy / Cloudflare Tunnel) in
+      # front of it to terminate TLS and forward to 127.0.0.1:31115 — the
+      # firmware verifies the backend's certificate, so HTTPS is required anyway.
+      # To expose the port directly on the LAN instead (not recommended), change
+      # this to "31115:8000"; if you do, also review TRUST_PROXY_HEADERS and
+      # DASHBOARD_COOKIE_SECURE above, which assume the loopback + proxy setup.
+      - "127.0.0.1:31115:8000"
     restart: unless-stopped
     volumes:
       # Uploaded OTA firmware binaries live in FIRMWARE_DIR (/app/firmware).

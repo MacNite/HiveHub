@@ -310,7 +310,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `MAX_BODY_BYTES` / `MAX_FIRMWARE_BYTES` | Optional | Request-body and firmware-upload size caps (default 256 KiB / 16 MiB) |
 | `ENABLE_LOCAL_DASHBOARD` | Optional | Serve the built-in **login-protected** dashboard at `/dashboard` and its `/api/v1/local/*` API (default off). It serves every device on the server behind one login, so keep it off on multi-tenant deployments. |
 | `DASHBOARD_SESSION_SECRET` / `DASHBOARD_SESSION_TTL_HOURS` / `DASHBOARD_COOKIE_SECURE` | Optional | Dashboard login-session settings: signing secret (auto-generated and persisted when blank), session lifetime (default `168` h), HTTPS-only cookie flag |
-| `TRUST_PROXY_HEADERS` | Optional | Trust `CF-Connecting-IP` / `X-Forwarded-For` for rate-limit client IPs (default `true`; set `false` when the API port is exposed directly) |
+| `TRUST_PROXY_HEADERS` | Optional | Trust `CF-Connecting-IP` / `X-Forwarded-For` for rate-limit client IPs (default `false`; set `true` only behind a reverse proxy that overwrites these headers, otherwise a direct client can spoof them to dodge the limiter) |
 | `INSIGHTS_RECONCILE_*` | Optional | Background insight-history reconciliation (see `server/.env.example`) |
 | `SMTP_*` / `NOTIFY_MIN_SEVERITY` | Optional | E-mail channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
 | `WEB_PUSH_ENABLED` / `VAPID_*` | Optional | Web Push channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
