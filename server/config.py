@@ -54,11 +54,12 @@ RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").strip().lower(
 )
 RATE_LIMIT_DEFAULT = os.environ.get("RATE_LIMIT_DEFAULT", "120/minute")
 # Whether the rate limiter may trust CF-Connecting-IP / X-Forwarded-For for the
-# client IP. Defaults to true because the documented deployment sits behind a
-# reverse proxy (which overwrites these headers). Set it to false when the API
-# is exposed directly — otherwise any client can spoof the header to dodge the
-# limiter or poison another client's bucket.
-TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", "true").strip().lower() in (
+# client IP. Defaults to false (secure by default): trusting these headers is
+# only safe when a reverse proxy in front of the API overwrites them. If the API
+# is reachable directly, a client can spoof the header to dodge the limiter or
+# poison another client's bucket. Set it to true once the API sits behind a
+# trusted proxy / Cloudflare so per-client limits key off the real client IP.
+TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", "false").strip().lower() in (
     "1", "true", "yes", "on",
 )
 # Maximum size of a normal (JSON) request body. A measurement is only a few KB;
