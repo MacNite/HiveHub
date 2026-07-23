@@ -49,6 +49,31 @@ static void applyTlsConfig(WiFiClientSecure& client) {
   client.setCACert(SERVER_CA_CERT);
 }
 
+// HTTPS is the secure default. Plain HTTP is an explicit, compile-time opt-in
+// for trusted LAN deployments; it must never be selected merely because a TLS
+// request fails.
+static bool beginHttpRequest(HTTPClient& http, const String& url,
+                             WiFiClientSecure& secureClient,
+                             WiFiClient& plainClient) {
+  if (url.startsWith("https://")) {
+    applyTlsConfig(secureClient);
+    return http.begin(secureClient, url);
+  }
+
+  if (url.startsWith("http://")) {
+#if ALLOW_INSECURE_HTTP
+    Serial.println("[HTTP] WARNING: using insecure plain HTTP");
+    return http.begin(plainClient, url);
+#else
+    Serial.println("[HTTP] Refusing plain HTTP; set ALLOW_INSECURE_HTTP to 1 to opt in");
+    return false;
+#endif
+  }
+
+  Serial.println("[HTTP] Refusing URL without an http:// or https:// scheme");
+  return false;
+}
+
 String apiUrl(const String& path) {
   String base = trimTrailingSlash(apiBaseUrl);
   return base + path;
@@ -131,13 +156,13 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
   Serial.println("[HTTP GET]");
   Serial.println(url);
 
-  WiFiClientSecure client;
-  applyTlsConfig(client);
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
   HTTPClient http;
   http.setConnectTimeout(HTTP_REQUEST_TIMEOUT_MS);
   http.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
 
-  if (!http.begin(client, url)) {
+  if (!beginHttpRequest(http, url, secureClient, plainClient)) {
     Serial.println("[HTTP GET] http.begin failed");
     return false;
   }
@@ -176,13 +201,13 @@ bool httpPostJson(const String& url, const String& json, String* response) {
   Serial.println(url);
   Serial.printf("[HTTP POST] Payload: %u bytes (redacted)\n", (unsigned)json.length());
 
-  WiFiClientSecure client;
-  applyTlsConfig(client);
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
   HTTPClient http;
   http.setConnectTimeout(HTTP_REQUEST_TIMEOUT_MS);
   http.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
 
-  if (!http.begin(client, url)) {
+  if (!beginHttpRequest(http, url, secureClient, plainClient)) {
     Serial.println("[HTTP POST] http.begin failed");
     return false;
   }
@@ -221,13 +246,13 @@ bool httpPatchJson(const String& url, const String& json, String* response) {
   Serial.print("[HTTP PATCH] Payload: ");
   Serial.println(json);
 
-  WiFiClientSecure client;
-  applyTlsConfig(client);
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
   HTTPClient http;
   http.setConnectTimeout(HTTP_REQUEST_TIMEOUT_MS);
   http.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
 
-  if (!http.begin(client, url)) {
+  if (!beginHttpRequest(http, url, secureClient, plainClient)) {
     Serial.println("[HTTP PATCH] http.begin failed");
     return false;
   }
@@ -708,12 +733,12 @@ bool performFirmwareUpdate(const String& firmwareUrl, int expectedSize,
   Serial.print("[OTA] Downloading firmware: ");
   Serial.println(url);
 
-  WiFiClientSecure client;
-  applyTlsConfig(client);
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-  if (!http.begin(client, url)) {
+  if (!beginHttpRequest(http, url, secureClient, plainClient)) {
     Serial.println("[OTA] http.begin failed");
     return false;
   }
@@ -830,11 +855,11 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl,
   Serial.print("[HI-OTA] Downloading HiveInside firmware: ");
   Serial.println(url);
 
-  WiFiClientSecure client;
-  applyTlsConfig(client);
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if (!http.begin(client, url)) {
+  if (!beginHttpRequest(http, url, secureClient, plainClient)) {
     Serial.println("[HI-OTA] http.begin failed");
     setMsg("firmware download init failed");
     return false;

@@ -23,6 +23,11 @@
 // Base URL of your backend (no trailing slash required)
 #define API_BASE_URL     "https://your-backend-domain.com"
 
+// Keep HTTPS/TLS verification enabled by default. Set to 1 ONLY when this
+// device connects to a trusted LAN server over plain http://. HTTPS URLs remain
+// supported and certificate-verified when this is enabled.
+// #define ALLOW_INSECURE_HTTP 1
+
 // ==============================
 // WIFI FALLBACK CREDENTIALS
 // ==============================

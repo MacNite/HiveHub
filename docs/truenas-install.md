@@ -146,11 +146,18 @@ Give each device a unique `API_KEY`; the backend registers it against the
 device's `device_id` on first contact. Then re-flash the device (or push the key
 via the provisioning portal if already deployed).
 
-> **HTTPS is required.** The firmware verifies the backend's TLS certificate
+> **HTTPS is required by default.** The firmware verifies the backend's TLS certificate
 > against the Let's Encrypt root CA bundled in `firmware/include/ca_cert.h`. Put
-> the API behind a reverse proxy that terminates TLS with a valid certificate; a
-> plain `http://…:31115` address will be rejected by the device. For a CA other
-> than Let's Encrypt, replace the certificate in `ca_cert.h`.
+> the API behind a reverse proxy that terminates TLS with a valid certificate;
+> by default, a plain `http://…:31115` address is rejected by the device. For a
+> CA other than Let's Encrypt, replace the certificate in `ca_cert.h`.
+
+> **Trusted-LAN HTTP opt-in:** To use a plain HTTP API only on an isolated,
+> trusted LAN, set `#define ALLOW_INSECURE_HTTP 1` in `secrets.h` and change
+> `API_BASE_URL` to `http://<truenas-ip>:31115`. HTTPS still works with TLS
+> verification enabled. HTTP exposes the device API key, data, commands, and
+> OTA download to network observers, so never use this setting on an untrusted
+> network.
 
 ---
 

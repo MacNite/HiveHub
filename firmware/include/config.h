@@ -776,7 +776,15 @@ static const unsigned long BUTTON_LONG_PRESS_MS = 10000;
 
 static const int MAX_WIFI_NETWORKS = 3;
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
-// Bound each HTTPS exchange so a stalled peer cannot keep a battery-powered
+// HTTPS is required by default. Set this to 1 in secrets.h only for a trusted
+// LAN when the device must explicitly support an http:// API URL. This also
+// permits plain-HTTP OTA downloads, so it must not be enabled on an untrusted
+// network.
+#ifndef ALLOW_INSECURE_HTTP
+#define ALLOW_INSECURE_HTTP 0
+#endif
+
+// Bound each HTTP(S) exchange so a stalled peer cannot keep a battery-powered
 // device awake indefinitely. Retry policy remains in the cache/replay layer.
 static const unsigned long HTTP_REQUEST_TIMEOUT_MS = 15000;
 static const unsigned long PROVISIONING_TIMEOUT_MS = 10UL * 60UL * 1000UL;
