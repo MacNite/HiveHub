@@ -137,6 +137,22 @@
             in-hive sensors for anything else.
           </div>
 
+          <!-- Ambient (outside-hive) sensor — one selectable device-level I2C part -->
+          <div class="field">
+            <label for="ambient_sensor">🌡️ Ambient sensor <span class="hint">— one device-level outside-hive sensor on the shared I2C bus</span></label>
+            <select id="ambient_sensor">
+              <option value="sht4x">SHT4x / SHT40 — temp + humidity (default)</option>
+              <option value="sht3x">SHT3x (SHT31/35) — temp + humidity</option>
+              <option value="bme280">BME280 — temp + humidity + pressure</option>
+            </select>
+            <p class="muted" style="margin:.35rem 0 0; font-size:.85rem">
+              Sets one of <code>ENABLE_SHT4X_AMBIENT</code> / <code>ENABLE_SHT3X_AMBIENT</code> /
+              <code>ENABLE_BME280_AMBIENT</code>. Only the BME280 reports barometric pressure
+              (<code>ambient_pressure_hpa</code>). Measures outside-hive climate, so it is never
+              overridden by an in-hive BLE sensor.
+            </p>
+          </div>
+
           <!-- INMP441 mics -->
           <div class="sensor" data-sensor="mics">
             <span class="tag">Wired · I2S</span>
@@ -223,7 +239,7 @@
               <span><span class="t-title" style="font-size:.92rem">Override wired INMP441 microphones</span>
               <span class="t-desc">Acoustics come from a HiveInside / HiveHeart sensor; the wired stereo mics are skipped.</span></span>
             </label>
-            <div class="note info">The ambient SHT40 is never overridden — it measures outside-hive
+            <div class="note info">The ambient sensor is never overridden — it measures outside-hive
               climate, a different quantity stored separately, so it does not collide.</div>
           </div>
         </fieldset>

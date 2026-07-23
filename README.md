@@ -24,7 +24,10 @@ self-hosted FastAPI backend backed by PostgreSQL, where they can be displayed in
 Every sensor is optional and compiled in per device — HiveHub reads the
 following directly on the ESP32:
 
-- **SHT4x / SHT40** — ambient temperature and humidity (I2C).
+- **Ambient sensor (SHT4x / SHT3x / BME280)** — one device-level outside-hive
+  sensor on the shared I2C bus, selectable at build time: SHT4x/SHT40 (default)
+  or SHT3x for temperature + humidity, or a BME280 which additionally reports
+  barometric pressure (`ambient_pressure_hpa`).
 - **DS18B20** — per-hive in-hive temperature probes (1-Wire).
 - **INMP441** — in-hive sound via I2S MEMS microphones with per-band FFT.
 - **MAX17048** — LiPo battery voltage, state-of-charge, and low-battery alerts (I2C).
@@ -58,7 +61,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Per-hive in-hive sound** — optional INMP441 stereo I2S microphones with per-band FFT (off by default).
 - **Per-hive vibration** — from a paired in-hive BLE sensor (a HiveInside ESP32-C6 gives full FFT bands; a HolyIot/RuuviTag beacon gives a low-rate magnitude), capturing the ~20 Hz pre-swarm signal microphones miss. (The old wired LIS3DH/LIS2DH12 driver has been removed — in-hive vibration is BLE-only.)
 - **In-hive BLE sensors** — pair up to two battery beacons (HolyIot 25015, RuuviTag, HiveInside ESP32-C6, or beehivemonitoring.com HiveHeart) for temperature/humidity/pressure/vibration with no wiring.
-- **Ambient temperature & humidity** — an SHT4x on I2C.
+- **Ambient temperature & humidity** — one selectable device-level I2C sensor: SHT4x/SHT40 (default), SHT3x, or a BME280 that also reports barometric pressure (`ambient_pressure_hpa`). Picked at build time (`ENABLE_SHT4X_AMBIENT` / `ENABLE_SHT3X_AMBIENT` / `ENABLE_BME280_AMBIENT`).
 - **RTC timekeeping** — a DS3231 timestamps measurements without depending on NTP.
 - **SD card cache & backup** — local buffering when uploads fail, plus an append-only persistent backup that can be downloaded in AP mode and re-imported via HivePal.
 - **Claim-code pairing** — claim devices from HivePal without manual database setup.
@@ -111,7 +114,7 @@ bill of materials with price estimates and shop links lives on the
 |---|---|
 | Seeed Studio XIAO ESP32-C6 | Main controller (**recommended** — plugs into the Scale Module V0.4 PCB) |
 | NAU7802 (I2C, on the Scale Module / breakout PCB) + [load cells](https://s.click.aliexpress.com/e/_c33VsCl7) | Weight measurement (**recommended** — 2 scales on the Scale Module, up to 16 via the NAU7802 breakout PCB with its TCA9548A mux + up to 8× NAU7802) |
-| [SHT4x / SHT40](https://s.click.aliexpress.com/e/_c3CvaIKz) | Ambient temperature and humidity |
+| [SHT4x / SHT40](https://s.click.aliexpress.com/e/_c3CvaIKz) (or SHT3x / BME280) | Ambient temperature and humidity (BME280 also adds barometric pressure) |
 | [DS3231 RTC](https://s.click.aliexpress.com/e/_c4mfPBtR) | Offline timekeeping (remove its 4.7 kΩ I2C pull-ups — see the I2C pull-up note in [docs/wiring.md](docs/wiring.md)) |
 | [MicroSD card module](https://s.click.aliexpress.com/e/_c3oDcFM9) + card | Local cache and backup storage |
 | [MAX17048](https://s.click.aliexpress.com/e/_c3JKEzrL) | LiPo battery gauge (on the Scale Module) |

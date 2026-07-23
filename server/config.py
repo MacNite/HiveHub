@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Backend server version. Bump on releases; reported in the OpenAPI metadata
 # (/docs) and by GET /health so a deployment's version is visible remotely.
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 API_KEY = os.environ["API_KEY"]
