@@ -177,7 +177,7 @@ Edit `firmware/include/secrets.h`:
 #define API_KEY             "your-api-key-here"   // unique per device — see note below
 #define CLAIM_CODE          "ABCD-1234"
 #define CLAIM_CODE_REVISION 1
-#define API_BASE_URL        "https://your-backend-domain.com"   // HTTPS required (TLS is verified)
+#define API_BASE_URL        "https://your-backend-domain.com"   // HTTPS (TLS is verified)
 
 #define WIFI1_SSID          "your-wifi-ssid-1"
 #define WIFI1_PASS          "your-wifi-password-1"
@@ -198,9 +198,23 @@ The firmware verifies the backend's TLS certificate. It ships the ISRG Root X1
 (Let's Encrypt) root CA in `firmware/include/ca_cert.h` and syncs the clock over
 NTP after connecting so validity can be checked. Therefore:
 
-- The backend must be reachable over **HTTPS with a valid certificate** (a reverse proxy with Let's Encrypt is the simplest setup).
+- By default, the backend must be reachable over **HTTPS with a valid certificate** (a reverse proxy with Let's Encrypt is the simplest setup).
 - For a CA other than Let's Encrypt, replace the certificate in `firmware/include/ca_cert.h` (instructions are in that file).
 - NTP (UDP port 123) must be reachable from the device's network.
+
+For a trusted LAN deployment that cannot use TLS, add the following **firmware
+build setting** to `secrets.h` and use an `http://` `API_BASE_URL` (for example,
+`http://192.168.1.10:31115`). This is intentionally not a server environment
+variable: the ESP32 selects its transport before it can contact the server.
+
+```cpp
+#define ALLOW_INSECURE_HTTP 1
+```
+
+The opt-in keeps HTTPS working and certificate-verified, but also permits HTTP
+for API requests and OTA downloads. HTTP exposes the per-device API key,
+measurements, commands, and firmware image to anyone able to observe or alter
+traffic, so use it only on an isolated, trusted network.
 
 ### Optional modules
 
