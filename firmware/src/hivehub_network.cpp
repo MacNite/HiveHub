@@ -398,6 +398,9 @@ bool uploadCachedLines() {
       Serial.println("[CACHE] Warning: failed to remove fully uploaded cache file");
     }
     SD.remove(TEMP_FILE);
+    // Drop any staging file left behind by an interrupted compaction so it is
+    // not resurrected next boot and needlessly replayed.
+    SD.remove(CACHE_PREVIOUS_FILE);
   }
 
   Serial.printf(
