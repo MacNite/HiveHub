@@ -103,6 +103,12 @@ Returns current UTC server time for RTC sync.
 
 Submit a measurement from a device. On the first measurement from a new `device_id`, the backend creates a device record and a default config row, and registers the presented `X-API-Key` as that device's per-device key. If a `claim_code` is included, it is hashed and stored so a HivePal user can claim the device.
 
+Current firmware includes an immutable `measurement_id` in every measurement.
+The backend uses `(device_id, measurement_id)` as an idempotency key: replaying
+the exact same cached JSON returns success with `duplicate: true` rather than
+creating a second row or re-publishing a retained MQTT state. Older clients
+without this field remain supported but cannot get this delivery guarantee.
+
 **Auth:** `X-API-Key` (per-device key — registered on first contact, enforced thereafter)
 
 > **Multi-hive payload (firmware v0.20.0+).** Devices now report up to 16 hives in

@@ -1,5 +1,6 @@
 // sensors.cpp — time sync, scale reads and measurement JSON assembly.
 #include "sensors.h"
+#include <esp_system.h>
 #include "globals.h"
 #include "config.h"
 #include "hivehub_network.h"
@@ -543,6 +544,11 @@ String createMeasurementJson() {
   // ── Assemble the upload document ───────────────────────────────────────────
   JsonDocument doc;
   doc["device_id"] = deviceId;
+  // This ID is generated once while creating the JSON, then follows the exact
+  // same line through SD backup, retry cache and every replay. It lets the
+  // backend make ambiguous HTTP retries idempotent.
+  doc["measurement_id"] = String((uint32_t)esp_random(), HEX) + "-" +
+                          String(rtcBootCount) + "-" + String(millis());
   if (claimCode.length() > 0 && !claimRegistered) doc["claim_code"] = claimCode;
   if (timeSource != "invalid") doc["timestamp"] = measuredAt;
   doc["ambient_temp_c"] = ambientTemp;

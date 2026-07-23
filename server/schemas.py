@@ -154,6 +154,9 @@ class MeasurementIn(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     device_id: str = Field(..., examples=["hive_scale_dual_01"])
+    # Immutable client-generated delivery key. A retry of the same cached JSON
+    # must retain it so POST /measurements can be safely idempotent.
+    measurement_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
     claim_code: Optional[str] = Field(default=None, min_length=4, max_length=128)
     timestamp: Optional[datetime] = None
     scale_1_weight_kg: Optional[float] = None

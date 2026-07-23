@@ -776,6 +776,9 @@ static const unsigned long BUTTON_LONG_PRESS_MS = 10000;
 
 static const int MAX_WIFI_NETWORKS = 3;
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
+// Bound each HTTPS exchange so a stalled peer cannot keep a battery-powered
+// device awake indefinitely. Retry policy remains in the cache/replay layer.
+static const unsigned long HTTP_REQUEST_TIMEOUT_MS = 15000;
 static const unsigned long PROVISIONING_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 static const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;
 static const unsigned long COMMAND_CHECK_INTERVAL_MS = 5UL * 60UL * 1000UL;
@@ -807,6 +810,7 @@ static const uint64_t US_PER_MS = 1000ULL;
 
 static const char* CACHE_FILE = "/cache.ndjson";
 static const char* TEMP_FILE = "/cache.tmp";
+static const char* CACHE_PREVIOUS_FILE = "/cache.prev";
 static const char* CACHE_BAD_FILE = "/cache_bad.ndjson";
 static const char* BACKUP_FILE = "/measurements.ndjson";
 
@@ -816,7 +820,9 @@ static const char* BACKUP_FILE = "/measurements.ndjson";
 //   Successful live uploads are not written to the cache file.
 static const bool SD_KEEP_PERSISTENT_BACKUP = true;
 static const size_t BACKUP_WARN_SIZE_BYTES = 50UL * 1024UL * 1024UL;
-static const size_t CACHE_MAX_BYTES = 512UL * 1024UL;
+// This is an alert threshold, not a destructive limit. Offline measurements
+// must remain available for automatic replay (and in the permanent backup).
+static const size_t CACHE_WARN_BYTES = 512UL * 1024UL;
 // One measurement = one NDJSON line. A fully-populated multi-hive upload (up to
 // 18 hives, each with nested ble/accel/hiveheart/hivescale objects) is far larger
 // than the old two-hive line, so this cap was raised from 4 KB to keep such lines

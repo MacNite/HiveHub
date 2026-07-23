@@ -33,7 +33,7 @@ router = APIRouter()
 # append " RETURNING id;" (single insert) or ";" (executemany bulk insert).
 MEASUREMENT_INSERT_SQL = """
                 INSERT INTO measurements (
-                    device_id, measured_at, scale_1_weight_kg, scale_2_weight_kg,
+                    device_id, measurement_id, measured_at, scale_1_weight_kg, scale_2_weight_kg,
                     hive_1_temp_c, hive_2_temp_c,
                     hive_1_humidity_percent, hive_2_humidity_percent, ambient_temp_c,
                     ambient_humidity_percent, battery_voltage, battery_soc_percent,
@@ -79,7 +79,7 @@ MEASUREMENT_INSERT_SQL = """
                     raw_json
                 )
                 VALUES (
-                    %(device_id)s, %(measured_at)s, %(scale_1_weight_kg)s,
+                    %(device_id)s, %(measurement_id)s, %(measured_at)s, %(scale_1_weight_kg)s,
                     %(scale_2_weight_kg)s, %(hive_1_temp_c)s, %(hive_2_temp_c)s,
                     %(hive_1_humidity_percent)s, %(hive_2_humidity_percent)s,
                     %(ambient_temp_c)s, %(ambient_humidity_percent)s,
@@ -133,6 +133,7 @@ def measurement_insert_params(payload: "MeasurementIn", measured_at: datetime) -
     """Build the named-parameter dict for ``MEASUREMENT_INSERT_SQL`` from a payload."""
     return {
         "device_id": payload.device_id,
+        "measurement_id": payload.measurement_id,
         "measured_at": measured_at,
         "scale_1_weight_kg": payload.scale_1_weight_kg,
         "scale_2_weight_kg": payload.scale_2_weight_kg,
@@ -429,17 +430,38 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
     overlay_legacy_hive_columns(params, payload)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(MEASUREMENT_INSERT_SQL + " RETURNING id;", params)
-            new_id = cur.fetchone()[0]
-            # Fan the hives[] array (if any) into the normalized child table.
-            insert_hive_readings(cur, payload, new_id, measured_at)
+            # Legacy clients do not supply an ID, so preserve their historical
+            # insert behaviour. New firmware uses a durable ID carried in the
+            # cached JSON, making response-loss retries safe.
+            if payload.measurement_id:
+                cur.execute(
+                    MEASUREMENT_INSERT_SQL
+                    + " ON CONFLICT (device_id, measurement_id) WHERE measurement_id IS NOT NULL "
+                      "DO NOTHING RETURNING id;",
+                    params,
+                )
+            else:
+                cur.execute(MEASUREMENT_INSERT_SQL + " RETURNING id;", params)
+            row = cur.fetchone()
+            inserted = row is not None
+            if inserted:
+                new_id = row[0]
+                # Fan the hives[] array (if any) into the normalized child table.
+                insert_hive_readings(cur, payload, new_id, measured_at)
+            else:
+                cur.execute(
+                    "SELECT id, measured_at FROM measurements "
+                    "WHERE device_id = %s AND measurement_id = %s;",
+                    (payload.device_id, payload.measurement_id),
+                )
+                new_id, measured_at = cur.fetchone()
             conn.commit()
     # Mirror the reading to MQTT (Home Assistant etc.) when the bridge is enabled.
     # This is purely additive and fail-soft — it never affects the stored result.
     # Pass the device's temp-compensation config so the live payload carries
     # scale_{1,2}_weight_kg_compensated alongside the raw weights; the lookup is
     # skipped entirely when the bridge is disabled.
-    if mqtt_publisher.is_active():
+    if inserted and mqtt_publisher.is_active():
         mqtt_tempco = load_tempco_configs([payload.device_id]).get(payload.device_id)
         mqtt_publisher.publish_measurement(
             payload.device_id,
@@ -455,6 +477,7 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
         "status": "ok",
         "id": new_id,
         "measured_at": measured_at.isoformat(),
+        "duplicate": not inserted,
         "claimed": claimed,
     }
 

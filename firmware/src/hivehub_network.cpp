@@ -134,6 +134,8 @@ bool httpGetJson(const String& url, JsonDocument& doc) {
   WiFiClientSecure client;
   applyTlsConfig(client);
   HTTPClient http;
+  http.setConnectTimeout(HTTP_REQUEST_TIMEOUT_MS);
+  http.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
 
   if (!http.begin(client, url)) {
     Serial.println("[HTTP GET] http.begin failed");
@@ -172,12 +174,13 @@ bool httpPostJson(const String& url, const String& json, String* response) {
   Serial.println("[HTTP POST]");
   Serial.print("[HTTP POST] URL: ");
   Serial.println(url);
-  Serial.print("[HTTP POST] Payload: ");
-  Serial.println(json);
+  Serial.printf("[HTTP POST] Payload: %u bytes (redacted)\n", (unsigned)json.length());
 
   WiFiClientSecure client;
   applyTlsConfig(client);
   HTTPClient http;
+  http.setConnectTimeout(HTTP_REQUEST_TIMEOUT_MS);
+  http.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
 
   if (!http.begin(client, url)) {
     Serial.println("[HTTP POST] http.begin failed");
@@ -191,8 +194,7 @@ bool httpPostJson(const String& url, const String& json, String* response) {
   String body = http.getString();
 
   Serial.printf("[HTTP POST] Status: %d\n", code);
-  Serial.print("[HTTP POST] Response: ");
-  Serial.println(body);
+  Serial.printf("[HTTP POST] Response: %u bytes (redacted)\n", (unsigned)body.length());
 
   if (response) *response = body;
 
@@ -222,6 +224,8 @@ bool httpPatchJson(const String& url, const String& json, String* response) {
   WiFiClientSecure client;
   applyTlsConfig(client);
   HTTPClient http;
+  http.setConnectTimeout(HTTP_REQUEST_TIMEOUT_MS);
+  http.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
 
   if (!http.begin(client, url)) {
     Serial.println("[HTTP PATCH] http.begin failed");
@@ -284,6 +288,18 @@ bool uploadCachedLines() {
   if (!sdOk) {
     Serial.println("[CACHE] No SD card, skipping cached upload");
     return true;
+  }
+
+  // A power loss between moving the old queue aside and installing its compacted
+  // successor leaves only CACHE_PREVIOUS_FILE. Recover it before deciding there
+  // is no work. The backend's measurement_id idempotency makes a replay after an
+  // ambiguous power loss safe.
+  if (!SD.exists(CACHE_FILE) && SD.exists(CACHE_PREVIOUS_FILE)) {
+    Serial.println("[CACHE] Recovering previous retry queue after interrupted compaction");
+    if (!SD.rename(CACHE_PREVIOUS_FILE, CACHE_FILE)) {
+      Serial.println("[CACHE] Failed to recover previous retry queue");
+      return false;
+    }
   }
 
   if (!SD.exists(CACHE_FILE)) {
@@ -358,16 +374,29 @@ bool uploadCachedLines() {
   out.flush();
   out.close();
 
-  if (!SD.remove(CACHE_FILE)) {
-    Serial.println("[CACHE] Warning: failed to remove old cache file");
-  }
-
   if (kept > 0) {
-    if (!SD.rename(TEMP_FILE, CACHE_FILE)) {
-      Serial.println("[CACHE] ERROR: failed to rename temp cache file back to cache file");
+    // Never delete the old queue before its replacement is durable. FAT lacks
+    // atomic replace, so use a two-generation rename and recover .prev next
+    // boot if power is lost mid-transaction.
+    SD.remove(CACHE_PREVIOUS_FILE);
+    if (!SD.rename(CACHE_FILE, CACHE_PREVIOUS_FILE)) {
+      Serial.println("[CACHE] ERROR: failed to stage old cache file for replacement");
       return false;
     }
+    if (!SD.rename(TEMP_FILE, CACHE_FILE)) {
+      Serial.println("[CACHE] ERROR: failed to rename temp cache file back to cache file");
+      if (!SD.rename(CACHE_PREVIOUS_FILE, CACHE_FILE)) {
+        Serial.println("[CACHE] ERROR: failed to restore previous retry queue");
+      }
+      return false;
+    }
+    SD.remove(CACHE_PREVIOUS_FILE);
   } else {
+    // Keeping the already-uploaded queue through an unexpected reset is safe:
+    // each line carries a stable measurement_id and the server de-duplicates it.
+    if (!SD.remove(CACHE_FILE)) {
+      Serial.println("[CACHE] Warning: failed to remove fully uploaded cache file");
+    }
     SD.remove(TEMP_FILE);
   }
 

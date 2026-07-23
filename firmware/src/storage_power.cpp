@@ -369,14 +369,12 @@ bool cacheFileLooksSane() {
   size_t size = file.size();
   file.close();
 
-  if (size > CACHE_MAX_BYTES) {
+  if (size > CACHE_WARN_BYTES) {
     Serial.printf(
-      "[CACHE] Cache file is too large (%u bytes > %u bytes). Quarantining it. Backup file remains available.\n",
+      "[CACHE] Warning: retry queue is large (%u bytes > %u bytes); replay will continue.\n",
       (unsigned)size,
-      (unsigned)CACHE_MAX_BYTES
+      (unsigned)CACHE_WARN_BYTES
     );
-    quarantineSdFile(CACHE_FILE, CACHE_BAD_FILE, "CACHE");
-    return false;
   }
 
   return true;
