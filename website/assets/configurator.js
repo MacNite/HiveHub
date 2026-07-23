@@ -378,6 +378,17 @@
 
     buildHives(p);
 
+    // Ambient (outside-hive) sensor — exactly one selectable device-level I2C
+    // part. Mutually exclusive in the firmware (config.h #error guards it), so
+    // emit the chosen flag as 1 and the other two as 0.
+    var ambient = val("#ambient_sensor") || "sht4x";
+    p("// Ambient outside-hive sensor: pick exactly one (SHT4x/SHT3x share I2C");
+    p("// address 0x44; only the BME280 also reports ambient_pressure_hpa).");
+    p(def("ENABLE_SHT4X_AMBIENT", ambient === "sht4x" ? "1" : "0"));
+    p(def("ENABLE_SHT3X_AMBIENT", ambient === "sht3x" ? "1" : "0"));
+    p(def("ENABLE_BME280_AMBIENT", ambient === "bme280" ? "1" : "0"));
+    p("");
+
     // MAX17048 battery
     p("// MAX17048 LiPo fuel gauge telemetry (off-grid).");
     p(def("ENABLE_MAX17048_BATTERY", enabled("max17048") ? "1" : "0"));

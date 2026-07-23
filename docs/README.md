@@ -12,7 +12,8 @@
 
 Reference docs for **HiveHub**, an ESP32-based data collector for beehive
 sensors and scales. HiveHub reads a range of sensors natively on the device —
-**SHT4x/SHT40** (ambient temperature & humidity), **DS18B20** (in-hive
+a selectable **ambient sensor** (SHT4x/SHT40, SHT3x, or a BME280 that also
+reports barometric pressure), **DS18B20** (in-hive
 temperature), **INMP441** (in-hive sound),
 **MAX17048** (LiPo battery), and **wired load cells via NAU7802 or HX711** — and
 bridges wireless BLE/GATT sensors and scales on top. For the project overview,
