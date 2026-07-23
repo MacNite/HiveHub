@@ -39,6 +39,7 @@ curl -X POST http://HOST:31115/api/v1/measurements \
   -H "X-API-Key: YOUR_API_KEY" \
   -d '{
     "device_id": "DEVICE_ID",
+    "measurement_id": "7f3a91c2-128-4567",
     "claim_code": "ABCD-1234",
     "scale_1_weight_kg": 42.5,
     "scale_2_weight_kg": 38.2,

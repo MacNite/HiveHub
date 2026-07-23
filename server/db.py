@@ -68,6 +68,7 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS measurements (
                     id BIGSERIAL PRIMARY KEY,
                     device_id TEXT NOT NULL,
+                    measurement_id TEXT,
                     measured_at TIMESTAMPTZ NOT NULL,
                     received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     scale_1_weight_kg DOUBLE PRECISION,
@@ -328,6 +329,10 @@ def init_db():
                 -- API — it is only dropped from the top-bar hive picker.
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT false;
 
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS measurement_id TEXT;
+                CREATE UNIQUE INDEX IF NOT EXISTS measurements_device_measurement_id_key
+                    ON measurements (device_id, measurement_id)
+                    WHERE measurement_id IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS idx_measurements_device_time
                     ON measurements (device_id, measured_at DESC);
 
