@@ -496,7 +496,11 @@ String createMeasurementJson() {
       const hivecfg::BlePairing& p = hive.ble[b];
       // In-hive beacon/HiveInside sensors go through this bridge; HiveHeart/
       // HiveScale/HiveTraffic are handled by their own GATT modules below.
-      if (p.type == "holyiot" || p.type == "ruuvitag" || p.type == "hiveinside") {
+      // "hiveinside" is the legacy ESP32-C6 (GATT) prototype; "hiveinside_nrf54"
+      // is the current XIAO nRF54LM20A beacon — both ride this shared scan, and
+      // isGatt() sorts the passive beacon from the connection-based prototype.
+      if (p.type == "holyiot" || p.type == "ruuvitag" ||
+          p.type == "hiveinside" || p.type == "hiveinside_nrf54") {
         bleMacs.push_back(p.mac);
         bleIsGatt.push_back(p.isGatt());
         bleHiveOfMac.push_back(h);
