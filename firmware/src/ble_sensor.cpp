@@ -109,6 +109,30 @@ static constexpr size_t HI_OFF_MIC_STRESS = 24;
 static constexpr size_t HI_OFF_MIC_HIGH   = 25;
 static constexpr float HI_ACCEL_SCALE = 0.1f;   // 0.1 mg per LSB
 
+// ───────────────────────────────────────────────────────────────────────────
+// HiveInside identity record (scan-response manufacturer element)
+// ───────────────────────────────────────────────────────────────────────────
+// A beacon-only nRF54LM20A node never accepts a GATT connection, so its board
+// and running firmware version can't be read the way the C6 prototype's were
+// (a connect to the version characteristic). Instead the node rides a second
+// manufacturer-data element in its scan response: same company id as the
+// measurement frame, but a distinct magic ('I' vs 'H') so the two never alias.
+// HiveHub active-scans by default (HOLYIOT_BLE_ACTIVE_SCAN), so the scan
+// response arrives in the same combined payload as the primary advertisement.
+//
+//   off 0..1 : company id (LE)  == HIVEINSIDE_COMPANY_ID
+//   off 2    : magic            == 0x49 ('I')
+//   off 3    : record version   (currently 0x01)
+//   off 4    : board id         uint8  1 = esp32-c6, 2 = nrf54lm20a
+//   off 5..7 : firmware version uint8  major, minor, patch
+static constexpr size_t  HI_ID_MIN_LEN   = 8;
+static constexpr uint8_t HI_ID_MAGIC     = 0x49;  // 'I'
+static constexpr size_t  HI_ID_OFF_MAGIC = 2;
+static constexpr size_t  HI_ID_OFF_BOARD = 4;
+static constexpr size_t  HI_ID_OFF_FW_MAJ = 5;
+static constexpr size_t  HI_ID_OFF_FW_MIN = 6;
+static constexpr size_t  HI_ID_OFF_FW_PATCH = 7;
+
 // ── field readers — little-endian (company ID) and big-endian (sensor data) ─
 static int16_t  rd_i16(const uint8_t* p, size_t off) {
   return (int16_t)((uint16_t)p[off] | ((uint16_t)p[off + 1] << 8));
@@ -220,6 +244,36 @@ static Parsed parseHiveInside(const uint8_t* d, size_t len) {
   return out;
 }
 
+// HiveInside identity record (board + firmware version) from the scan-response
+// manufacturer element. Distinct from the measurement frame by its 'I' magic, so
+// it is only ever matched here and never mistaken for a measurement.
+struct HiIdentity {
+  bool   ok = false;
+  String board;        // "esp32-c6" / "nrf54lm20a" (server HIVEINSIDE_BOARDS)
+  String fw_version;   // "major.minor.patch"
+};
+
+static const char* hiBoardName(uint8_t id) {
+  switch (id) {
+    case 1:  return "esp32-c6";
+    case 2:  return "nrf54lm20a";
+    default: return "";
+  }
+}
+
+static HiIdentity parseHiveInsideIdentity(const uint8_t* d, size_t len) {
+  HiIdentity out;
+  if (d == nullptr || len < HI_ID_MIN_LEN) return out;
+  if (rd_u16(d, HOLYIOT_OFF_COMPANY) != (uint16_t)HIVEINSIDE_COMPANY_ID) return out;
+  if (d[HI_ID_OFF_MAGIC] != HI_ID_MAGIC) return out;
+  out.board = String(hiBoardName(d[HI_ID_OFF_BOARD]));
+  out.fw_version = String((int)d[HI_ID_OFF_FW_MAJ]) + "." +
+                   String((int)d[HI_ID_OFF_FW_MIN]) + "." +
+                   String((int)d[HI_ID_OFF_FW_PATCH]);
+  out.ok = out.board.length() > 0 || out.fw_version.length() > 0;
+  return out;
+}
+
 // RuuviTag: one manufacturer-data frame carries temp/humidity/pressure + raw
 // axes + battery (no on-board FFT). Decoding lives in the dependency-free
 // ruuvi_decode.h so it can be host-unit-tested; here we just map it onto Parsed.
@@ -292,6 +346,9 @@ struct Accumulator {
   float   mic_rms_dbfs = NAN;
   float   mic_sub_bass_dbfs = NAN, mic_hum_dbfs = NAN, mic_piping_dbfs = NAN,
           mic_stress_dbfs = NAN, mic_high_dbfs = NAN;
+  // HiveInside identity (from the scan-response record, not the measurement).
+  String  board;        // "esp32-c6" / "nrf54lm20a"
+  String  fw_version;   // "major.minor.patch"
 };
 
 namespace {
@@ -307,18 +364,30 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     String mac = String(dev->getAddress().toString().c_str());
     mac = normalizeMac(mac);
 
-    // NimBLE 2.x changed the manufacturer-data getter to return a
-    // std::vector<uint8_t> (1.x returned std::string). Using `auto` plus
-    // .data()/.size() keeps this working with either return type; parsePayload
-    // tolerates a null/empty buffer.
-    const uint8_t* mdata = nullptr;
-    size_t mlen = 0;
-    auto md = dev->getManufacturerData();
-    if (dev->haveManufacturerData()) {
-      mdata = reinterpret_cast<const uint8_t*>(md.data());
-      mlen = md.size();
+    // Walk every manufacturer-specific (0xFF) AD structure in the combined
+    // advertisement + scan-response payload. A HiveInside beacon splits its data
+    // across two such elements — the measurement frame ('H') in the primary
+    // packet and the identity record ('I') in the scan response — so a single
+    // getManufacturerData() (first element only) could miss either one depending
+    // on ordering. Walking the raw payload matches both regardless of order and
+    // still handles the single-element HolyIot / RuuviTag beacons unchanged.
+    Parsed p;
+    HiIdentity ident;
+    {
+      auto payload = dev->getPayload();
+      size_t i = 0;
+      while (i + 1 < payload.size()) {
+        uint8_t len = payload[i];
+        if (len == 0 || i + 1 + len > payload.size()) break;
+        if (payload[i + 1] == 0xFF && len >= 1) {
+          const uint8_t* d = reinterpret_cast<const uint8_t*>(&payload[i + 2]);
+          size_t n = (size_t)(len - 1);
+          if (!p.ok) { Parsed q = parsePayload(d, n); if (q.ok) p = q; }
+          if (!ident.ok) ident = parseHiveInsideIdentity(d, n);
+        }
+        i += 1 + len;
+      }
     }
-    Parsed p = parsePayload(mdata, mlen);
 
     if (g_discover != nullptr) {
       String name = dev->haveName() ? String(dev->getName().c_str()) : String("");
@@ -351,6 +420,17 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       }
     }
 #endif
+
+    // The identity record can arrive on its own scan-response report; capture it
+    // for any matched slot independently of the measurement so a beacon node's
+    // board/firmware are learned without ever opening a GATT connection.
+    if (ident.ok) {
+      for (size_t s = 0; s < g_slot.size(); s++) {
+        if (g_slot[s].mac.length() == 0 || g_slot[s].mac != mac) continue;
+        if (ident.board.length())      g_slot[s].board = ident.board;
+        if (ident.fw_version.length()) g_slot[s].fw_version = ident.fw_version;
+      }
+    }
 
     if (!p.ok) return;
     for (size_t s = 0; s < g_slot.size(); s++) {
@@ -624,6 +704,10 @@ static void copyToSnapshot(const Accumulator& a, Snapshot& s) {
   if (a.type == SensorType::HiveInside) {
     // The HiveInside device already computed RMS + bands on board.
     s.sample_count = a.present ? 1 : 0;
+    // Board + firmware learned from the scan-response identity record (a
+    // beacon-only node advertises them instead of serving them over GATT).
+    if (a.board.length())      s.board = a.board;
+    if (a.fw_version.length()) s.fw_version = a.fw_version;
     s.accel_rms_mg          = a.accel_rms_mg;
     s.accel_band_swarm_mg   = a.accel_band_swarm_mg;
     s.accel_band_fanning_mg = a.accel_band_fanning_mg;
@@ -717,12 +801,17 @@ void scanPairedSensorsMulti(const std::vector<String>& macs,
     if (g_slot[s].mac.length() == 0 || !g_slot[s].found_by_mac) continue;
     if (g_slot[s].present) {
       copyToSnapshot(g_slot[s], out[s]);   // advertising data — no GATT needed
-      // nRF54 HiveInside beacon: the frame carries no board/fw, so learn them
-      // once (wake-sync-free, cached) to enable board-matched OTA selection.
-      // Uses at most one GATT connect per node per session, budget permitting.
+      // Learn the node's board + firmware so the backend can relay a
+      // board-matched OTA image. A current nRF54 beacon advertises them in its
+      // scan-response identity record (copyToSnapshot already applied it), so no
+      // connection is needed — cache it and move on. Only a node that advertised
+      // no identity (older nRF54 firmware, or a GATT-mode C6 whose measurement
+      // came from the advert) falls back to the one-off cached GATT read.
       if (out[s].type == SensorType::HiveInside) {
         String hiBoard, hiFw;
-        if (hiVersionLookup(g_slot[s].mac, hiBoard, hiFw)) {
+        if (out[s].board.length() || out[s].fw_version.length()) {
+          hiVersionStore(g_slot[s].mac, out[s].board, out[s].fw_version);
+        } else if (hiVersionLookup(g_slot[s].mac, hiBoard, hiFw)) {
           out[s].board = hiBoard;
           out[s].fw_version = hiFw;
         } else if (gattBudget < 0 || gattUsed < gattBudget) {
