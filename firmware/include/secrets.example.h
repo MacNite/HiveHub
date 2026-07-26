@@ -180,7 +180,7 @@
 //   ds  optional DS18B20 1-Wire ROM, 16 hex chars (omit to fall back to
 //       probe enumeration order — fine if you don't know ROMs yet)
 //   bl  optional array with AT MOST ONE entry: {"t":"holyiot"|"ruuvitag"|
-//       "hiveinside"|"hiveheart"|"beecounter"|"hivescale","m":"AA:BB:CC:DD:EE:FF"}
+//       "hiveinside_nrf54"|"hiveheart"|"beecounter"|"hivescale","m":"AA:BB:CC:DD:EE:FF"}
 //       — "hivescale" is a WIRELESS SCALE SOURCE (used instead of "s", not
 //       alongside a wired one or "ds"); every other type is the hive's one
 //       non-scale in-hive sensor and is mutually exclusive with "ds".

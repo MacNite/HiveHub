@@ -210,9 +210,9 @@
           <!-- Shared in-hive BLE scan + collision-avoidance options (only when a hive uses a beacon/GATT sensor) -->
           <div id="inhive-global" style="display:none; margin-top:1rem">
             <div class="note info" style="margin:1rem 0 .5rem">Beacon in-hive sensors (HolyIot,
-              RuuviTag, HiveInside beacon mode) are scanned passively in one shared window each
-              cycle, so any number of them costs the same scan. GATT sensors (HiveInside GATT,
-              HiveHeart, wireless HiveScale, HiveTraffic) connect serially and are capped at
+              RuuviTag, HiveInside nRF54LM20A) are scanned passively in one shared window each
+              cycle, so any number of them costs the same scan. GATT sensors (HiveHeart,
+              wireless HiveScale, HiveTraffic) connect serially and are capped at
               <code>MAX_GATT_READS_PER_CYCLE</code> per wake — see <code>docs/multi-hive.md</code>.
               <strong>HiveTraffic bee counters (BLE/GATT only) can be paired to any hive.</strong>
               Wired I2C BeeCounters are no longer supported.</div>

@@ -12,7 +12,6 @@ from devices import ensure_device_config, get_device_owner_id
 from firmware import (
     latest_hiveinside_release,
     latest_release_for_owner,
-    reported_hiveinside_board,
 )
 from schemas import DeviceCommandIn, DeviceCommandResult
 
@@ -58,15 +57,13 @@ def queue_relay_firmware_update(device_id: str, target: str,
     back to a global release, so a sub-device only ever receives an image its
     owner published or an official build.
 
-    For ``hiveinside`` (two incompatible boards: the ESP32-C6 prototype and the
-    nRF54LM20A) the image is additionally matched to the board the target sensor
-    last reported, so a C6 image is never relayed to an nRF54 unit or vice versa;
-    a legacy board-agnostic release is used only as a fallback.
+    For ``hiveinside`` the image is the latest active HiveInside release: the
+    HiveInside node is now unambiguously the nRF54LM20A, so no per-board matching
+    is needed (the ESP32-C6 prototype was removed from the ecosystem).
     """
     owner_id = get_device_owner_id(device_id)
     if target == "hiveinside":
-        board = reported_hiveinside_board(device_id, slot)
-        r = latest_hiveinside_release(owner_id, board)
+        r = latest_hiveinside_release(owner_id)
     else:
         r = latest_release_for_owner(target, owner_id)
     if not r:

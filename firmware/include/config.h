@@ -453,74 +453,41 @@
 // accel_{slot}_band_* and mic_{left,right}_band_* measurement fields (slot 1 ->
 // mic_left, slot 2 -> mic_right).
 //
-// Two boards emit the identical 26-byte frame: the original ESP32-C6 prototype
-// (served over GATT, HIVEINSIDE_USE_GATT below) and the current XIAO nRF54LM20A
-// Sense node, which advertises the frame CONTINUOUSLY as a beacon (no pairing
-// window, no GATT measurement service — passive scan + parseHiveInside() is the
-// whole ingest). Both share the Espressif company id so existing HiveHubs decode
-// either unchanged; flip BEACON_COMPANY_ID (nRF54 fw) + HIVEINSIDE_COMPANY_ID
-// together if a distinct Nordic identity is ever wanted.
+// HiveInside is the XIAO nRF54LM20A Sense node, which advertises this 26-byte
+// frame CONTINUOUSLY as a beacon (no pairing window, no GATT measurement service
+// — passive scan + parseHiveInside() is the whole ingest). It keeps the Espressif
+// company id so existing HiveHubs decode it unchanged; flip BEACON_COMPANY_ID
+// (nRF54 fw) + HIVEINSIDE_COMPANY_ID together if a distinct Nordic identity is
+// ever wanted. (The deprecated ESP32-C6 HiveInside prototype, which served this
+// frame over GATT, was removed from the ecosystem.)
 #ifndef HIVEINSIDE_COMPANY_ID
 #define HIVEINSIDE_COMPANY_ID 0x02E5   // Espressif's Bluetooth SIG company id
-#endif
-
-// ==============================
-// HIVEINSIDE GATT CLIENT (optional, requires HiveInside BLE_MODE=BLE_MODE_GATT)
-// ==============================
-// When enabled, HiveHub connects to a paired HiveInside sensor as a GATT
-// central *after* the passive scan locates it by MAC address. It reads the full
-// JSON measurement characteristic (every FFT band, RMS, peak, mic bands) and
-// then disconnects. Only devices found by MAC without recognisable advertising
-// data trigger a connection attempt, so HolyIot and advertising-mode HiveInside
-// sensors are unaffected. Set to 0 to use passive advertising scan exclusively.
-//
-// Both HiveHub (this flag) and HiveInside (BLE_MODE_GATT) must be compiled
-// with matching modes; pairing itself (MAC address) is unchanged.
-//
-// Defaults to 1: current HiveInside firmware is GATT-ONLY (its broadcast/beacon
-// advertising mode was removed), so it never emits the manufacturer-data blob
-// parseHiveInside() expects. Without the GATT client a paired HiveInside is
-// found by MAC during the scan but yields no measurement, so HiveHub uploads
-// nothing for it. HolyIot beacons are unaffected — they carry advertising data,
-// so the post-scan GATT step is skipped for them.
-#ifndef HIVEINSIDE_USE_GATT
-#define HIVEINSIDE_USE_GATT 1
-#endif
-
-// Timeout for each GATT connection attempt in seconds (NimBLE unit).
-// The BLE stack gives up and the slot stays not-present after this window.
-#ifndef HIVEINSIDE_GATT_CONNECT_TIMEOUT_S
-#define HIVEINSIDE_GATT_CONNECT_TIMEOUT_S 5
-#endif
-
-// Seconds before HiveHub's next scan that HiveInside should already be awake
-// and listening. Written to the wake-sync characteristic each cycle as
-// (sendInterval - lead). HiveHub holds a fixed boot-to-boot cadence (see
-// enterDeepSleepUntilNextCycle in storage_power.cpp), so this lead need only
-// cover the small in-cycle scan offset plus one interval of HiveInside RC-timer
-// drift in the "HiveInside wakes late" direction; the "wakes early" direction is
-// absorbed by HiveInside's SYNC_LISTEN_MS. Balanced default: 60 s lead paired
-// with HiveInside SYNC_LISTEN_MS = 150 s. Raise both together for more drift
-// tolerance at the cost of HiveInside awake time.
-#ifndef HIVEINSIDE_SYNC_LEAD_S
-#define HIVEINSIDE_SYNC_LEAD_S 60
 #endif
 
 // ==============================
 // HIVEINSIDE FIRMWARE-OVER-BLE (OTA relay)
 // ==============================
 // HiveHub (the only WiFi node) relays a HiveInside firmware image to a paired
-// HiveInside ESP32-C6 over GATT. The backend queues an
-// `update_hiveinside` command with the image URL + CRC-32; HiveHub STREAMS the
-// HTTPS download straight into the HiveInside OTA characteristics (it never
-// buffers the whole >1 MB image — the WROOM has no PSRAM), and the HiveInside
-// device verifies the end-to-end CRC before swapping its OTA slot.
+// nRF54LM20A HiveInside over BLE GATT. The backend queues an `update_hiveinside`
+// command with the image URL + CRC-32; HiveHub STREAMS the HTTPS download
+// straight into the HiveInside OTA characteristics (it never buffers the whole
+// >1 MB image — the WROOM has no PSRAM), and the HiveInside device verifies the
+// end-to-end CRC before swapping its OTA slot. The relayed bytes are an nRF54
+// MCUboot image and are streamed opaquely — the ESP32 self-OTA architecture
+// guard is never applied to them.
 //
-// This needs only a GATT *client* connection, so it is independent of
-// HIVEINSIDE_USE_GATT (which selects how normal measurements are read). Set to 0
-// to compile the relay out.
+// The nRF54 HiveInside is normally a NON-connectable beacon and only opens a
+// connectable OTA window on demand, so the relay locates it by its identity
+// address. This needs only a GATT *client* connection. Set to 0 to compile the
+// relay (and its GATT-client scaffolding) out.
 #ifndef HIVEINSIDE_OTA_ENABLED
 #define HIVEINSIDE_OTA_ENABLED 1
+#endif
+
+// Timeout for the OTA GATT connection attempt in seconds (NimBLE unit).
+// The BLE stack gives up and the relay reports "connect failed" after this window.
+#ifndef HIVEINSIDE_GATT_CONNECT_TIMEOUT_S
+#define HIVEINSIDE_GATT_CONNECT_TIMEOUT_S 5
 #endif
 
 // Largest DATA chunk (bytes) written per GATT write. Capped to stay inside the
@@ -530,9 +497,11 @@
 #define HIVEINSIDE_OTA_CHUNK_MAX 244
 #endif
 
-// True when the GATT-client scaffolding (address-type capture during the scan)
-// must be compiled in: either normal GATT reads or the OTA relay needs it.
-#define HIVEINSIDE_GATT_CLIENT (HIVEINSIDE_USE_GATT || HIVEINSIDE_OTA_ENABLED)
+// True when the GATT-client scaffolding (address-type capture during the scan,
+// used to connect by the node's identity address) must be compiled in. The OTA
+// relay is now the only consumer — a beacon nRF54 HiveInside is never connected
+// to for measurements.
+#define HIVEINSIDE_GATT_CLIENT (HIVEINSIDE_OTA_ENABLED)
 
 // ==============================
 // BLE vs WIRED SENSOR ARBITRATION (collision avoidance)

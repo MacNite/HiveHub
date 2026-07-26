@@ -39,7 +39,7 @@ namespace blesensor {
 enum class SensorType : uint8_t {
   None       = 0,
   HolyIot    = 1,   // HolyIot 25015 beacon: temp/humidity/pressure/raw accel
-  HiveInside = 2,   // HiveInside (ESP32-C6 / nRF54LM20A): + vibration & acoustic FFT bands
+  HiveInside = 2,   // HiveInside (nRF54LM20A): + vibration & acoustic FFT bands
   Ruuvi      = 3,   // RuuviTag beacon: temp/humidity/pressure/raw accel
 };
 
@@ -81,14 +81,14 @@ struct Snapshot {
   int      battery_pct   = -1;     // -1 = not reported
   int      battery_mv    = -1;     // HiveInside raw cell voltage in mV (-1 = not reported)
 
-  // Running firmware version reported by a HiveInside node over GATT (JSON "fw").
-  // Empty for HolyIot/Ruuvi beacons, which carry no firmware field.
+  // Running firmware version the nRF54 HiveInside advertises in its scan-response
+  // identity record (the 'I' manufacturer element). Empty for HolyIot/Ruuvi
+  // beacons, which carry no firmware field.
   String   fw_version;
 
-  // Board/architecture the HiveInside node reports over GATT (JSON "board",
-  // e.g. "esp32-c6" or "nrf54lm20a"). HiveHub forwards it so the backend only
-  // relays an OTA image built for that architecture. Empty for beacons and for
-  // nodes that don't expose the version characteristic.
+  // Board/architecture from the same identity record (currently only
+  // "nrf54lm20a"). HiveHub forwards it so the backend can confirm it is relaying
+  // the nRF54 HiveInside image. Empty for HolyIot/Ruuvi beacons.
   String   board;
 
   // Capability helpers used by the wired/BLE arbitration in sensors.cpp.
@@ -114,17 +114,13 @@ void scanPairedSensors(const String& mac0, const String& mac1,
                        Snapshot& slot1, Snapshot& slot2);
 
 // Multi-hive passive scan. ONE scan window matches every MAC in `macs` (so any
-// number of beacons costs the same airtime). For a MAC flagged isGatt[i] that is
-// seen by MAC but carries no advertising data (GATT-mode HiveInside), a serial
-// GATT read is attempted — but only up to `gattBudget` such reads happen per
-// call, the rest are left !present and retried next cycle, so connection-based
-// sensors cannot keep the radio awake long enough to defeat deep sleep. out[] is
-// resized to macs.size(); out[i] corresponds to macs[i]. Pass gattBudget < 0 for
-// "no cap".
+// number of beacons costs the same airtime). Every in-hive sensor on this bridge
+// (HolyIot, RuuviTag, nRF54 HiveInside) is a passive beacon, so a single scan
+// captures all of them — measurements and, for HiveInside, its board/firmware
+// identity record — with no per-sensor GATT connection. out[] is resized to
+// macs.size(); out[i] corresponds to macs[i].
 void scanPairedSensorsMulti(const std::vector<String>& macs,
-                            const std::vector<bool>& isGatt,
-                            std::vector<Snapshot>& out,
-                            int gattBudget);
+                            std::vector<Snapshot>& out);
 
 // Portal helper: scan for all nearby BLE devices so the user can pick which to
 // pair. HolyIot-looking devices are flagged. Used by the provisioning portal.

@@ -227,7 +227,7 @@ never sends them.
 #### Vibration fields (in-hive accelerometer)
 
 Per-hive vibration, populated from a paired in-hive **BLE sensor** (a HiveInside
-ESP32-C6 supplies the full FFT bands; a HolyIot 25015 / RuuviTag beacon supplies
+nRF54LM20A supplies the full FFT bands; a HolyIot 25015 / RuuviTag beacon supplies
 only broadband `accel_N_rms_mg` / `accel_N_peak_mg`) — see
 [accelerometer.md](accelerometer.md). (The old wired LIS3DH/LIS2DH12 driver has
 been removed; vibration is BLE-only.) Each block is independent; a missing

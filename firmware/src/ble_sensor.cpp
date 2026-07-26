@@ -56,11 +56,10 @@ static constexpr float GRAVITY_MG     = 1000.0f; // ~1 g at rest, removed for AC
 // 0x02E5) plus a magic byte, so the dispatcher can tell the two apart even
 // though both ride the same passive-scan bridge. The HiveInside device runs the
 // vibration and acoustic FFTs on board, so it broadcasts finished RMS + band
-// values (no raw axes). Both the original ESP32-C6 prototype and the current
-// XIAO nRF54LM20A Sense node emit this exact 26-byte frame; the nRF54 node
-// advertises it continuously (beacon-only, no GATT measurement service), while
-// the C6 prototype served it either as a beacon or over GATT. Layout is
-// documented in HiveInside/firmware-nrf54lm20a/src/beacon.c and mirrored here:
+// values (no raw axes). HiveInside is the XIAO nRF54LM20A Sense node, which
+// advertises this exact 26-byte frame CONTINUOUSLY as a beacon (no GATT
+// measurement service — passive scan is the whole ingest). Layout is documented
+// in HiveInside/firmware-nrf54lm20a/src/beacon.c and mirrored here:
 //
 //   off 0..1  : company id (LE)        == HIVEINSIDE_COMPANY_ID
 //   off 2     : magic                   == 0x48 ('H')
@@ -112,18 +111,18 @@ static constexpr float HI_ACCEL_SCALE = 0.1f;   // 0.1 mg per LSB
 // ───────────────────────────────────────────────────────────────────────────
 // HiveInside identity record (scan-response manufacturer element)
 // ───────────────────────────────────────────────────────────────────────────
-// A beacon-only nRF54LM20A node never accepts a GATT connection, so its board
-// and running firmware version can't be read the way the C6 prototype's were
-// (a connect to the version characteristic). Instead the node rides a second
-// manufacturer-data element in its scan response: same company id as the
-// measurement frame, but a distinct magic ('I' vs 'H') so the two never alias.
-// HiveHub active-scans by default (HOLYIOT_BLE_ACTIVE_SCAN), so the scan
-// response arrives in the same combined payload as the primary advertisement.
+// A beacon-only nRF54LM20A node never accepts a GATT connection (outside an OTA
+// window), so its board and running firmware version can't be read from a GATT
+// version characteristic. Instead the node rides a second manufacturer-data
+// element in its scan response: same company id as the measurement frame, but a
+// distinct magic ('I' vs 'H') so the two never alias. HiveHub active-scans by
+// default (HOLYIOT_BLE_ACTIVE_SCAN), so the scan response arrives in the same
+// combined payload as the primary advertisement.
 //
 //   off 0..1 : company id (LE)  == HIVEINSIDE_COMPANY_ID
 //   off 2    : magic            == 0x49 ('I')
 //   off 3    : record version   (currently 0x01)
-//   off 4    : board id         uint8  1 = esp32-c6, 2 = nrf54lm20a
+//   off 4    : board id         uint8  2 = nrf54lm20a
 //   off 5..7 : firmware version uint8  major, minor, patch
 static constexpr size_t  HI_ID_MIN_LEN   = 8;
 static constexpr uint8_t HI_ID_MAGIC     = 0x49;  // 'I'
@@ -203,7 +202,7 @@ static Parsed parseHolyIot(const uint8_t* d, size_t len) {
   return out;
 }
 
-// HiveInside (ESP32-C6 prototype / nRF54LM20A): on-board vibration + acoustic
+// HiveInside (nRF54LM20A): on-board vibration + acoustic
 // FFT, no raw axes. The flags byte (offset 4) says which sensor groups produced
 // a valid reading this cycle; a cleared bit means that sensor was absent or
 // failed, so the group is reported as "not present" instead of the raw zeros
@@ -249,15 +248,14 @@ static Parsed parseHiveInside(const uint8_t* d, size_t len) {
 // it is only ever matched here and never mistaken for a measurement.
 struct HiIdentity {
   bool   ok = false;
-  String board;        // "esp32-c6" / "nrf54lm20a" (server HIVEINSIDE_BOARDS)
+  String board;        // "nrf54lm20a" (server HIVEINSIDE_BOARDS)
   String fw_version;   // "major.minor.patch"
 };
 
 static const char* hiBoardName(uint8_t id) {
   switch (id) {
-    case 1:  return "esp32-c6";
     case 2:  return "nrf54lm20a";
-    default: return "";
+    default: return "";   // board id 1 (esp32-c6) was the deprecated prototype
   }
 }
 
@@ -347,7 +345,7 @@ struct Accumulator {
   float   mic_sub_bass_dbfs = NAN, mic_hum_dbfs = NAN, mic_piping_dbfs = NAN,
           mic_stress_dbfs = NAN, mic_high_dbfs = NAN;
   // HiveInside identity (from the scan-response record, not the measurement).
-  String  board;        // "esp32-c6" / "nrf54lm20a"
+  String  board;        // "nrf54lm20a"
   String  fw_version;   // "major.minor.patch"
 };
 
@@ -409,10 +407,10 @@ class ScanCallbacks : public NimBLEScanCallbacks {
     }
 
 #if HIVEINSIDE_GATT_CLIENT
-    // Capture address type for any paired MAC even when manufacturer data is
-    // absent. GATT-mode HiveInside does not embed the measurement blob, so p.ok
-    // is false, but we need the address type for the subsequent connection
-    // (normal GATT read and/or the OTA relay).
+    // Capture the address type for any paired MAC so the OTA relay can connect
+    // by the node's identity address. This is only needed during an OTA locate
+    // scan (a beacon nRF54 becomes connectable only for its OTA window); the
+    // routine measurement path never opens a connection.
     for (size_t s = 0; s < g_slot.size(); s++) {
       if (g_slot[s].mac.length() > 0 && g_slot[s].mac == mac) {
         g_slot[s].found_by_mac = true;
@@ -483,190 +481,14 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 };
 }  // namespace
 
-#if HIVEINSIDE_USE_GATT
-// HiveInside GATT service / characteristic UUIDs — must match ble_link.cpp.
-static const char* HIVEINSIDE_GATT_SVC  = "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01";
-static const char* HIVEINSIDE_GATT_CHR  = "8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01";
-static const char* HIVEINSIDE_GATT_SYNC = "8e8b0003-7a1c-4b9e-9a2f-1d6e0b9c1a01";
-
-// Connect to a HiveInside GATT server, read the JSON measurement characteristic,
-// and populate `out`. Returns true on success. Must be called while the NimBLE
-// stack is initialised (between NimBLEDevice::init and ::deinit). Disconnects
-// and frees the client handle before returning regardless of outcome.
-static bool gattReadHiveInside(const NimBLEAddress& addr, Snapshot& out) {
-  NimBLEClient* client = NimBLEDevice::createClient();
-  // NimBLE 2.x setConnectTimeout() is in milliseconds (1.x used seconds).
-  client->setConnectTimeout((uint32_t)HIVEINSIDE_GATT_CONNECT_TIMEOUT_S * 1000UL);
-
-  Serial.printf("[BLE] GATT connecting to %s ...\n", addr.toString().c_str());
-  if (!client->connect(addr)) {
-    NimBLEDevice::deleteClient(client);
-    Serial.println("[BLE] GATT connect failed");
-    return false;
-  }
-
-  int rssi = client->getRssi();
-  bool ok = false;
-
-  NimBLERemoteService* svc = client->getService(HIVEINSIDE_GATT_SVC);
-  if (!svc) {
-    Serial.println("[BLE] GATT: HiveInside service not found");
-  } else {
-    NimBLERemoteCharacteristic* chr = svc->getCharacteristic(HIVEINSIDE_GATT_CHR);
-    if (!chr || !chr->canRead()) {
-      Serial.println("[BLE] GATT: measurement characteristic unavailable");
-    } else {
-      std::string val = chr->readValue();
-      if (val.empty()) {
-        Serial.println("[BLE] GATT: empty characteristic value");
-      } else {
-        JsonDocument doc;
-        if (deserializeJson(doc, val) != DeserializationError::Ok) {
-          Serial.println("[BLE] GATT: JSON parse error");
-        } else {
-          out.present      = true;
-          out.type         = SensorType::HiveInside;
-          out.rssi_dbm     = rssi;
-          out.sample_count = 1;
-          // Every measurement field is optional: the nRF54 node's version
-          // characteristic answers with a version-only blob
-          // ({"fw":"1.0.0","board":"nrf54lm20a"}), and a C6 node with a failed
-          // sensor omits that group. Missing keys fall back to NAN / -1 / "" so
-          // this same read doubles as the fw-version + board discovery probe.
-          out.temp_c       = doc["temp_c"]           | NAN;
-          out.humidity_pct = doc["humidity_percent"]  | NAN;
-          int bpct         = doc["battery_percent"]   | -1;
-          out.battery_pct  = bpct;
-          out.battery_mv   = doc["battery_mv"]        | -1;
-          out.fw_version   = (const char*)(doc["fw"]    | "");
-          out.board        = (const char*)(doc["board"] | "");
-
-          if (doc["accel_ok"] | false) {
-            out.accel_rms_mg          = doc["accel_rms_mg"]           | NAN;
-            out.accel_peak_mg         = doc["accel_peak_mg"]          | NAN;
-            out.accel_band_swarm_mg   = doc["accel_band_swarm_mg"]    | NAN;
-            out.accel_band_fanning_mg = doc["accel_band_fanning_mg"]  | NAN;
-            out.accel_band_activity_mg= doc["accel_band_activity_mg"] | NAN;
-          }
-          out.mic_present = doc["mic_ok"] | false;
-          if (out.mic_present) {
-            out.mic_rms_dbfs      = doc["mic_rms_dbfs"]           | NAN;
-            out.mic_sub_bass_dbfs = doc["mic_band_sub_bass_dbfs"]  | NAN;
-            out.mic_hum_dbfs      = doc["mic_band_hum_dbfs"]       | NAN;
-            out.mic_piping_dbfs   = doc["mic_band_piping_dbfs"]    | NAN;
-            out.mic_stress_dbfs   = doc["mic_band_stress_dbfs"]    | NAN;
-            out.mic_high_dbfs     = doc["mic_band_high_dbfs"]      | NAN;
-          }
-          Serial.printf("[BLE] GATT read OK: temp=%.1f°C hum=%.1f%% accel=%d mic=%d RSSI=%d\n",
-                        out.temp_c, out.humidity_pct,
-                        (int)(bool)(doc["accel_ok"] | false),
-                        (int)out.mic_present, rssi);
-          ok = true;
-        }
-      }
-    }
-    // Write wake-sync hint: how many seconds HiveInside should sleep before the
-    // next connection. Subtracting HIVEINSIDE_SYNC_LEAD_S gives HiveInside time
-    // to wake and be connectable before HiveHub's scan arrives; RC-oscillator
-    // drift (±5–10%) is then absorbed by HiveInside's SYNC_LISTEN_MS window.
-    // Non-fatal if the characteristic is absent (HiveInside firmware too old).
-    NimBLERemoteCharacteristic* chrSync = svc->getCharacteristic(HIVEINSIDE_GATT_SYNC);
-    if (chrSync && chrSync->canWrite()) {
-      // Lead is HIVEINSIDE_SYNC_LEAD_S (config.h). HiveHub now holds a fixed
-      // boot-to-boot cadence (enterDeepSleepUntilNextCycle), so this lead only has
-      // to cover the in-cycle offset between this write and the next boot's scan,
-      // plus one interval of RC-oscillator drift; HiveInside's SYNC_LISTEN_MS
-      // absorbs the remainder of the drift on the other side.
-      uint32_t sec = (uint32_t)(sendIntervalMs / 1000UL);
-      if (sec > (uint32_t)HIVEINSIDE_SYNC_LEAD_S) sec -= (uint32_t)HIVEINSIDE_SYNC_LEAD_S;
-      uint8_t buf[4] = {
-        (uint8_t)(sec         & 0xFF),
-        (uint8_t)((sec >>  8) & 0xFF),
-        (uint8_t)((sec >> 16) & 0xFF),
-        (uint8_t)((sec >> 24) & 0xFF),
-      };
-      if (chrSync->writeValue(buf, sizeof(buf), /*response=*/true)) {
-        // boot+millis() lets you compare this write time against the next boot's
-        // "[BLE] Scanning ... at boot+" line to measure the real rendezvous gap.
-        Serial.printf("[BLE] GATT: wake-sync written: sleep %us (lead %ds, at boot+%lums)\n",
-                      (unsigned)sec, (int)HIVEINSIDE_SYNC_LEAD_S, millis());
-      } else {
-        Serial.println("[BLE] GATT: wake-sync write failed (non-fatal)");
-      }
-    }
-  }
-
-  // Only terminate if still connected; a peer that already dropped the link
-  // would otherwise make ble_gap_terminate() log a benign failure.
-  if (client->isConnected()) client->disconnect();
-  NimBLEDevice::deleteClient(client);
-  return ok;
-}
-
-// ── nRF54 HiveInside board / firmware-version discovery ─────────────────────
-// A beacon-only nRF54 node never serves measurements over GATT, so its board
-// and running firmware version can't come from the advertisement — they are
-// learned by a ONE-OFF connect to the version characteristic (8e8b0002), which
-// answers with {"fw":..,"board":..}. Unlike gattReadHiveInside() this does NOT
-// write the wake-sync hint (a beacon node has no sleep schedule to steer).
-//
-// The result is cached per MAC so the connect happens at most once per node per
-// HiveHub session: the board never changes, and the firmware version only
-// changes on an OTA (which invalidates the cached entry). Without this the
-// backend never learns the node's board and can only relay a legacy
-// board-agnostic image — a board-stamped nrf54lm20a release is never selected.
-struct HiVersion { String mac; String board; String fw; };
-static std::vector<HiVersion> s_hiVersions;
-
-static bool hiVersionLookup(const String& mac, String& board, String& fw) {
-  for (auto& v : s_hiVersions) {
-    if (v.mac == mac) { board = v.board; fw = v.fw; return true; }
-  }
-  return false;
-}
-
-static void hiVersionStore(const String& mac, const String& board, const String& fw) {
-  for (auto& v : s_hiVersions) {
-    if (v.mac == mac) { v.board = board; v.fw = fw; return; }
-  }
-  s_hiVersions.push_back(HiVersion{mac, board, fw});
-}
-
-static void hiVersionInvalidate(const String& mac) {
-  for (size_t i = 0; i < s_hiVersions.size(); i++) {
-    if (s_hiVersions[i].mac == mac) { s_hiVersions.erase(s_hiVersions.begin() + i); return; }
-  }
-}
-
-// Connect, read the version JSON, extract board + fw, disconnect. Returns true
-// if either field was present. Deliberately does not touch the measurement or
-// wake-sync characteristics — a beacon node exposes neither meaningfully.
-static bool discoverHiVersion(const NimBLEAddress& addr, String& board, String& fw) {
-  NimBLEClient* client = NimBLEDevice::createClient();
-  client->setConnectTimeout((uint32_t)HIVEINSIDE_GATT_CONNECT_TIMEOUT_S * 1000UL);
-  if (!client->connect(addr)) {
-    NimBLEDevice::deleteClient(client);
-    return false;
-  }
-  bool ok = false;
-  NimBLERemoteService* svc = client->getService(HIVEINSIDE_GATT_SVC);
-  NimBLERemoteCharacteristic* chr = svc ? svc->getCharacteristic(HIVEINSIDE_GATT_CHR) : nullptr;
-  if (chr && chr->canRead()) {
-    std::string val = chr->readValue();
-    if (!val.empty()) {
-      JsonDocument doc;
-      if (deserializeJson(doc, val) == DeserializationError::Ok) {
-        board = (const char*)(doc["board"] | "");
-        fw    = (const char*)(doc["fw"]    | "");
-        ok = board.length() || fw.length();
-      }
-    }
-  }
-  if (client->isConnected()) client->disconnect();
-  NimBLEDevice::deleteClient(client);
-  return ok;
-}
-#endif  // HIVEINSIDE_USE_GATT
+// NOTE: the HIVEINSIDE_USE_GATT measurement path was removed with the ESP32-C6
+// HiveInside prototype. That path connected to a GATT server to read the JSON
+// measurement characteristic and to write the wake-sync hint, plus a one-off
+// connect to a version characteristic for board/firmware discovery. The only
+// remaining HiveInside board is the nRF54LM20A, a NON-connectable beacon whose
+// measurements and identity ('H'/'I' manufacturer elements) come entirely from
+// the passive scan above; it accepts a GATT connection only for the OTA relay
+// (HIVEINSIDE_OTA_ENABLED), which lives near the bottom of this file.
 
 // Reduce the accumulated |a| samples to a per-cycle AC RMS/peak (gravity removed).
 static void finalizeAccel(const Accumulator& a, Snapshot& s) {
@@ -760,9 +582,7 @@ static NimBLEScan* startScan(ScanCallbacks& cb, uint32_t seconds) {
 }
 
 void scanPairedSensorsMulti(const std::vector<String>& macs,
-                            const std::vector<bool>& isGatt,
-                            std::vector<Snapshot>& out,
-                            int gattBudget) {
+                            std::vector<Snapshot>& out) {
   out.assign(macs.size(), Snapshot{});
 
   g_slot.assign(macs.size(), Accumulator{});
@@ -789,62 +609,13 @@ void scanPairedSensorsMulti(const std::vector<String>& macs,
   NimBLEScan* scan = startScan(cb, HOLYIOT_BLE_SCAN_SECONDS);
   scan->clearResults();
 
-#if HIVEINSIDE_USE_GATT
-  // Post-scan GATT phase — the NimBLE stack is still alive here. Beacons with
-  // advertising data are copied directly (free). A sensor found only by MAC
-  // (GATT-mode HiveInside) needs a serial connect→read, which is slow — so only
-  // up to `gattBudget` such reads are attempted this cycle; the rest stay
-  // !present and are retried next wake. This is the "cap GATT" half of the
-  // beacon-first strategy that keeps many sensors from defeating deep sleep.
-  int gattUsed = 0;
-  for (size_t s = 0; s < g_slot.size(); s++) {
-    if (g_slot[s].mac.length() == 0 || !g_slot[s].found_by_mac) continue;
-    if (g_slot[s].present) {
-      copyToSnapshot(g_slot[s], out[s]);   // advertising data — no GATT needed
-      // Learn the node's board + firmware so the backend can relay a
-      // board-matched OTA image. A current nRF54 beacon advertises them in its
-      // scan-response identity record (copyToSnapshot already applied it), so no
-      // connection is needed — cache it and move on. Only a node that advertised
-      // no identity (older nRF54 firmware, or a GATT-mode C6 whose measurement
-      // came from the advert) falls back to the one-off cached GATT read.
-      if (out[s].type == SensorType::HiveInside) {
-        String hiBoard, hiFw;
-        if (out[s].board.length() || out[s].fw_version.length()) {
-          hiVersionStore(g_slot[s].mac, out[s].board, out[s].fw_version);
-        } else if (hiVersionLookup(g_slot[s].mac, hiBoard, hiFw)) {
-          out[s].board = hiBoard;
-          out[s].fw_version = hiFw;
-        } else if (gattBudget < 0 || gattUsed < gattBudget) {
-          NimBLEAddress addr(g_slot[s].mac.c_str(), g_slot[s].ble_addr_type);
-          if (discoverHiVersion(addr, hiBoard, hiFw)) {
-            gattUsed++;
-            hiVersionStore(g_slot[s].mac, hiBoard, hiFw);
-            out[s].board = hiBoard;
-            out[s].fw_version = hiFw;
-            Serial.printf("[BLE] HiveInside %s discovered: board=%s fw=%s\n",
-                          g_slot[s].mac.c_str(), hiBoard.c_str(), hiFw.c_str());
-          }
-        }
-      }
-      continue;
-    }
-    bool wantGatt = (s < isGatt.size()) ? isGatt[s] : true;
-    if (!wantGatt) continue;
-    if (gattBudget >= 0 && gattUsed >= gattBudget) {
-      Serial.printf("[BLE] GATT budget (%d/cycle) reached; deferring %s\n",
-                    gattBudget, g_slot[s].mac.c_str());
-      continue;
-    }
-    gattUsed++;
-    NimBLEAddress addr(g_slot[s].mac.c_str(), g_slot[s].ble_addr_type);
-    Serial.printf("[BLE] GATT: connecting to %s (%d/%d)\n",
-                  g_slot[s].mac.c_str(), gattUsed, gattBudget);
-    if (!gattReadHiveInside(addr, out[s]))
-      Serial.printf("[BLE] GATT %s: no data this cycle\n", g_slot[s].mac.c_str());
-  }
-#else
+  // Every in-hive sensor on this bridge (HolyIot, RuuviTag, nRF54 HiveInside) is
+  // a passive beacon, so the single shared scan window above captured everything:
+  // measurements from the 'H' manufacturer element and, for HiveInside, board +
+  // firmware from the 'I' identity element — both applied here by copyToSnapshot.
+  // No post-scan GATT connect is needed (the deprecated ESP32-C6 HiveInside was
+  // the only sensor that required one; its measurement-read path is gone).
   for (size_t s = 0; s < g_slot.size(); s++) copyToSnapshot(g_slot[s], out[s]);
-#endif
 
   // deinit(false), NOT deinit(true), on the ESP32-C6. deinit() stops and frees
   // the BT controller (so the WiFi upload can have the radio) regardless of the
@@ -866,9 +637,8 @@ void scanPairedSensors(const String& mac0, const String& mac1,
                        Snapshot& slot1, Snapshot& slot2) {
   // Back-compat 2-slot wrapper over the generalized multi-hive scan.
   std::vector<String> macs = {mac0, mac1};
-  std::vector<bool>   gatt = {true, true};
   std::vector<Snapshot> out;
-  scanPairedSensorsMulti(macs, gatt, out, MAX_GATT_READS_PER_CYCLE);
+  scanPairedSensorsMulti(macs, out);
   slot1 = out.size() > 0 ? out[0] : Snapshot{};
   slot2 = out.size() > 1 ? out[1] : Snapshot{};
 
@@ -912,12 +682,13 @@ void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) 
   if (snap.battery_pct >= 0)     doc[bp + "battery_percent"]  = snap.battery_pct;
   if (snap.battery_mv >= 0)      doc[bp + "battery_mv"]       = snap.battery_mv;
   doc[bp + "rssi_dbm"] = snap.rssi_dbm;
-  // HiveInside reports its running firmware version over GATT ("fw"); surface it
-  // as ble_{slot}_firmware_version so the backend and HivePal can display it
-  // next to the HiveHub node's own firmware. HolyIot/Ruuvi leave this empty.
+  // HiveInside advertises its running firmware version in its beacon identity
+  // record ("fw"); surface it as ble_{slot}_firmware_version so the backend and
+  // HivePal can display it next to the HiveHub node's own firmware. HolyIot/Ruuvi
+  // leave this empty.
   if (snap.fw_version.length()) doc[bp + "firmware_version"] = snap.fw_version;
-  // Board/architecture ("esp32-c6" / "nrf54lm20a") so the backend relays only
-  // an OTA image built for this node's silicon (like ?board= for the hub).
+  // Board/architecture (now only "nrf54lm20a") so the backend can confirm it is
+  // relaying the nRF54 HiveInside image.
   if (snap.board.length())      doc[bp + "board"]            = snap.board;
 
   // ── reused accel_{slot}_* fields (per-cycle AC magnitude + FFT bands) ───────
@@ -1001,9 +772,12 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
 // ===========================================================================
 // HiveHub streams a firmware image straight from the HTTPS download into the
 // HiveInside OTA characteristics, chunk by chunk, so a >1 MB image never has to
-// fit in the WROOM's RAM. The HiveInside device buffers nothing either: it
-// writes each chunk to its inactive OTA slot, tracks a running CRC-32 and only
-// swaps slots if the end-to-end CRC the backend computed matches.
+// fit in the WROOM's RAM. The relayed bytes are an nRF54 MCUboot image, opaque
+// to HiveHub: the relay never runs the ESP32 self-OTA architecture guard
+// (esp_image_header magic / chip-id) on them — it only forwards and CRCs. The
+// HiveInside device buffers nothing either: it writes each chunk to its inactive
+// OTA slot, tracks a running CRC-32 and only swaps slots if the end-to-end CRC
+// the backend computed matches, so a corrupt relay can never brick it.
 //
 // Session lifecycle (all called from network.cpp::updateHiveInside):
 //   otaBegin(mac,size,crc) → otaWrite(chunk)… → otaFinish() → otaCleanup()
@@ -1054,17 +828,15 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
     s_otaLastError = "bad OTA arguments (mac/size)";
     return false;
   }
-#if HIVEINSIDE_USE_GATT
-  // This relay changes the node's firmware version; drop any cached board/fw so
-  // the next scan re-reads the new version from the node.
-  hiVersionInvalidate(m);
-#endif
 
   NimBLEDevice::init("");
   NimBLEDevice::setMTU(247);  // ask for a larger ATT MTU; the device may grant less
 
   // Short locate scan to learn the device's current address + type, reusing the
-  // same scan callback the measurement path uses.
+  // same scan callback the measurement path uses. An nRF54 HiveInside is normally
+  // a NON-connectable beacon and only opens a connectable OTA window on demand,
+  // so this locates it by its identity address; a node still asleep/out of range
+  // is reported as "not found" and the backend can re-queue.
   uint8_t addrType = BLE_ADDR_PUBLIC;
   bool found = false;
   g_slot.assign(1, Accumulator{}); g_slot[0].mac = m;

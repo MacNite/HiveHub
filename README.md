@@ -59,8 +59,8 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Backend load-cell temperature compensation** — corrects HX711 thermal drift on read from the stored raw values; see [docs/temperature-compensation.md](docs/temperature-compensation.md).
 - **Per-hive temperature** — optional DS18B20 probes on a shared 1-Wire bus (off by default), or an in-hive BLE sensor as the source.
 - **Per-hive in-hive sound** — optional INMP441 stereo I2S microphones with per-band FFT (off by default).
-- **Per-hive vibration** — from a paired in-hive BLE sensor (a HiveInside ESP32-C6 gives full FFT bands; a HolyIot/RuuviTag beacon gives a low-rate magnitude), capturing the ~20 Hz pre-swarm signal microphones miss. (The old wired LIS3DH/LIS2DH12 driver has been removed — in-hive vibration is BLE-only.)
-- **In-hive BLE sensors** — pair up to two battery beacons (HolyIot 25015, RuuviTag, HiveInside ESP32-C6, or beehivemonitoring.com HiveHeart) for temperature/humidity/pressure/vibration with no wiring.
+- **Per-hive vibration** — from a paired in-hive BLE sensor (a HiveInside nRF54LM20A gives full FFT bands; a HolyIot/RuuviTag beacon gives a low-rate magnitude), capturing the ~20 Hz pre-swarm signal microphones miss. (The old wired LIS3DH/LIS2DH12 driver has been removed — in-hive vibration is BLE-only.)
+- **In-hive BLE sensors** — pair up to two battery beacons (HolyIot 25015, RuuviTag, HiveInside nRF54LM20A, or beehivemonitoring.com HiveHeart) for temperature/humidity/pressure/vibration with no wiring.
 - **Ambient temperature & humidity** — one selectable device-level I2C sensor: SHT4x/SHT40 (default), SHT3x, or a BME280 that also reports barometric pressure (`ambient_pressure_hpa`). Picked at build time (`ENABLE_SHT4X_AMBIENT` / `ENABLE_SHT3X_AMBIENT` / `ENABLE_BME280_AMBIENT`).
 - **RTC timekeeping** — a DS3231 timestamps measurements without depending on NTP.
 - **SD card cache & backup** — local buffering when uploads fail, plus an append-only persistent backup that can be downloaded in AP mode and re-imported via HivePal.

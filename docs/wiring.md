@@ -15,7 +15,7 @@ This document covers wiring for both supported hardware variants:
 > PCB's TCA9548A mux; see [multi-hive.md](multi-hive.md)). A single **DS18B20
 > 1-Wire bus on D1** is supported for wired in-hive temperature. The INMP441
 > microphone is not supported — **use wireless BLE in-hive sensors** (HolyIot
-> 25015, RuuviTag, or HiveInside ESP32-C6) for acoustics and vibration data.
+> 25015, RuuviTag, or HiveInside nRF54LM20A) for acoustics and vibration data.
 
 ### PlatformIO target
 
