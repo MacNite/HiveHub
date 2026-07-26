@@ -79,7 +79,7 @@ layout:
 |---|---|
 | Hives *(up to 16)* | `HIVE_COUNT` + one `HIVE_<n>_JSON` blob per hive (scale channel, DS18B20 ROM or BLE/GATT sensor) |
 | INMP441 microphones | `ENABLE_INMP441_MICS`, pins, sample rate/frames |
-| In-hive BLE bridge + GATT | `ENABLE_BLE_SCAN`, scan seconds, active scan, company id, `HIVEINSIDE_USE_GATT`, `ENABLE_BEEHIVE_GATT`, `ENABLE_WIRELESS_BEECOUNTER`, `BLE_OVERRIDE_*` — all derived from what the hives above use |
+| In-hive BLE bridge + GATT | `ENABLE_BLE_SCAN`, scan seconds, active scan, company id, `ENABLE_BEEHIVE_GATT`, `ENABLE_WIRELESS_BEECOUNTER`, `BLE_OVERRIDE_*` — all derived from what the hives above use |
 | MAX17048 LiPo fuel gauge | `ENABLE_MAX17048_BATTERY`, alert percent |
 
 > The INMP441 mics default to **off** (toggle on if fitted). In-hive vibration
@@ -104,7 +104,7 @@ historical starting point). Each hive card has:
 |---|---|---|
 | HolyIot 25015 | BLE beacon | ✅ supported, any hive |
 | RuuviTag 4-in-1 | BLE beacon | ✅ supported, any hive |
-| HiveInside ESP32-C6 | GATT | ✅ supported, any hive |
+| HiveInside nRF54LM20A | BLE beacon | ✅ supported, any hive |
 | HiveHeart *(beehivemonitoring.com)* | GATT | ✅ supported, any hive |
 | HiveTraffic *(entrance bee counter)* | BLE/GATT | ✅ supported, any hive (wired I2C BeeCounters are no longer supported) |
 

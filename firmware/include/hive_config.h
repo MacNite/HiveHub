@@ -58,7 +58,7 @@ struct ScaleChannel {
 };
 
 // One wireless pairing. `type` matches the portal vocabulary
-// (holyiot|ruuvitag|hiveinside|hiveheart|hivescale|beecounter). A `hivescale`
+// (holyiot|ruuvitag|hiveinside_nrf54|hiveheart|hivescale|beecounter). A `hivescale`
 // pairing is a scale source; every other type is the hive's one in-hive BLE
 // sensor. `isGatt()` marks connection-based types that count against
 // MAX_GATT_READS_PER_CYCLE.

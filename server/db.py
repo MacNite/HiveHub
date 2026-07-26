@@ -434,7 +434,8 @@ def init_db():
                 -- Board/architecture a hivescale image was built for (esp32 vs
                 -- esp32-c6). These two SoCs (Xtensa vs RISC-V) take incompatible
                 -- images, so OTA must match on board; check_firmware filters on it.
-                -- NULL for the single-architecture beecounter / hiveinside targets.
+                -- hiveinside is single-board (nrf54lm20a, stamped or NULL); the
+                -- beecounter target is single-architecture (NULL).
                 ALTER TABLE firmware_releases
                     ADD COLUMN IF NOT EXISTS board TEXT;
 
@@ -469,6 +470,14 @@ def init_db():
                 DROP INDEX IF EXISTS firmware_releases_owner_target_version_key;
                 CREATE UNIQUE INDEX IF NOT EXISTS firmware_releases_owner_target_board_version_key
                     ON firmware_releases (COALESCE(owner_user_id, ''), target, COALESCE(board, ''), version);
+
+                -- Retire the deprecated ESP32-C6 HiveInside board (removed from the
+                -- ecosystem): HiveInside now means the nRF54LM20A, and the relay no
+                -- longer matches per board, so any lingering esp32-c6 hiveinside
+                -- release is deactivated here so it is never served. See migration
+                -- 020_drop_hiveinside_c6.sql.
+                UPDATE firmware_releases SET active = false
+                    WHERE target = 'hiveinside' AND board = 'esp32-c6';
 
                 CREATE TABLE IF NOT EXISTS device_commands (
                     id BIGSERIAL PRIMARY KEY,

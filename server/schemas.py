@@ -61,9 +61,8 @@ class HiveBleIn(BaseModel):
     battery_mv: Optional[int] = None
     rssi_dbm: Optional[int] = None
     firmware_version: Optional[str] = None
-    # Board/architecture a HiveInside node reports over GATT ("esp32-c6" /
-    # "nrf54lm20a"), forwarded by the HiveHub so a board-specific OTA image is
-    # only ever relayed to matching silicon.
+    # Board/architecture a HiveInside node advertises in its beacon identity
+    # record (currently only "nrf54lm20a"), forwarded by the HiveHub.
     board: Optional[str] = None
 
 
@@ -302,9 +301,9 @@ class MeasurementIn(BaseModel):
     ble_1_battery_percent:  Optional[int]   = None
     ble_1_battery_mv:       Optional[int]   = None
     ble_1_rssi_dbm:         Optional[int]   = None
-    # HiveInside reports its running firmware version and board over GATT
-    # ("fw"/"board"); kept in raw_json (declared so extra="ignore" does not drop
-    # them). The board lets the relay pick a matching OTA image per architecture.
+    # HiveInside advertises its running firmware version and board in its beacon
+    # identity record ("fw"/"board"); kept in raw_json (declared so extra="ignore"
+    # does not drop them). The board is now always "nrf54lm20a".
     ble_1_firmware_version: Optional[str]   = None
     ble_1_board:            Optional[str]   = None
 
@@ -503,9 +502,8 @@ class FirmwareReleaseIn(BaseModel):
     # Board/architecture this image was built for. Required in effect for the
     # "hivescale" target ("esp32" / "esp32-c6") so OTA never serves a 30-pin
     # ESP32 (Xtensa) image to an ESP32-C6 (RISC-V) or vice versa; for
-    # "hiveinside" it distinguishes the ESP32-C6 prototype from the nRF54LM20A.
-    # When omitted for a hivescale release it is derived from the board-stamped
-    # filename.
+    # "hiveinside" the only valid board is "nrf54lm20a". When omitted for a
+    # hivescale release it is derived from the board-stamped filename.
     board: Optional[str] = None
 
 

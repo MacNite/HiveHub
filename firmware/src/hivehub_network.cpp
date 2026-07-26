@@ -838,13 +838,15 @@ bool performFirmwareUpdate(const String& firmwareUrl, int expectedSize,
 #if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
 // Relay a HiveInside firmware image to the paired sensor at `mac` over BLE GATT.
 //
-// A HiveInside ESP32-C6 image is >1 MB and will NOT fit in the
+// A HiveInside (nRF54LM20A MCUboot) image is >1 MB and will NOT fit in the
 // WROOM's RAM. So this STREAMS: it opens the HTTPS download, opens the BLE OTA
 // session, then pumps the body straight from the socket into the GATT DATA
-// characteristic a chunk at a time. The HiveInside device verifies the
-// end-to-end CRC-32 (passed in BEGIN) before swapping its OTA slot, so a
-// corrupted relay can never brick the sensor — it just aborts and keeps running
-// the old image.
+// characteristic a chunk at a time. The image is forwarded opaquely — this relay
+// path does NOT run the ESP32 self-OTA architecture guard (OtaUpdateSink /
+// esp_image_header chip-id check); that guard is only for the hub's own Xtensa/
+// RISC-V image. The HiveInside device verifies the end-to-end CRC-32 (passed in
+// BEGIN) before swapping its OTA slot, so a corrupted relay can never brick the
+// sensor — it just aborts and keeps running the old image.
 bool updateHiveInside(const String& mac, const String& firmwareUrl,
                       uint32_t expectedCrc32, String* outMsg) {
   auto setMsg = [&](const String& m) { if (outMsg) *outMsg = m; };

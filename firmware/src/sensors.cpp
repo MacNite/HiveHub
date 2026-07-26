@@ -482,33 +482,32 @@ String createMeasurementJson() {
   if (timeSource != "invalid") measuredAt = timestampNow();
 
   // ══ Phase 2: radio (BLE beacons + GATT). No I2C transaction runs past here. ═
-  // ── In-hive BLE sensors (beacon + capped GATT) for ALL hives ───────────────
-  // One passive scan window catches every paired beacon at once; connection-based
-  // GATT reads are capped per cycle (MAX_GATT_READS_PER_CYCLE) so deep sleep stays
-  // effective even with many hives.
+  // ── In-hive BLE beacon sensors for ALL hives ───────────────────────────────
+  // One passive scan window catches every paired beacon at once (HolyIot,
+  // RuuviTag, nRF54 HiveInside), so any number of them costs the same airtime and
+  // deep sleep stays effective. (HiveHeart/HiveScale/HiveTraffic GATT reads,
+  // handled by their own modules below, remain capped by MAX_GATT_READS_PER_CYCLE.)
 #if ENABLE_BLE_SCAN
   std::vector<String> bleMacs;
-  std::vector<bool>   bleIsGatt;
   std::vector<int>    bleHiveOfMac;   // gHives[] index each MAC belongs to
   for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
     const hivecfg::Hive& hive = hivecfg::gHives[h];
     for (uint8_t b = 0; b < hive.bleCount; b++) {
       const hivecfg::BlePairing& p = hive.ble[b];
-      // In-hive beacon/HiveInside sensors go through this bridge; HiveHeart/
-      // HiveScale/HiveTraffic are handled by their own GATT modules below.
-      // "hiveinside" is the legacy ESP32-C6 (GATT) prototype; "hiveinside_nrf54"
-      // is the current XIAO nRF54LM20A beacon — both ride this shared scan, and
-      // isGatt() sorts the passive beacon from the connection-based prototype.
+      // In-hive beacon sensors go through this bridge; HiveHeart/HiveScale/
+      // HiveTraffic are handled by their own GATT modules below. "hiveinside_nrf54"
+      // is the XIAO nRF54LM20A HiveInside — like HolyIot and RuuviTag it is a
+      // passive beacon caught by the single shared scan. (The legacy ESP32-C6
+      // "hiveinside" GATT prototype was removed from the ecosystem.)
       if (p.type == "holyiot" || p.type == "ruuvitag" ||
-          p.type == "hiveinside" || p.type == "hiveinside_nrf54") {
+          p.type == "hiveinside_nrf54") {
         bleMacs.push_back(p.mac);
-        bleIsGatt.push_back(p.isGatt());
         bleHiveOfMac.push_back(h);
       }
     }
   }
   std::vector<blesensor::Snapshot> bleSnaps;
-  blesensor::scanPairedSensorsMulti(bleMacs, bleIsGatt, bleSnaps, MAX_GATT_READS_PER_CYCLE);
+  blesensor::scanPairedSensorsMulti(bleMacs, bleSnaps);
 #endif
 
   // ── beehivemonitoring.com GATT sensors (HiveHeart / HiveScale) — all hives ──

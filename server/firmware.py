@@ -75,68 +75,18 @@ def latest_release_for_owner(target: str, owner_user_id: Optional[str],
     return best[:4]
 
 
-def latest_release_board_null(target: str, owner_user_id: Optional[str]):
-    """Highest-version active release for a target that carries NO board stamp.
+def latest_hiveinside_release(owner_user_id: Optional[str]):
+    """Resolve the HiveInside OTA image (nRF54LM20A).
 
-    Used as the legacy fallback for board-aware relays: a deployment that
-    published a single ``board = NULL`` image before board stamping existed keeps
-    updating, without ever matching a release stamped for a specific (possibly
-    wrong) architecture.
+    HiveInside now unambiguously means the nRF54LM20A beacon node, so a release is
+    always an nRF54 MCUboot image. Returns the highest-version active hiveinside
+    release available to this owner — an ``nrf54lm20a``-stamped build or a legacy
+    board-agnostic (``board IS NULL``) one — as a (version, filename, crc32,
+    owner_user_id) tuple, or None. (The deprecated ESP32-C6 board and the
+    board-matching that kept a C6 image away from an nRF54 unit were removed;
+    existing C6 hiveinside releases are deactivated by migration.)
     """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT version, filename, crc32, owner_user_id, id "
-                "FROM firmware_releases "
-                "WHERE active = true AND target = %s AND board IS NULL "
-                "  AND (owner_user_id = %s OR owner_user_id IS NULL);",
-                (target, owner_user_id),
-            )
-            rows = cur.fetchall()
-    if not rows:
-        return None
-    best = max(rows, key=lambda r: (parse_version(r[0]), r[3] is not None, r[4]))
-    return best[:4]
-
-
-def latest_hiveinside_release(owner_user_id: Optional[str], board: Optional[str]):
-    """Resolve the HiveInside OTA image for a sensor of the given board.
-
-    Prefers a release stamped for that exact board; falls back to a legacy
-    board-agnostic (``board IS NULL``) release so single-board deployments that
-    predate board stamping keep updating. Never returns a release stamped for a
-    DIFFERENT board, so a C6 image is never relayed to an nRF54 unit or vice
-    versa. Returns a (version, filename, crc32, owner_user_id) tuple or None.
-    """
-    board = (board or "").strip().lower() or None
-    if board is not None and board in HIVEINSIDE_BOARDS:
-        r = latest_release_for_owner("hiveinside", owner_user_id, board)
-        if r:
-            return r
-    # Board unknown or no image stamped for it: fall back to a legacy NULL-board
-    # release only (never a release stamped for the other architecture).
-    return latest_release_board_null("hiveinside", owner_user_id)
-
-
-def reported_hiveinside_board(device_id: str, slot: int) -> Optional[str]:
-    """The board a HiveInside sensor last reported for a HiveHub slot (1|2).
-
-    Read from the most recent measurement's ``ble_{slot}_board`` (the HiveHub
-    forwards the node's GATT "board" field). Returns a known HiveInside board or
-    None when the sensor never reported one (older firmware / beacon-only node
-    that never exposed the version characteristic)."""
-    key = f"ble_{int(slot)}_board"
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT raw_json->>%s FROM measurements "
-                "WHERE device_id = %s AND raw_json->>%s IS NOT NULL "
-                "ORDER BY measured_at DESC LIMIT 1;",
-                (key, device_id, key),
-            )
-            r = cur.fetchone()
-    board = (r[0].strip().lower() if r and r[0] else None)
-    return board if board in HIVEINSIDE_BOARDS else None
+    return latest_release_for_owner("hiveinside", owner_user_id)
 
 
 def other_board_releases(target: str, owner_user_id: Optional[str],
@@ -305,10 +255,10 @@ FIRMWARE_TARGETS = ("hivescale", "hiveinside")
 # reported board lines up with the release it should receive.
 #
 #  * hivescale is dual-architecture (Xtensa ESP32 vs RISC-V ESP32-C6).
-#  * hiveinside now has two incompatible boards too: the original ESP32-C6
-#    prototype and the current Nordic nRF54LM20A (a signed Zephyr/MCUboot image).
+#  * hiveinside is single-board: the Nordic nRF54LM20A (a signed Zephyr/MCUboot
+#    image). The deprecated ESP32-C6 prototype was removed from the ecosystem.
 HIVESCALE_BOARDS = ("esp32", "esp32-c6")
-HIVEINSIDE_BOARDS = ("esp32-c6", "nrf54lm20a")
+HIVEINSIDE_BOARDS = ("nrf54lm20a",)
 # Kept for callers that only reason about the hivescale ?board= query.
 FIRMWARE_BOARDS = HIVESCALE_BOARDS
 
@@ -328,11 +278,11 @@ def board_from_filename(filename: str) -> Optional[str]:
     """Infer the board/architecture from a board-stamped firmware filename.
 
     rename_firmware.py names artifacts ``hivehub_esp32_<v>.bin`` /
-    ``hivehub_esp32-c6_<v>.bin`` for the hub and ``hiveinside_esp32-c6_<v>.bin`` /
-    ``hiveinside_nrf54lm20a_<v>.bin`` for the in-hive node; detection keys off the
-    board token, so any prefix works. 'esp32-c6' contains the substring 'esp32',
-    so the C6 and Nordic variants are matched before plain esp32. Returns None
-    when the name carries no recognizable board token.
+    ``hivehub_esp32-c6_<v>.bin`` for the hub and ``hiveinside_nrf54lm20a_<v>.bin``
+    for the in-hive node; detection keys off the board token, so any prefix works.
+    'esp32-c6' contains the substring 'esp32', so the C6 hub variant is matched
+    before plain esp32. Returns None when the name carries no recognizable board
+    token.
     """
     n = (filename or "").lower()
     if "nrf54" in n:
@@ -352,11 +302,11 @@ def resolve_release_board(target: str, declared_board: Optional[str],
 
       * ``hivescale`` (dual-board) — the board MUST be known AND consistent with
         the board-stamped filename, so a C6 binary can never register as ``esp32``.
-      * ``hiveinside`` (now dual-board) — a declared/detected board is validated
-        against the HiveInside board set and must agree with the filename, so an
-        nRF54 Zephyr image can never register as an ``esp32-c6`` release. A board
-        may be omitted (legacy single-architecture ``board = NULL`` release) for
-        backward compatibility, but stamping one is strongly preferred.
+      * ``hiveinside`` (single-board nRF54LM20A) — a declared/detected board is
+        validated against the HiveInside board set (only ``nrf54lm20a``) and must
+        agree with the filename. A board may be omitted (legacy ``board = NULL``
+        release) for backward compatibility, but stamping ``nrf54lm20a`` is
+        preferred.
       * every other (single-architecture) target carries no board.
     """
     boards = boards_for_target(target)

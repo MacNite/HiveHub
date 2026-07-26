@@ -19,11 +19,9 @@ uint8_t gHiveCount = 0;
 bool BlePairing::isGatt() const {
   // Connection-based sensors that count against MAX_GATT_READS_PER_CYCLE. HolyIot,
   // RuuviTag and the nRF54LM20A HiveInside ("hiveinside_nrf54") are passive
-  // beacons (caught by the single shared scan) and never counted. The legacy
-  // ESP32-C6 HiveInside prototype ("hiveinside") serves measurements over GATT,
-  // so it stays connection-based here.
-  return type == "hiveinside" || type == "hiveheart" ||
-         type == "hivescale"  || type == "beecounter";
+  // beacons (caught by the single shared scan) and never counted. (The legacy
+  // ESP32-C6 HiveInside GATT prototype was removed from the ecosystem.)
+  return type == "hiveheart" || type == "hivescale" || type == "beecounter";
 }
 
 static char hexNibble(uint8_t v) { return v < 10 ? char('0' + v) : char('A' + v - 10); }
@@ -231,7 +229,7 @@ static void bridgeLegacyGlobals() {
     for (uint8_t b = 0; b < h.bleCount; b++) {
       const String& t = h.ble[b].type;
       if (t == "holyiot" || t == "ruuvitag" ||
-          t == "hiveinside" || t == "hiveinside_nrf54") return h.ble[b].mac;
+          t == "hiveinside_nrf54") return h.ble[b].mac;
     }
     return String("");
   };

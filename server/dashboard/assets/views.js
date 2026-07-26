@@ -1600,10 +1600,10 @@ function renderDevice(root, state) {
   // BeeCounter OTA over BLE/GATT is not implemented yet — the server rejects
   // beecounter uploads, so the option is gone.)
   // Board options depend on the target: the main unit ships two architectures
-  // (Xtensa ESP32 vs RISC-V ESP32-C6), and HiveInside now ships two too — the
-  // legacy ESP32-C6 prototype and the nRF54LM20A (signed Zephyr image). The
-  // server refuses a release whose board disagrees with its filename, so a
-  // cross-architecture image can never be published.
+  // (Xtensa ESP32 vs RISC-V ESP32-C6). HiveInside is single-board — the
+  // nRF54LM20A (signed Zephyr image); the ESP32-C6 prototype was removed from
+  // the ecosystem. The server refuses a release whose board disagrees with its
+  // filename, so a cross-architecture image can never be published.
   const BOARDS_BY_TARGET = {
     hivescale: [
       ["", "Detect from filename (…_esp32_… / …_esp32-c6_…)"],
@@ -1611,8 +1611,7 @@ function renderDevice(root, state) {
       ["esp32-c6", "ESP32-C6"],
     ],
     hiveinside: [
-      ["", "Detect from filename (…_esp32-c6_… / …_nrf54lm20a_…)"],
-      ["esp32-c6", "Legacy HiveInside (ESP32-C6)"],
+      ["", "Detect from filename (…_nrf54lm20a_…)"],
       ["nrf54lm20a", "HiveInside (nRF54LM20A)"],
     ],
   };
