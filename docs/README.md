@@ -32,7 +32,7 @@ hardware list, firmware/server setup, and API summary, start with the
 - [hiveinside-ble-sensor.md](hiveinside-ble-sensor.md) — HiveInside in-hive node (on-board FFT bands): the nRF54LM20A beacon, pairing, and OTA.
 - [holyiot-ble-sensor.md](holyiot-ble-sensor.md) — HolyIot 25015 beacon (temp / humidity / pressure / acceleration) and pairing.
 - [ruuvitag-ble-sensor.md](ruuvitag-ble-sensor.md) — RuuviTag four-in-one beacon on the same scan bridge.
-- [beehivemonitoring-gatt.md](beehivemonitoring-gatt.md) — beehivemonitoring.com HiveHeart (in-hive) and HiveScale (weight) over GATT.
+- [beehivemonitoring-gatt.md](beehivemonitoring-gatt.md) — beehivemonitoring.com HiveHeart (in-hive) and HiveScale (weight) over GATT, why only one reader can connect at a time, and how to debug `connect failed` / `status=13`.
 - [hivetraffic-bee-counter.md](hivetraffic-bee-counter.md) — HiveTraffic wireless entrance bee counter (BLE/GATT).
 - [device-not-supported-yet.md](device-not-supported-yet.md) — **my device isn't in the list yet**: how to request support as a GitHub issue and capture the integration data with nRF Connect.
 
