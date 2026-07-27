@@ -39,6 +39,106 @@ characteristic `513849eb-913d-4f80-8c44-3f0685533d6e`; only the payload differs.
 HiveHeart slot 1/2 map to hive 1/2 and supply `hive_N_temp_c` /
 `hive_N_humidity_percent` when no wired probe / HolyIot sensor already does.
 
+## One reader at a time
+
+> **A HiveHeart / HiveScale accepts exactly ONE connection at a time.** Pick a
+> single collector for each device: **HiveHub**, the **beehivemonitoring.com
+> Hub** (their own gateway), or the **beehivemonitoring.com phone app** — never
+> two at once.
+
+This is a property of the devices, not a HiveHub limitation, and it follows from
+how they are read. Unlike a HolyIot 25015 or a RuuviTag — passive beacons whose
+advertisements any number of listeners can receive at the same time — these are
+connection-based GATT peripherals. Reading one means *occupying* it:
+
+```
+connect(mac) → discover services → subscribe(513849EB-…-533D6E) → notify → close
+```
+
+While one central holds that link, the device **stops advertising entirely**, so
+a second central cannot see it as connectable, let alone connect. Whoever gets
+there first wins, and everyone else times out until the link is released.
+
+So if HiveHub should read a HiveHeart:
+
+- the **beehivemonitoring Hub** must not be powered on in range, or must not
+  have that device in its own pairing list;
+- the **phone app** must be fully closed — not just backgrounded. Both iOS and
+  Android keep BLE links alive for a backgrounded app, so an app you "left" an
+  hour ago can still be holding the device.
+
+The reverse is equally true: while HiveHub is mid-read, the vendor app will fail
+to connect. HiveHub only holds the link for the few seconds it takes to take one
+notification (see `closeClient()` in `firmware/src/beehive_gatt.cpp`), so the
+device is free again between wake cycles — but during a cycle it is busy.
+
+## Troubleshooting `connect failed` / `status=13`
+
+The common failure looks like this on the serial monitor (115200 baud):
+
+```
+[BHGATT] connecting to 2C:11:65:5C:FA:C7 (addr type 0) ...
+E NimBLEClient: Connection failed; status=13
+[BHGATT] connect failed (addr type 0)
+[BHGATT] connecting to 2C:11:65:5C:FA:C7 (addr type 1) ...
+E NimBLEClient: Connection failed; status=13
+[BHGATT] connect failed (addr type 1)
+```
+
+`status` is a NimBLE host error code (`ble_hs.h` in the ESP-IDF tree):
+
+| status | NimBLE symbol      | Meaning                                                          |
+|--------|--------------------|------------------------------------------------------------------|
+| 13     | `BLE_HS_ETIMEOUT`  | No connectable advertisement from that address within the window |
+| 16     | `BLE_HS_EREJECT`   | The peer answered and actively refused the connection            |
+| 30     | `BLE_HS_EDISABLED` | The BLE stack was de-initialised mid-operation                   |
+
+**`status=13` is the informative one, mostly because of what it rules out.** It
+means the firmware entered the initiating state, filtered for exactly that
+address, and heard nothing connectable for the whole
+`BEEHIVE_GATT_CONNECT_TIMEOUT_S` window (20 s) — tried once as a public address
+(type 0) and once as a random address (type 1). Reaching this message at all
+proves the configuration is already correct:
+
+- `ENABLE_BEEHIVE_GATT` **is** compiled into the running firmware (otherwise
+  there would be no `[BHGATT]` lines at all);
+- the pairing survived the save, with the type `hiveheart`/`hivescale`;
+- the MAC is well-formed (it was normalised and printed).
+
+Nothing about UUIDs, payload decoding or slot mapping is involved yet. Only the
+radio link failed. Work through, in order:
+
+1. **Release the device.** Close the beehivemonitoring app on every phone in
+   range and power off the beehivemonitoring Hub, then watch the next cycle.
+   This is by far the most common cause — see [One reader at a
+   time](#one-reader-at-a-time).
+2. **Check range.** Run the portal's BLE scan and read the RSSI. A device that
+   scans weaker than roughly −85 dBm often advertises fine but cannot hold a
+   connection. Test with the hub a couple of metres away.
+3. **Confirm the MAC is stable** across two scans a few minutes apart. It should
+   be — these devices use a fixed address — but a MAC that changes between scans
+   is a rotating private address, and pairing by MAC cannot work for that unit.
+4. **Power-cycle the HiveHeart** (pull the battery for ~30 s). A device left
+   bonded to another central can refuse new ones until it is reset.
+
+> **Appearing in the BLE scan does not prove a device is connectable.** The
+> portal lists everything that advertises, including devices advertising
+> non-connectably. A device can be plainly visible in `/ble/scan` and still
+> time out on every connect.
+
+Later stages fail with their own distinct messages, which narrow things further:
+`service not found` or `notify characteristic unavailable` means the MAC belongs
+to some other device; `no notification within timeout` means the link came up
+but nothing was pushed within `BEEHIVE_GATT_NOTIFY_TIMEOUT_S`.
+
+### Cost of leaving an unreachable device paired
+
+Each unreachable device burns `2 × BEEHIVE_GATT_CONNECT_TIMEOUT_S` = **40 s per
+wake cycle** (one attempt per address type), and up to
+`MAX_GATT_READS_PER_CYCLE` (4) devices are attempted per cycle — so a fully
+unreachable set can add ~160 s of awake time to every cycle. On battery, unpair
+a device you cannot reach rather than leaving it configured.
+
 ## Payload layout
 
 Bytes 0–3 are a header/timestamp; sensor fields start at byte 4. Decoders live
