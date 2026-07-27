@@ -1601,9 +1601,9 @@ function renderDevice(root, state) {
   // beecounter uploads, so the option is gone.)
   // Board options depend on the target: the main unit ships two architectures
   // (Xtensa ESP32 vs RISC-V ESP32-C6). HiveInside is single-board — the
-  // nRF54LM20A (signed Zephyr image); the ESP32-C6 prototype was removed from
-  // the ecosystem. The server refuses a release whose board disagrees with its
-  // filename, so a cross-architecture image can never be published.
+  // nRF54LM20A (signed Zephyr image). The server refuses a release whose board
+  // disagrees with its filename, so a cross-architecture image can never be
+  // published.
   const BOARDS_BY_TARGET = {
     hivescale: [
       ["", "Detect from filename (…_esp32_… / …_esp32-c6_…)"],
@@ -1624,7 +1624,7 @@ function renderDevice(root, state) {
     el("label", {}, el("span", {}, "Board "), boardTip), boardSelect);
   const BOARD_NOTES = {
     hivescale: "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.",
-    hiveinside: "HiveInside now has two boards — pick the one this image targets, or keep auto-detect when the file is named like hiveinside_nrf54lm20a_1.0.0.bin. A board-stamped release is only ever relayed to a matching sensor.",
+    hiveinside: "HiveInside is the nRF54LM20A node: keep auto-detect when the file is named like hiveinside_nrf54lm20a_1.0.0.bin, or stamp the board explicitly. The release is relayed to the sensor on its next check-in.",
   };
   const syncBoardRow = () => {
     const opts = BOARDS_BY_TARGET[targetSelect.value];

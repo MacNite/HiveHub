@@ -314,10 +314,19 @@ def resolve_release_board(target: str, declared_board: Optional[str],
         return None
     from_name = board_from_filename(filename)
     # A filename token that is valid for SOME target but not this one (e.g. an
-    # "esp32" hub token on a hiveinside upload) must not be treated as this
-    # target's board.
-    if from_name not in boards:
-        from_name = None
+    # "esp32"/"esp32-c6" hub token on a hiveinside upload) is refused outright
+    # rather than silently dropped. Dropping it would register the image with
+    # board = NULL, and since latest_hiveinside_release does no per-board
+    # matching, a retired ESP32-C6 HiveInside build could be re-uploaded and
+    # then served to an nRF54LM20A node — the exact case migration 020
+    # (020_drop_hiveinside_c6.sql) retires for rows already in the database.
+    if from_name is not None and from_name not in boards:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"filename '{filename}' names board '{from_name}', which is "
+                    f"not valid for target '{target}' (expected one of "
+                    f"{', '.join(boards)})"),
+        )
     declared = (declared_board or "").strip().lower() or None
     if declared is not None and declared not in boards:
         raise HTTPException(
