@@ -1365,6 +1365,40 @@ function sensorStatusCard(state) {
     body);
 }
 
+// Latest reported value of a per-hive BLE field ("sensor_type",
+// "firmware_version", "board", …). Prefers the nested hives[] entry the
+// multi-hive firmware sends and falls back to the flat ble_{n}_* keys (hives 1–2
+// and older firmware). Readings are scanned newest-first, so a node that simply
+// was not heard during the last scan window keeps showing its last known
+// identity instead of an em-dash.
+function bleFieldLatest(state, n, key) {
+  for (const m of [state.latest, ...(state.measurements || [])]) {
+    if (!m) continue;
+    const hv = (m.hives || []).find((h) => Number(h?.index) === Number(n));
+    const nested = hv && hv.ble ? hv.ble[key] : null;
+    if (nested != null && nested !== "") return nested;
+    const flat = m[`ble_${n}_${key}`];
+    if (flat != null && flat !== "") return flat;
+  }
+  return null;
+}
+
+// Hives whose in-hive BLE node identifies itself as a HiveInside. Only HiveInside
+// answers a scan with the identity record (the 'I' manufacturer element in its
+// scan response) that carries board and firmware version — HolyIot and RuuviTag
+// beacons leave both empty — so either field alone identifies one.
+function hiveInsideNodes(state) {
+  const nodes = [];
+  for (const n of availableHives(state)) {
+    const fw = bleFieldLatest(state, n, "firmware_version");
+    const board = bleFieldLatest(state, n, "board");
+    const type = String(bleFieldLatest(state, n, "sensor_type") || "");
+    if (!fw && !board && !/hiveinside/i.test(type)) continue;
+    nodes.push({ n, label: hiveLabel(state, n), fw, board });
+  }
+  return nodes;
+}
+
 function renderDevice(root, state) {
   const cfg = state.config || {};
   const fw = state.firmware || {};
@@ -1579,6 +1613,28 @@ function renderDevice(root, state) {
     fwInfo.append(el("div", { class: "form-actions" }, approveBtn));
   }
 
+  // HiveInside nodes run their own firmware, which the nRF54 beacon advertises
+  // (board + version) in its scan-response identity record; the HiveHub forwards
+  // it with every reading. Showing it next to the HiveHub's own version is what
+  // makes a relayed update verifiable — an image the node fails to confirm is
+  // reverted silently, so the node keeps advertising the old version. The whole
+  // section stays out of the card unless a HiveInside node has actually been
+  // heard, so a HolyIot/RuuviTag-only device sees nothing new.
+  const insideNodes = hiveInsideNodes(state);
+  const insideSection = insideNodes.length
+    ? el("div", {},
+        el("h3", { class: "fw-upload-head" }, "HiveInside nodes"),
+        el("div", { class: "rows" },
+          ...insideNodes.map((d) => el("div", { class: "row" },
+            el("span", { class: "k" }, d.label),
+            el("span", { class: "v" },
+              [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "))))),
+        el("p", { class: "note" },
+          "Firmware each in-hive node advertises. Upload a new image with target " +
+          "“HiveInside” below — the HiveHub relays it over BLE on the node's next " +
+          "check-in, and this version confirms the update took."))
+    : null;
+
   // Firmware upload form. The main-unit ("hivescale") target ships for two
   // boards, and the server refuses a release whose board it cannot determine
   // from this field or a board-stamped filename — so the board is a select of
@@ -1702,9 +1758,11 @@ function renderDevice(root, state) {
     catch (err) { state.toast(err.message, "error"); }
     finally { uploadBtn.disabled = false; }
   });
-  // One "Firmware" card: status/approve (fwInfo) on top, then the upload form.
+  // One "Firmware" card: status/approve (fwInfo) on top, the versions any
+  // HiveInside nodes report, then the upload form.
   const firmwareCard = el("div", { class: "card" },
     fwInfo,
+    insideSection,
     el("h3", { class: "fw-upload-head" }, "Upload firmware"),
     uploadForm, uploadResult);
 
