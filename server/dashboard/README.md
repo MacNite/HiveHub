@@ -80,6 +80,10 @@ Related settings (all optional, see `server/.env.example`):
   update (queues the device to flash on its next check-in). When a **HiveInside**
   node is paired, the same panel lists the firmware version and board each node
   advertises, so a relayed update can be verified after it lands.
+- **Status:** per-subsystem health (OK / Fault) plus an **In-hive sensors** list —
+  one row per wireless node paired to a hive (HolyIot, RuuviTag, HiveInside,
+  HiveHeart, HiveScale) with the firmware version it advertises. Only HiveInside
+  broadcasts one; the others report none and show an em-dash.
 - **Calibration:** start/stop calibration mode and fit a load-cell temperature
   coefficient.
 

@@ -84,9 +84,11 @@ relayed.
 > confirms it. A reverted (unconfirmed) update silently keeps the old firmware,
 > so verify the node's reported `fw` version after an update.
 
-The dashboard shows that version under **Device & admin → Firmware → HiveInside
-nodes**: one row per hive whose node was heard, with the advertised version and
-board (e.g. `v0.4.0 · nrf54lm20a`). The section only appears once a HiveInside
+The dashboard shows that version in two places on **Device & admin**: the
+**Status** card's *In-hive sensors* list (every paired wireless node, with the
+version for the ones that advertise one — only HiveInside does), and
+**Firmware → HiveInside nodes**: one row per hive whose node was heard, with the
+advertised version and board (e.g. `v0.4.0 · nrf54lm20a`). The section only appears once a HiveInside
 node has actually reported, and it keeps the last known identity when a node
 misses a scan window, so it reads as "what this node is running", not "what was
 in the last packet".

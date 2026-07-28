@@ -1357,12 +1357,70 @@ function sensorStatusCard(state) {
             el("span", { class: `badge ${c.ok ? "good" : "danger"}` }, c.ok ? "OK" : "Fault")))))
     : el("p", { class: "muted-text" },
         "No sensor health reported yet — it appears once the device sends its first reading.");
+
+  // The wireless nodes paired to this device, with the firmware each one runs.
+  // Only HiveInside reports a version (it advertises board + version in its
+  // scan-response identity record); every other in-hive node — HolyIot,
+  // RuuviTag and the beehivemonitoring GATT devices — sends no version field at
+  // all, so those rows show an em-dash instead of an invented number.
+  const nodes = inHiveSensors(state);
+  const unversioned = nodes.some((s) => !s.version);
   return el("div", { class: "card" },
     el("div", { class: "spread" }, el("h2", {}, "Status"), badge),
     el("p", { class: "note" },
       m.measured_at ? `Sensor health from the last check-in · ${relAge(m.measured_at)}.`
                     : "Per-sensor health as reported by the device."),
-    body);
+    body,
+    nodes.length ? el("h3", { class: "fw-upload-head" }, "In-hive sensors") : null,
+    nodes.length
+      ? el("div", { class: "rows" },
+          ...nodes.map((s) => el("div", { class: "row" },
+            el("span", { class: "k" }, s.label),
+            el("span", { class: "v" }, s.version ? `v${s.version}` : DASH))))
+      : null,
+    nodes.length && unversioned
+      ? el("p", { class: "note" },
+          "Firmware version as advertised by the node. Only HiveInside broadcasts one — " +
+          "HolyIot, RuuviTag and HiveHeart/HiveScale report no version.")
+      : null);
+}
+
+// The wireless in-hive nodes a device has reported, newest identity first: the
+// passively-scanned beacons (HolyIot / RuuviTag / HiveInside) plus the
+// beehivemonitoring GATT devices (HiveHeart / HiveScale). One row per node, with
+// the advertised firmware version where the node sends one.
+function inHiveSensors(state) {
+  const rows = [];
+  for (const n of availableHives(state)) {
+    const label = hiveLabel(state, n);
+    const type = bleFieldLatest(state, n, "sensor_type");
+    const fw = bleFieldLatest(state, n, "firmware_version");
+    const board = bleFieldLatest(state, n, "board");
+    if (type || fw || board) {
+      const kind = type || "In-hive BLE sensor";
+      rows.push({ label: `${label} · ${board ? `${kind} (${board})` : kind}`, version: fw });
+    }
+    for (const [kind, name] of [["hiveheart", "HiveHeart"], ["hivescale", "HiveScale"]]) {
+      if (gattSensorSeen(state, n, kind)) rows.push({ label: `${label} · ${name}`, version: null });
+    }
+  }
+  return rows;
+}
+
+// Whether hive `n` has ever reported a reading from the beehivemonitoring GATT
+// device `kind` ("hiveheart" / "hivescale"), nested or flat. Probes a handful of
+// representative fields rather than every key, so scanning the whole loaded
+// range stays cheap.
+const GATT_PROBE_FIELDS = ["temp_c", "humidity_percent", "battery_v", "rssi_dbm", "weight_kg", "frequency_hz"];
+function gattSensorSeen(state, n, kind) {
+  for (const m of [state.latest, ...(state.measurements || [])]) {
+    if (!m) continue;
+    const hv = (m.hives || []).find((h) => Number(h?.index) === Number(n));
+    const nested = hv && hv[kind];
+    if (nested && GATT_PROBE_FIELDS.some((f) => nested[f] != null)) return true;
+    if (GATT_PROBE_FIELDS.some((f) => m[`${kind}_${n}_${f}`] != null)) return true;
+  }
+  return false;
 }
 
 // Latest reported value of a per-hive BLE field ("sensor_type",
