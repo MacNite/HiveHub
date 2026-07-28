@@ -1059,11 +1059,15 @@ void checkCommands() {
   }
 #if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
   else if (type == "update_hiveinside") {
-    // payload: { "slot": 1|2, "url": "/firmware/hiveinside-x.y.bin", "crc32": <uint32> }
-    // The MAC is resolved locally from the paired BLE sensor for that slot, so
-    // the backend never needs to know the device address.
+    // payload: { "slot": 1..MAX_HIVES, "url": "/firmware/hiveinside-x.y.bin", "crc32": <uint32> }
+    // The MAC is resolved locally from the hive registry, so the backend never
+    // needs to know the device address. `slot` is the hive index: the lookup
+    // covers every hive, and it matches only HiveInside pairings — the legacy
+    // bleSensorMac0/1 globals it replaces reached the first two hives only and
+    // held the first beacon of ANY type, so a hive whose first pairing was a
+    // HolyIot or RuuviTag aimed the relay at the wrong device.
     int slot = payload["slot"] | 1;
-    String mac = (slot == 2) ? bleSensorMac1 : bleSensorMac0;
+    String mac = hivecfg::hiveInsideMacForSlot((uint8_t)slot);
     String fwUrl = payload["url"] | "";
     uint32_t crc = (uint32_t)(payload["crc32"] | 0);
     if (fwUrl.length() == 0) {

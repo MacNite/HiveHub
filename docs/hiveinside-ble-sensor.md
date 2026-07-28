@@ -72,6 +72,35 @@ unambiguously means an nRF54 image, so no per-board matching is done — the lat
 active HiveInside release (nrf54lm20a-stamped or a legacy board-agnostic one) is
 relayed.
 
+### Triggering a relay
+
+Uploading a `.bin` only **registers** a release — nothing starts the transfer.
+The relay is queued explicitly:
+
+```bash
+curl -X POST -H "X-API-Key: $API_KEY" \
+  "https://<host>/api/v1/devices/<device_id>/commands/update-hiveinside?slot=<hive>"
+```
+
+`slot` is the **hive index**, so any hive can be updated (up to `MAX_HIVES`), and
+the HiveHub matches only HiveInside pairings when resolving the MAC. The relay
+runs on the HiveHub's next check-in.
+
+Two guards apply before the command is queued:
+
+| Condition | Result |
+|---|---|
+| `slot` outside `1..18` | `400` |
+| No active `hiveinside` release | `404` |
+| Release not newer than the version the node advertises | `409` |
+
+The version gate compares against `hives[].ble.firmware_version` — the version
+the node itself broadcasts — so re-running the command after a successful update
+is a no-op instead of a pointless multi-minute BLE transfer and a reboot of a
+healthy hive sensor. A node that has never advertised a version is not gated.
+Pass `force=true` to relay regardless, which is what you want after a reverted or
+interrupted update where the node still runs the old image.
+
 > **How the board/version are learned.** The nRF54 beacon advertises its board and
 > firmware version in a second manufacturer-data element in its **scan response**
 > (magic `'I'`), distinct from the 26-byte measurement frame (magic `'H'`). The

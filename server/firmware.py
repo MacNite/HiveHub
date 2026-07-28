@@ -89,6 +89,41 @@ def latest_hiveinside_release(owner_user_id: Optional[str]):
     return latest_release_for_owner("hiveinside", owner_user_id)
 
 
+# How far back to look for a HiveInside's advertised firmware version. A node
+# that has not been heard for this long is treated as "version unknown" rather
+# than gating an update on a stale number — an update is exactly what a silent
+# node might need.
+HIVEINSIDE_VERSION_LOOKBACK_DAYS = 30
+
+
+def reported_hiveinside_version(device_id: str, hive_index: int) -> Optional[str]:
+    """The firmware version the HiveInside on `hive_index` last advertised.
+
+    The nRF54 node broadcasts board + version in its scan-response identity
+    record; the HiveHub forwards it as ``hives[].ble.firmware_version``, which is
+    preserved verbatim in ``hive_readings.raw_json``. Returns None when the hive
+    has never reported one (no HiveInside paired, a HiveHub too old to read the
+    identity record, or a node silent for longer than the lookback).
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT raw_json->'ble'->>'firmware_version'
+                FROM hive_readings
+                WHERE device_id = %s
+                  AND hive_index = %s
+                  AND measured_at > now() - (%s || ' days')::interval
+                  AND raw_json->'ble'->>'firmware_version' IS NOT NULL
+                ORDER BY measured_at DESC
+                LIMIT 1;
+                """,
+                (device_id, hive_index, HIVEINSIDE_VERSION_LOOKBACK_DAYS),
+            )
+            row = cur.fetchone()
+    return row[0] if row else None
+
+
 def other_board_releases(target: str, owner_user_id: Optional[str],
                          device_board: Optional[str],
                          current_version: Optional[str]) -> list:
