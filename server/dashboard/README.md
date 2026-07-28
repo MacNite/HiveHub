@@ -77,7 +77,9 @@ Related settings (all optional, see `server/.env.example`):
   to 18) — the labels used across every chart and card. Saving bumps the config
   version so the device applies it on its next check-in.
 - **Firmware:** upload a `.bin`, see current-vs-latest status and approve an OTA
-  update (queues the device to flash on its next check-in).
+  update (queues the device to flash on its next check-in). When a **HiveInside**
+  node is paired, the same panel lists the firmware version and board each node
+  advertises, so a relayed update can be verified after it lands.
 - **Calibration:** start/stop calibration mode and fit a load-cell temperature
   coefficient.
 

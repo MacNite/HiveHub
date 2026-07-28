@@ -388,9 +388,43 @@ select {
 .form-row { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .8rem; }
 .form-row label { font-size: .8rem; font-weight: 700; color: var(--ink-soft); }
 .form-row input, .form-row select.full { font: inherit; padding: .5rem .65rem; border: 1px solid var(--line); border-radius: 10px; background: var(--card); width: 100%; }
-.form-actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .5rem; }
+.form-actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: .5rem; align-items: center; }
 .note { font-size: .82rem; color: var(--ink-soft); }
 .note.warn { color: var(--warn); }
+
+/* ── Info tooltips: a "?"/"!" affordance that reveals help text on hover or
+   keyboard focus. Used next to the Board label and the Upload firmware button. */
+.info-tip { position: relative; display: inline-flex; align-items: center; align-self: center; vertical-align: middle; cursor: help; }
+.info-tip-icon {
+  display: inline-grid; place-items: center; width: 1.05rem; height: 1.05rem;
+  border-radius: 999px; border: 1px solid var(--info); color: var(--info);
+  font-size: .72rem; font-weight: 800; line-height: 1;
+}
+.info-tip-bubble {
+  position: absolute; bottom: calc(100% + .55rem); left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: 17rem; padding: .5rem .65rem;
+  background: var(--overlay-bg); color: var(--overlay-fg); border-radius: 8px;
+  box-shadow: var(--shadow); font-size: .78rem; font-weight: 500; line-height: 1.35;
+  text-align: left; white-space: normal; z-index: 40; pointer-events: none;
+  opacity: 0; visibility: hidden; transition: opacity .12s ease;
+}
+.info-tip-bubble::after {
+  content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  border: .35rem solid transparent; border-top-color: var(--overlay-bg);
+}
+.info-tip:hover .info-tip-bubble,
+.info-tip:focus .info-tip-bubble,
+.info-tip:focus-visible .info-tip-bubble { opacity: 1; visibility: visible; }
+
+/* ── Firmware panel: 2×2 status grid above the folded-in upload form. ── */
+.fw-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem .9rem; margin-top: .6rem; }
+.fw-stat {
+  display: flex; flex-direction: column; gap: .1rem; min-width: 0;
+  padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+}
+.fw-stat-k { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); font-weight: 700; }
+.fw-stat-v { font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.fw-upload-head { margin: 1rem 0 .55rem; font-size: .9rem; border-top: 1px solid var(--line); padding-top: .85rem; }
 
 /* ── Misc ────────────────────────────────────────────────────── */
 /* The hidden attribute must win over author display rules (.form-row,
