@@ -100,7 +100,8 @@ jobs:
           python3 test-data/test_accel_rules.py
           python3 test-data/test_ble_sensor_rules.py
           python3 test-data/test_sd_import.py
-          python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py
+          python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py \
+                            test-data/test_hiveinside_ota_gate.py
 
   # The website/configurator and dashboard have no test suite yet; keep them at
   # least syntactically sound so a broken script cannot ship unnoticed.

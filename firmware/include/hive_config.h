@@ -125,6 +125,18 @@ bool   hiveFromJson(const String& json, Hive& out);
 // Convenience: total configured wired scale channels across all hives (<= MAX_SCALES).
 uint8_t totalScaleChannels();
 
+// MAC of the HiveInside node on the hive addressed by `slot`, or "" when that
+// hive carries no HiveInside pairing. `slot` is the HIVE INDEX (1..MAX_HIVES),
+// so every hive can be targeted by an OTA relay — not just the first two, which
+// is all the legacy bleSensorMac0/1 globals could ever reach. A registry whose
+// hives are not numbered 1..N falls back to registry position `slot - 1`, which
+// is what the legacy globals addressed.
+//
+// Only HiveInside pairings are ever returned: the legacy globals held the first
+// beacon of ANY type, so a hive whose first pairing was a HolyIot or RuuviTag
+// pointed an OTA relay straight at the wrong device.
+String hiveInsideMacForSlot(uint8_t slot);
+
 // Format/parse a DS18B20 ROM as 16 hex chars ("28FF64...") for the portal/NVS.
 String   romToHex(const uint8_t rom[8]);
 bool     romFromHex(const String& hex, uint8_t rom[8]);

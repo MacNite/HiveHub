@@ -215,10 +215,15 @@ static void migrateLegacy(Preferences& p) {
 }
 
 // Populate the pre-0.20 per-slot globals from the registry's first two hives for
-// legacy two-slot code paths that still consume them (beacon compatibility). The
-// beehivemonitoring.com HiveHeart/HiveScale GATT client and the HiveTraffic bee
-// counter both read the dynamic registry directly, so those sensors can be
-// mapped to any hive up to MAX_HIVES.
+// legacy two-slot code paths (beacon compatibility). The beehivemonitoring.com
+// HiveHeart/HiveScale GATT client and the HiveTraffic bee counter both read the
+// dynamic registry directly, so those sensors can be mapped to any hive up to
+// MAX_HIVES.
+//
+// As of 0.24.6 the HiveInside OTA relay resolves its target through
+// hiveInsideMacForSlot() instead of bleSensorMac0/1, so nothing reads these two
+// any more; they are kept only so a legacy build/consumer added later still
+// finds them populated.
 static void bridgeLegacyGlobals() {
   auto find = [](const Hive& h, const char* type) -> String {
     for (uint8_t b = 0; b < h.bleCount; b++)
@@ -485,6 +490,25 @@ uint8_t totalScaleChannels() {
   uint16_t n = 0;
   for (uint8_t i = 0; i < gHiveCount; i++) n += gHives[i].scaleCount;
   return (uint8_t)(n > MAX_SCALES ? MAX_SCALES : n);
+}
+
+String hiveInsideMacForSlot(uint8_t slot) {
+  // "hiveinside" is the retired ESP32-C6 prototype's type string. It is matched
+  // too so a registry that still carries one is addressed by the same slot the
+  // portal shows, rather than silently reporting "no HiveInside paired".
+  auto macOf = [](const Hive& h) -> String {
+    for (uint8_t b = 0; b < h.bleCount; b++)
+      if (h.ble[b].type == "hiveinside_nrf54" || h.ble[b].type == "hiveinside")
+        return h.ble[b].mac;
+    return String("");
+  };
+  if (slot < 1) return String("");
+  for (uint8_t i = 0; i < gHiveCount; i++)
+    if (gHives[i].index == slot) return macOf(gHives[i]);
+  // No hive carries that index — address the registry by position, which is what
+  // the legacy per-slot globals did.
+  if (slot <= gHiveCount) return macOf(gHives[slot - 1]);
+  return String("");
 }
 
 }  // namespace hivecfg

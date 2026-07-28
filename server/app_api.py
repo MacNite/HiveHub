@@ -7,7 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from auth import require_device_role, require_hivepal_service_key, require_user_id
-from commands import create_command, queue_relay_firmware_update
+from commands import check_hiveinside_slot, create_command, queue_relay_firmware_update
 from db import get_conn, hash_claim_code
 from devices import (
     apply_device_channels,
@@ -501,6 +501,7 @@ def stop_calibration_mode_from_app(device_id: str, user_id: str = Depends(requir
 def queue_hiveinside_update_from_app(
     device_id: str,
     slot: int = Query(1),
+    force: bool = Query(False),
     user_id: str = Depends(require_user_id),
 ):
     """App-facing trigger for a HiveInside OTA relay.
@@ -509,18 +510,23 @@ def queue_hiveinside_update_from_app(
     release; it does not start the relay. HivePal calls this endpoint to actually
     queue the ``update_hiveinside`` command for the HiveHub to pick up. The
     caller must be owner or admin on the device.
+
+    ``slot`` is the hive index — any hive the device reports, not just the first
+    two. The relay is refused with 409 when the release is not newer than the
+    version that node advertises; ``force=true`` relays it regardless.
     """
-    if slot not in (1, 2):
-        raise HTTPException(status_code=400, detail="slot must be 1 or 2")
+    check_hiveinside_slot(slot)
     require_device_role(user_id, device_id, ["owner", "admin"])
     result = queue_relay_firmware_update(
-        device_id, "hiveinside", "update_hiveinside", slot
+        device_id, "hiveinside", "update_hiveinside", slot, force
     )
     return {
         "status": result["status"],
         "id": result["id"],
         "command_type": "update_hiveinside",
         "payload": {"slot": slot},
+        "version": result.get("version"),
+        "current_version": result.get("current_version"),
     }
 
 

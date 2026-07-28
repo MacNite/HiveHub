@@ -508,12 +508,32 @@ in the command payload; the HiveHub resolves the BLE MAC locally.
 
 | Query parameter | Default | Description |
 |---|---|---|
-| `slot` | `1` | HiveInside slot: `1` → `bleSensorMac0`, `2` → `bleSensorMac1` |
+| `slot` | `1` | Hive index (`1`..`18`) carrying the HiveInside to update |
+| `force` | `false` | Relay even when the release is not newer than the running version |
 
-Returns `404` if there is no active `hiveinside` release. Response on success:
+`slot` is the **hive index**: the HiveHub resolves it against its hive registry
+and matches only HiveInside pairings, so any hive can be updated. (Before 0.24.6
+the slot addressed the legacy two-element `bleSensorMac0/1` globals, which held
+the first beacon of *any* type — hives 3+ were unreachable and a hive whose first
+pairing was a HolyIot/RuuviTag aimed the relay at the wrong device.)
+
+The relay is **version-gated**: the release must be strictly newer than the
+firmware version that node last advertised (`hives[].ble.firmware_version`, seen
+within the last 30 days). A node that has never advertised a version is not
+gated, since there is nothing to compare against.
+
+Returns `400` for a slot outside `1..18`, `404` if there is no active
+`hiveinside` release, and `409` when the release is not newer:
 
 ```json
-{ "id": 72, "status": "pending" }
+{ "detail": "HiveInside on hive 1 already runs 0.4.1; release 0.4.1 is not newer. Upload a higher version, or pass force=true to relay it anyway." }
+```
+
+Response on success — `current_version` is the version being replaced (`null`
+when the node never advertised one):
+
+```json
+{ "id": 72, "status": "pending", "slot": 1, "version": "0.4.1", "current_version": "0.4.0" }
 ```
 
 > The HiveHub reports the command result **after** the relay finishes, so the
@@ -867,12 +887,15 @@ service key + user JWT and requires `owner` or `admin` on the device.
 
 | Query parameter | Default | Description |
 |---|---|---|
-| `slot` | `1` | HiveInside slot (`1` or `2`) |
+| `slot` | `1` | Hive index (`1`..`18`) carrying the HiveInside to update |
+| `force` | `false` | Relay even when the release is not newer than the running version |
 
-Returns `404` if there is no active `hiveinside` release. Response on success:
+Same slot semantics and version gate as the device-key endpoint above: `400` for
+a slot outside `1..18`, `404` when no active `hiveinside` release exists, `409`
+when the release is not newer than the version the node advertises.
 
 ```json
-{ "status": "pending", "id": 72, "command_type": "update_hiveinside", "payload": { "slot": 1 } }
+{ "status": "pending", "id": 72, "command_type": "update_hiveinside", "payload": { "slot": 1 }, "version": "0.4.1", "current_version": "0.4.0" }
 ```
 
 ### `GET /api/v1/app/devices/{device_id}/insights`

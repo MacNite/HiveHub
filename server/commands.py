@@ -1,6 +1,6 @@
 """Device command queue (calibration, reboot, OTA relays to sub-devices)."""
 
-from typing import Any
+from typing import Any, Optional
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,8 +12,10 @@ from devices import ensure_device_config, get_device_owner_id
 from firmware import (
     latest_hiveinside_release,
     latest_release_for_owner,
+    parse_version,
+    reported_hiveinside_version,
 )
-from schemas import DeviceCommandIn, DeviceCommandResult
+from schemas import MAX_HIVES, DeviceCommandIn, DeviceCommandResult
 
 router = APIRouter()
 
@@ -41,8 +43,53 @@ def queue_command(device_id: str, payload: DeviceCommandIn):
     return {"status": result["status"], "id": result["id"]}
 
 
+def check_hiveinside_slot(slot: int) -> int:
+    """Validate the hive index an OTA relay targets.
+
+    `slot` is the hive index (1..MAX_HIVES): the HiveHub resolves it against its
+    hive registry, so every hive can be updated. It used to be capped at the two
+    legacy bleSensorMac0/1 globals, which is why hives 3+ could not be reached.
+    """
+    if not 1 <= slot <= MAX_HIVES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"slot must be a hive index between 1 and {MAX_HIVES}",
+        )
+    return slot
+
+
+def check_hiveinside_is_newer(device_id: str, slot: int, version: str,
+                              force: bool) -> Optional[str]:
+    """Refuse to relay a HiveInside image that is not newer than what runs there.
+
+    The node advertises its running version, so a relay that would install the
+    same or an older build is a pointless several-minute BLE transfer plus a
+    reboot of a healthy hive sensor. It is refused with 409 rather than queued.
+
+    Returns the version currently reported for the slot (None when unknown). An
+    unknown version never blocks: a node that has never advertised one cannot be
+    compared against, and an update may be exactly what it needs. `force` skips
+    the comparison entirely, for reflashing the same version after a reverted or
+    interrupted update.
+    """
+    current = reported_hiveinside_version(device_id, slot)
+    if force or current is None:
+        return current
+    if parse_version(version) > parse_version(current):
+        return current
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"HiveInside on hive {slot} already runs {current}; release {version} "
+            f"is not newer. Upload a higher version, or pass force=true to relay "
+            f"it anyway."
+        ),
+    )
+
+
 def queue_relay_firmware_update(device_id: str, target: str,
-                                command_type: str, slot: int) -> dict:
+                                command_type: str, slot: int,
+                                force: bool = False) -> dict:
     """Queue a command telling the HiveHub to relay the active firmware for
     ``target`` to the sub-device in the given slot.
 
@@ -59,21 +106,33 @@ def queue_relay_firmware_update(device_id: str, target: str,
 
     For ``hiveinside`` the image is the latest active HiveInside release: the
     HiveInside node is now unambiguously the nRF54LM20A, so no per-board matching
-    is needed (the ESP32-C6 prototype was removed from the ecosystem).
+    is needed (the ESP32-C6 prototype was removed from the ecosystem). That relay
+    is additionally gated on the version the target node advertises — see
+    check_hiveinside_is_newer — so only a genuinely newer image is queued.
     """
     owner_id = get_device_owner_id(device_id)
     if target == "hiveinside":
+        check_hiveinside_slot(slot)
         r = latest_hiveinside_release(owner_id)
     else:
         r = latest_release_for_owner(target, owner_id)
     if not r:
         raise HTTPException(status_code=404, detail=f"No active {target} firmware release")
     version, filename, crc32 = r[0], r[1], r[2]
+    current = None
+    if target == "hiveinside":
+        current = check_hiveinside_is_newer(device_id, slot, version, force)
     url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
-    return create_command(device_id, DeviceCommandIn(
+    result = create_command(device_id, DeviceCommandIn(
         command_type=command_type,
         payload={"slot": slot, "url": url, "version": version, "crc32": int(crc32 or 0)},
     ))
+    # Echo what the relay will replace, so a caller can tell "0.4.0 -> 0.4.1" from
+    # "unknown -> 0.4.1" (a node that never advertised a version) without a second
+    # request.
+    if target == "hiveinside":
+        result = {**result, "version": version, "current_version": current, "slot": slot}
+    return result
 
 
 # NOTE: the update-beecounter endpoint was removed together with the wired I2C
@@ -85,12 +144,18 @@ def queue_relay_firmware_update(device_id: str, target: str,
 
 @router.post("/api/v1/devices/{device_id}/commands/update-hiveinside",
           dependencies=[Depends(require_api_key)])
-def queue_hiveinside_update(device_id: str, slot: int = Query(1)):
+def queue_hiveinside_update(device_id: str, slot: int = Query(1),
+                            force: bool = Query(False)):
     """Queue a relay of the active HiveInside firmware to the HiveInside sensor
-    paired in the given slot (1 -> bleSensorMac0, 2 -> bleSensorMac1) over BLE
-    GATT. The HiveHub resolves the BLE MAC locally, so only slot + image URL +
-    CRC-32 are sent."""
-    return queue_relay_firmware_update(device_id, "hiveinside", "update_hiveinside", slot)
+    on hive ``slot`` (any hive index, 1..MAX_HIVES) over BLE GATT. The HiveHub
+    resolves the BLE MAC from its hive registry, so only slot + image URL +
+    CRC-32 are sent.
+
+    Refused with 409 when the release is not newer than the version that node
+    advertises; ``force=true`` relays it regardless."""
+    return queue_relay_firmware_update(
+        device_id, "hiveinside", "update_hiveinside", slot, force
+    )
 
 
 @router.get("/api/v1/devices/{device_id}/commands/next", dependencies=[Depends(require_device_key)])
