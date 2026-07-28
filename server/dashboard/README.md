@@ -79,7 +79,10 @@ Related settings (all optional, see `server/.env.example`):
 - **Firmware:** upload a `.bin`, see current-vs-latest status and approve an OTA
   update (queues the device to flash on its next check-in). When a **HiveInside**
   node is paired, the same panel lists the firmware version and board each node
-  advertises, so a relayed update can be verified after it lands.
+  advertises, so a relayed update can be verified after it lands. Each node's row
+  carries an inline `latest x.y.z` flag naming the newest uploaded HiveInside
+  release — highlighted when it is newer than what that node runs, which is the
+  same comparison the backend applies before it will queue a relay.
 - **Status:** per-subsystem health (OK / Fault) plus an **In-hive sensors** list —
   one row per wireless node paired to a hive (HolyIot, RuuviTag, HiveInside,
   HiveHeart, HiveScale) with the firmware version it advertises. Only HiveInside

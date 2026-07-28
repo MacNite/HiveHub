@@ -425,6 +425,9 @@ select {
 .fw-stat-k { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); font-weight: 700; }
 .fw-stat-v { font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .fw-upload-head { margin: 1rem 0 .55rem; font-size: .9rem; border-top: 1px solid var(--line); padding-top: .85rem; }
+/* A HiveInside node's running version plus the inline "latest x.y.z" release
+   flag. Wraps under the version on a narrow phone rather than squeezing it. */
+.fw-node-v { display: inline-flex; align-items: center; justify-content: flex-end; gap: .45rem; flex-wrap: wrap; }
 
 /* ── Misc ────────────────────────────────────────────────────── */
 /* The hidden attribute must win over author display rules (.form-row,

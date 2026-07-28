@@ -18,6 +18,20 @@ function versionFromFilename(name) {
   return m ? m[1] : "";
 }
 
+// True when dotted version `a` is strictly newer than `b`, compared component by
+// component as NUMBERS — "0.10.0" is newer than "0.9.9", which a string compare
+// gets backwards. Mirrors server/firmware.py parse_version: non-digits are
+// stripped per component and a missing component counts as 0, so "0.4" < "0.4.1".
+function versionIsNewer(a, b) {
+  const parse = (v) => String(v || "").split(".").map((p) => parseInt(p.replace(/\D/g, ""), 10) || 0);
+  const x = parse(a), y = parse(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
 // ── chart manager: views register charts; app.js redraws them after mount ────
 let activeCharts = [];
 
@@ -1679,14 +1693,31 @@ function renderDevice(root, state) {
   // section stays out of the card unless a HiveInside node has actually been
   // heard, so a HolyIot/RuuviTag-only device sees nothing new.
   const insideNodes = hiveInsideNodes(state);
+  // Newest uploaded HiveInside release, shown inline next to each node's running
+  // version as "latest x.y.z". It is flagged as an available update only when it
+  // is strictly newer than what the node advertises — the same comparison the
+  // server applies before it will queue a relay (see check_hiveinside_is_newer),
+  // so the badge never promises an update the backend would refuse.
+  const insideLatest = fw.hiveinside_latest_version || null;
+  const insideFlag = (running) => {
+    if (!insideLatest) return null;
+    const newer = running && versionIsNewer(insideLatest, running);
+    return el("span", {
+      class: `badge ${newer ? "warn" : "muted"}`,
+      title: newer
+        ? `A newer HiveInside release (${insideLatest}) is uploaded and ready to relay`
+        : `Newest uploaded HiveInside release: ${insideLatest}`,
+    }, `latest ${insideLatest}`);
+  };
   const insideSection = insideNodes.length
     ? el("div", {},
         el("h3", { class: "fw-upload-head" }, "HiveInside nodes"),
         el("div", { class: "rows" },
           ...insideNodes.map((d) => el("div", { class: "row" },
             el("span", { class: "k" }, d.label),
-            el("span", { class: "v" },
-              [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "))))),
+            el("span", { class: "v fw-node-v" },
+              [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "),
+              insideFlag(d.fw))))),
         el("p", { class: "note" },
           "Firmware each in-hive node advertises. Upload a new image with target " +
           "“HiveInside” below — the HiveHub relays it over BLE on the node's next " +
