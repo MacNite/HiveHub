@@ -56,6 +56,7 @@ from devices import (
 from firmware import (
     get_approved_firmware_version,
     get_device_board,
+    latest_hiveinside_release,
     latest_release_for_owner,
     other_board_releases,
     parse_version,
@@ -675,9 +676,15 @@ def local_firmware_status(device_id: str):
         and current_version is not None
         and parse_version(latest_version) > parse_version(current_version)
     )
+    # The newest HiveInside release available to this owner, so the dashboard can
+    # show what a paired in-hive node could be updated TO next to the version it
+    # advertises. This is release metadata only — relaying it is a separate,
+    # explicit command (see docs/hiveinside-ble-sensor.md).
+    hiveinside_release = latest_hiveinside_release(owner_id)
     return {
         "device_id": device_id,
         "target": "hivescale",
+        "hiveinside_latest_version": hiveinside_release[0] if hiveinside_release else None,
         "current_version": current_version,
         "latest_version": latest_version,
         "latest_is_official": latest_is_official,
