@@ -1,0 +1,109 @@
+# Attach flashable firmware images to a GitHub Release.
+#
+# Push a project tag (e.g. `v0.2`) and this builds both supported targets and
+# uploads their images to the release for that tag, creating the release as a
+# draft if it does not exist yet. The tag is a PROJECT version and does not have
+# to match FIRMWARE_VERSION in firmware/src/globals.cpp — the firmware version is
+# part of every file name, and the release notes state both.
+#
+# Manual runs (workflow_dispatch) build and package the images as run artifacts
+# without touching any release, which is the way to get a build of an untagged
+# commit. Ordinary CI runs also publish 90-day run artifacts (see ci.yml); this
+# workflow exists for the permanent, publicly downloadable copy.
+name: Firmware release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [esp32dev, xiao_esp32c6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        # esptool pinned to 4.x — package_build.sh uses the v4 `merge_bin` name.
+        run: pip install platformio "esptool~=4.8"
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
+        working-directory: firmware
+      - name: Package flashable images
+        run: ./firmware/ci/package_build.sh ${{ matrix.env }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.env }}
+          path: firmware/dist/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only a tag push has a release to attach to; a manual run stops after build.
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Attach images to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          VERSION=$(sed -n 's/.*FIRMWARE_VERSION[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+                    firmware/src/globals.cpp)
+          # Fold the per-board checksum files into the single SHA256SUMS that
+          # ships with the release.
+          ( cd dist && cat ./*.sha256 | sort -k2 > SHA256SUMS && rm ./*.sha256 )
+          ls -l dist
+
+          cat > notes.md <<EOF
+          Firmware **$VERSION** — prebuilt images, no toolchain needed.
+
+          | Board | Flash a blank board (USB) | OTA / server upload |
+          |---|---|---|
+          | Seeed XIAO ESP32-C6 (recommended) | \`hivehub_esp32-c6_${VERSION}_full.bin\` @ \`0x0\` | \`hivehub_esp32-c6_${VERSION}.bin\` |
+          | Classic 30-pin ESP32 (legacy) | \`hivehub_esp32_${VERSION}_full.bin\` @ \`0x0\` | \`hivehub_esp32_${VERSION}.bin\` |
+
+          \`\`\`bash
+          esptool.py --chip esp32c6 --port /dev/ttyACM0 write_flash 0x0 hivehub_esp32-c6_${VERSION}_full.bin
+          \`\`\`
+
+          The \`_full.bin\` contains bootloader + partition table + otadata + app,
+          so it is written as a single file at offset \`0x0\`. The plain \`.bin\` is
+          the application image only — that is the file to upload to the HiveHub
+          backend for OTA, or to hand to the dashboard's firmware uploader.
+
+          These builds carry no \`secrets.h\`: Wi-Fi, server URL and API key are
+          set on the device through the setup portal (hold the setup button, join
+          the \`HiveHub-Setup-XXXX\` AP, open http://192.168.4.1). Compile-time
+          feature flags stay at their defaults — for a build with DS18B20, the
+          INMP441 mics or the GATT sensors enabled, build from source with your
+          own \`secrets.h\`.
+
+          \`SHA256SUMS\` lists the checksum of every image.
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --draft \
+              --title "$TAG" \
+              --notes-file notes.md \
+              --generate-notes
+          fi

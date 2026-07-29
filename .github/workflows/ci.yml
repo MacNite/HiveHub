@@ -14,6 +14,11 @@ jobs:
   # dependency cache (every library is pinned to an exact version in
   # firmware/platformio.ini). A compile error in any supported
   # optional-feature combination fails the build.
+  #
+  # The compiled images are also uploaded as run artifacts, so any commit — a
+  # branch, a PR, or main — can be downloaded and flashed without a local
+  # toolchain. GitHub keeps run artifacts for 90 days; tagged releases carry the
+  # same files permanently (see firmware-release.yml).
   firmware-build:
     runs-on: ubuntu-latest
     strategy:
@@ -26,10 +31,20 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install PlatformIO
-        run: pip install platformio
+        # esptool is pinned to the 4.x line: package_build.sh calls the v4
+        # `esptool.py merge_bin` spelling, which 5.x renamed.
+        run: pip install platformio "esptool~=4.8"
       - name: Build ${{ matrix.env }}
         run: pio run -e ${{ matrix.env }}
         working-directory: firmware
+      - name: Package flashable images
+        run: ./firmware/ci/package_build.sh ${{ matrix.env }}
+      - name: Upload firmware images
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: firmware/dist/
+          if-no-files-found: error
 
   # Host-level tests for the checked I2C layer: the exact production headers
   # (nau7802_checked.h, scale_math.h, scale_topology.h) run against a scripted
