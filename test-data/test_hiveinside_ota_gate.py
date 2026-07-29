@@ -8,7 +8,10 @@ Covers:
     targeted, not just the two the legacy bleSensorMac0/1 globals could reach;
   * the version gate — a release is only relayed when it is strictly newer than
     the version the node advertises, with an unknown version never blocking and
-    `force` overriding the comparison.
+    `force` overriding the comparison;
+  * the local dashboard's relay endpoint — that one exists at all, and that it
+    goes through the same shared helper (and therefore the same gate) as the
+    master-key and HivePal callers.
 
 The commands import needs a handful of env vars (config.py reads them at import
 time); dummy values are injected below so the test runs without a real database
@@ -29,6 +32,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 
 from fastapi import HTTPException  # noqa: E402
 
+import auth  # noqa: E402
 import commands  # noqa: E402
 from schemas import MAX_HIVES  # noqa: E402
 
@@ -94,6 +98,49 @@ def test_unknown_version_never_blocks():
 def test_force_overrides_the_comparison():
     check("force allows the same version", gate("0.4.1", "0.4.1", force=True) == "0.4.1")
     check("force allows an older release", gate("0.5.0", "0.4.1", force=True) == "0.5.0")
+
+
+def test_dashboard_exposes_a_relay_endpoint():
+    """The local dashboard must be able to queue a relay itself.
+
+    Regression guard: uploading a HiveInside .bin only registers a release, and
+    the dashboard used to have no way to start the transfer — the only callers
+    were the master-key and HivePal endpoints. An operator who uploaded an image
+    and waited therefore saw the node sit on its old version forever.
+    """
+    import local_dashboard
+
+    routes = [
+        r for r in local_dashboard.router.routes
+        if r.path.endswith("/hiveinside/update")
+    ]
+    check("relay route is registered", len(routes) == 1)
+    if not routes:
+        return
+    check("relay route is a POST", "POST" in routes[0].methods)
+    check(
+        "relay route is admin-gated",
+        any(d.dependency is auth.require_dashboard_admin for d in routes[0].dependencies),
+    )
+
+
+def test_dashboard_relay_delegates_through_the_shared_gate():
+    """The endpoint must not reimplement the release lookup or the version gate.
+
+    Going through queue_relay_firmware_update is what makes the dashboard's 400 /
+    404 / 409 behaviour identical to the other two callers'.
+    """
+    import local_dashboard
+
+    with mock.patch.object(local_dashboard, "queue_relay_firmware_update") as queue:
+        queue.return_value = {"id": 7, "status": "pending"}
+        result = local_dashboard.local_queue_hiveinside_update("dev-1", slot=3, force=True)
+
+    check("returns the helper's result unchanged", result == {"id": 7, "status": "pending"})
+    check(
+        "delegates with the hiveinside target, command type, slot and force",
+        queue.call_args == mock.call("dev-1", "hiveinside", "update_hiveinside", 3, True),
+    )
 
 
 if __name__ == "__main__":

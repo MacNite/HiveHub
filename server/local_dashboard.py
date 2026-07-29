@@ -35,7 +35,7 @@ from auth import (
     verify_password,
     _public_dashboard_user,
 )
-from commands import create_command
+from commands import create_command, queue_relay_firmware_update
 from config import DASHBOARD_SESSION_COOKIE, NOTIFY_MIN_SEVERITY, VAPID_PUBLIC_KEY
 from notifications import (
     delete_push_subscription,
@@ -741,6 +741,28 @@ def local_approve_firmware(device_id: str):
         "version": latest_version,
         "command_id": command["id"],
     }
+
+
+@router.post("/api/v1/local/devices/{device_id}/hiveinside/update", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
+def local_queue_hiveinside_update(
+    device_id: str, slot: int = Query(...), force: bool = Query(False)
+):
+    """Queue a BLE relay of the active HiveInside release to the node on ``slot``.
+
+    Uploading a HiveInside .bin only REGISTERS a release; nothing is transferred
+    until a relay is queued. Until this endpoint existed the dashboard could not
+    queue one at all — the only routes were the master-key
+    ``/api/v1/devices/{id}/commands/update-hiveinside`` and the HivePal app
+    endpoint — so an operator who uploaded an image and waited saw the node sit
+    on its old version indefinitely, with the UI implying a relay was coming.
+
+    Thin wrapper over the shared helper, so the release lookup, the slot bounds
+    check and the "must be newer than what the node advertises" gate behave
+    exactly as they do for the other two callers (400 / 404 / 409 respectively).
+    """
+    return queue_relay_firmware_update(
+        device_id, "hiveinside", "update_hiveinside", slot, force
+    )
 
 
 @router.post("/api/v1/local/devices/{device_id}/calibration/start", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)

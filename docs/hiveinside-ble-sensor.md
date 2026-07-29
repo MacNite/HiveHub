@@ -74,8 +74,16 @@ relayed.
 
 ### Triggering a relay
 
-Uploading a `.bin` only **registers** a release — nothing starts the transfer.
-The relay is queued explicitly:
+Uploading a `.bin` only **registers** a release — nothing starts the transfer,
+on any check-in. The relay is queued explicitly, either from the built-in
+dashboard or over the API.
+
+From the dashboard: **Device & admin → Firmware → HiveInside nodes**, then
+**Relay to node** on the row for the hive you want to update. The button appears
+only when the uploaded release would actually be accepted (see the guards
+below), and requires an admin login.
+
+Over the API:
 
 ```bash
 curl -X POST -H "X-API-Key: $API_KEY" \
