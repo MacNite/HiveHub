@@ -315,6 +315,7 @@ function buildState() {
       uploadFirmware: (fd) => api.uploadFirmware(activeId, fd),
       importSdData: (fd) => api.importSdData(activeId, fd),
       approveFirmware: () => api.approveFirmware(activeId),
+      queueHiveInsideUpdate: (slot, force) => api.queueHiveInsideUpdate(activeId, slot, force),
       startCalibration: (p) => api.startCalibration(activeId, p),
       stopCalibration: () => api.stopCalibration(activeId),
       fitTempComp: (p) => api.fitTempCompensation(activeId, p),

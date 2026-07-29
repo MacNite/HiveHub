@@ -1709,19 +1709,56 @@ function renderDevice(root, state) {
         : `Newest uploaded HiveInside release: ${insideLatest}`,
     }, `latest ${insideLatest}`);
   };
+  // Whether a relay would be accepted for this node, mirroring the server gate
+  // (check_hiveinside_is_newer): strictly newer than the advertised version, and
+  // ungated for a node that never advertised one — there is nothing to compare
+  // against, and an update may be exactly what such a node needs.
+  const insideRelayable = (running) =>
+    !!insideLatest && (!running || versionIsNewer(insideLatest, running));
+  // Start the transfer. Uploading a .bin only REGISTERS a release — this button
+  // is the only thing in the dashboard that actually sends one to a node. No
+  // reload afterwards: the command is queued as `pending` and nothing observable
+  // changes until the HiveHub picks it up and the node re-advertises its version.
+  // The button stays disabled after a successful queue so an impatient second
+  // click cannot stack a duplicate relay of the same image.
+  const relayToNode = async (btn, node) => {
+    if (!window.confirm(
+      `Relay HiveInside ${insideLatest} to ${node.label}?\n\n` +
+      "The HiveHub starts on its next command check (up to 5 minutes), streams " +
+      "the image over BLE for several minutes, and the node reboots into it. " +
+      "The node must be awake and in range or the relay fails and has to be " +
+      "queued again.")) return;
+    btn.disabled = true;
+    try {
+      const res = await state.actions.queueHiveInsideUpdate(node.n);
+      const from = res && res.current_version ? `${res.current_version} → ` : "";
+      state.toast(
+        `Relay queued for ${node.label} (${from}${(res && res.version) || insideLatest})`,
+        "success");
+    } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
+  };
   const insideSection = insideNodes.length
     ? el("div", {},
         el("h3", { class: "fw-upload-head" }, "HiveInside nodes"),
         el("div", { class: "rows" },
-          ...insideNodes.map((d) => el("div", { class: "row" },
-            el("span", { class: "k" }, d.label),
-            el("span", { class: "v fw-node-v" },
+          ...insideNodes.map((d) => {
+            const cell = el("span", { class: "v fw-node-v" },
               [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "),
-              insideFlag(d.fw))))),
+              insideFlag(d.fw));
+            if (insideRelayable(d.fw)) {
+              const relayBtn = el("button", { class: "btn small", type: "button" },
+                "Relay to node");
+              relayBtn.addEventListener("click", () => relayToNode(relayBtn, d));
+              cell.append(relayBtn);
+            }
+            return el("div", { class: "row" }, el("span", { class: "k" }, d.label), cell);
+          })),
         el("p", { class: "note" },
-          "Firmware each in-hive node advertises. Upload a new image with target " +
-          "“HiveInside” below — the HiveHub relays it over BLE on the node's next " +
-          "check-in, and this version confirms the update took."))
+          "Firmware each in-hive node advertises. Uploading an image with target " +
+          "“HiveInside” below only registers the release — nothing reaches a node " +
+          "until you press “Relay to node”. The HiveHub then streams it over BLE " +
+          "on its next command check, and this version is what confirms the " +
+          "update took."))
     : null;
 
   // Firmware upload form. The main-unit ("hivescale") target ships for two
@@ -1790,9 +1827,11 @@ function renderDevice(root, state) {
   const uploadResult = el("div", { hidden: true });
   const showUploadApply = (res) => {
     uploadResult.innerHTML = "";
-    // Only the main unit ("hivescale") has an approve-and-flash OTA path from the
-    // dashboard; HiveInside/BeeCounter releases are relayed on the sensor's next
-    // check-in, so there is nothing to apply here for those targets.
+    // Only the main unit ("hivescale") is applied from here. A HiveInside release
+    // is NOT relayed automatically on any check-in — it is sent by the "Relay to
+    // node" button in the HiveInside nodes section above, which is per-node
+    // (the relay targets one hive index at a time), so there is nothing
+    // meaningful to apply from the upload form.
     if (!res || res.target !== "hivescale") { uploadResult.hidden = true; return; }
     // Approve flashes the latest release for the DEVICE's board, so a .bin
     // registered for a different board wouldn't be the one applied — skip the
@@ -1814,7 +1853,7 @@ function renderDevice(root, state) {
   // What "Upload" does lives in a tooltip next to the button rather than a
   // paragraph — the Firmware status above is where the release is installed from.
   const uploadTip = infoTip(
-    "Uploading registers a new firmware release for this target. To install it, use the “Approve & flash” button in the Firmware panel — it appears there once the upload is a newer version than the device currently runs, and the device flashes on its next check-in.");
+    "Uploading only registers a new firmware release for this target — it never installs anything on its own. For the main unit, use “Approve & flash” in the Firmware panel; it appears once the upload is newer than what the device runs, and the device flashes on its next check-in. For HiveInside, use “Relay to node” next to the node you want to update.");
   const uploadForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Firmware .bin"), fileInput),
     el("div", { class: "form-row" }, el("label", {}, "Version"), versionInput),

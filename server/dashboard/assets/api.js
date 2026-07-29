@@ -133,6 +133,14 @@ export const api = {
   approveFirmware: (deviceId) =>
     req(`/devices/${encodeURIComponent(deviceId)}/firmware/approve`, { method: "POST" }),
 
+  // Queue the BLE relay of the latest HiveInside release to the node on `slot`
+  // (a hive index). Uploading the .bin only registers it; this is what starts
+  // the transfer.
+  queueHiveInsideUpdate: (deviceId, slot, force) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/hiveinside/update` +
+        `?slot=${encodeURIComponent(slot)}${force ? "&force=true" : ""}`,
+      { method: "POST" }),
+
   startCalibration: (deviceId, payload) =>
     req(`/devices/${encodeURIComponent(deviceId)}/calibration/start`, {
       method: "POST",

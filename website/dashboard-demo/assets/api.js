@@ -243,6 +243,7 @@ export const api = {
   uploadFirmware: demoErr,
   importSdData: demoErr,
   approveFirmware: demoErr,
+  queueHiveInsideUpdate: demoErr,
   startCalibration: demoErr,
   stopCalibration: demoErr,
   fitTempCompensation: demoErr,
