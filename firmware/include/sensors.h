@@ -3,6 +3,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include "config.h"
 #if ENABLE_HX711
 #include <HX711.h>
@@ -20,7 +21,7 @@ float weightFromRaw(long raw, long offset, float factor);
 // transaction to an absent device (the mux probe) or radio start-up wedges the
 // I2C peripheral into ESP_ERR_INVALID_STATE — a state Wire.end()/begin() alone
 // cannot clear — so the ambient SHT4x must be captured first, on the known-good
-// bus. createMeasurementJson() then uploads the cached snapshot instead of
+// bus. buildMeasurementDoc() then uploads the cached snapshot instead of
 // reading live post-radio.
 //
 // Phase 1 — device-level ambient sensors (SHT4x, INA219, MAX17048, DS18B20
@@ -32,4 +33,10 @@ void prefetchAmbientSensors();
 // scale read is attempted before scale state has been initialized.
 void prefetchWiredScales();
 
-String createMeasurementJson();
+// Payload assembly is a two-step API on purpose. buildMeasurementDoc() fills the
+// document while the SD card is still down (SD.begin() is the boundary after
+// which the C6 I2C-NG driver may reject the RTC read); the caller then brings
+// the card up, stamps sd_ok from the now-known state, and calls
+// finalizeMeasurementJson() to serialize. See runUploadCycle() in main.cpp.
+void buildMeasurementDoc(JsonDocument& doc);
+String finalizeMeasurementJson(JsonDocument& doc);

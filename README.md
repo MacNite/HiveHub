@@ -237,7 +237,41 @@ The [secrets.h configurator](website/configurator.html) writes these (and the wi
 > and battery handling now live on a separate **Power Module** that connects to
 > the Scale Module over I2C/ESP-NOW. The ESP32 firmware itself is Wi-Fi only.
 
-### Flash
+### Download a prebuilt image (no toolchain)
+
+Every CI run builds both targets and attaches the images to the run, and every
+tagged release carries them permanently:
+
+| Where | What you get | Keeps |
+|---|---|---|
+| [Releases](../../releases) | Images for the tagged version | forever |
+| [Actions → CI](../../actions/workflows/ci.yml) → a run → *Artifacts* | Images for that exact commit, incl. branches and PRs | 90 days |
+
+Two files per board — `esp32-c6` (XIAO, recommended) and `esp32` (legacy 30-pin):
+
+- **`hivehub_<board>_<version>_full.bin`** — bootloader + partition table +
+  otadata + application, written as a single file at offset `0x0`. Use this for
+  a blank board.
+- **`hivehub_<board>_<version>.bin`** — application image only. This is the file
+  to upload to your backend for OTA, or to the dashboard's firmware uploader.
+
+```bash
+# XIAO ESP32-C6, blank board
+esptool.py --chip esp32c6 --port /dev/ttyACM0 write_flash 0x0 hivehub_esp32-c6_0.24.7_full.bin
+
+# Legacy 30-pin ESP32
+esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x0 hivehub_esp32_0.24.7_full.bin
+```
+
+Prebuilt images contain no `secrets.h`: Wi-Fi, server URL and API key are set on
+the device through the [setup portal](#wi-fi-provisioning-portal), and the
+compile-time feature flags stay at their defaults. To change a flag (DS18B20,
+INMP441 mics, GATT sensors …) you still need a local build.
+
+`firmware/ci/package_build.sh <env>` produces the same files locally after a
+`pio run`.
+
+### Flash from source
 
 ```bash
 cd firmware

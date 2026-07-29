@@ -111,7 +111,7 @@ void syncTime() {
   // clock. Both no-WiFi and NTP-failure paths must land here so the outcome is
   // the same: mark the time invalid instead of leaving a stale "unknown", which
   // previously caused the offline no-RTC path to emit a bogus 1970 timestamp.
-  // "invalid" makes createMeasurementJson() omit the timestamp entirely and lets
+  // "invalid" makes buildMeasurementDoc() omit the timestamp entirely and lets
   // the server stamp the reading with its receive time.
   if (rtcHasValidTime()) {
     timeSource = "rtc";
@@ -209,7 +209,7 @@ struct WiredScaleAgg {
 };
 
 // Snapshot of the wired I2C readings captured pre-radio by the prefetch pass
-// and consumed by createMeasurementJson().
+// and consumed by buildMeasurementDoc().
 struct WiredSensorSnapshot {
   float ambientTemp     = NAN;
   float ambientHumidity = NAN;
@@ -447,7 +447,13 @@ void prefetchWiredScales() {
   }
 }
 
-String createMeasurementJson() {
+// Assemble the per-cycle payload into `doc`. Assembly is split from
+// serialization so the caller can stamp fields that are only knowable after
+// assembly has finished — specifically sd_ok: SD.begin() must not run before
+// the RTC read below (it is the boundary after which the ESP32-C6 I2C-NG driver
+// starts rejecting transfers), so the SD card is brought up by runUploadCycle()
+// once this returns, and it stamps sd_ok itself.
+void buildMeasurementDoc(JsonDocument& doc) {
   Serial.println("[MEASURE] Assembling upload from pre-radio wired snapshot...");
 
   // The wired I2C sensors (ambient SHT4x/SHT3x/BME280, INA219, MAX17048, NAU7802 scales) were
@@ -545,7 +551,6 @@ String createMeasurementJson() {
 #endif
 
   // ── Assemble the upload document ───────────────────────────────────────────
-  JsonDocument doc;
   doc["device_id"] = deviceId;
   // This ID is generated once while creating the JSON, then follows the exact
   // same line through SD backup, retry cache and every replay. It lets the
@@ -569,7 +574,10 @@ String createMeasurementJson() {
   doc["boot_count"] = rtcBootCount;
   doc["time_source"] = timeSource;
   doc["hive_count"] = hivecfg::gHiveCount;
-  doc["sd_ok"] = sdOk;
+  // sd_ok is deliberately NOT stamped here: sdOk is still false at assembly time
+  // on every deep-sleep wake (prepareSdForSleep() clears it and the card is only
+  // re-mounted after this function returns). runUploadCycle() stamps it right
+  // after initSdCard(), when the flag reflects the real card state.
   doc["rtc_ok"] = rtcOk;
   // sht_ok reports whether THIS cycle produced a valid ambient-sensor measurement
   // (SHT4x/SHT3x/BME280) — it is false whenever the ambient values are null
@@ -732,7 +740,13 @@ String createMeasurementJson() {
     if (h < MAX_HIVES && (beeSnaps[h].present || counterPaired))
       beecnt::writeSnapshotToHive(ho, beeSnaps[h]);
   }
+}
 
+// Serialize the assembled document, keep it as the "last measurement" the setup
+// portal shows, and log it. Called once the caller has stamped the post-assembly
+// fields (sd_ok), so the cached copy, the SD backup line and the upload all
+// carry identical content.
+String finalizeMeasurementJson(JsonDocument& doc) {
   String output;
   serializeJson(doc, output);
   rememberLastMeasurement(output);

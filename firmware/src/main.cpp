@@ -26,11 +26,21 @@ void runUploadCycle() {
   // rssi_dbm reflects the live connection.
   connectNetwork();
 
-  String json = createMeasurementJson();
+  JsonDocument doc;
+  buildMeasurementDoc(doc);
 
   // SD.begin() is the reproducible boundary after which ESP32-C6 I2C-NG may
   // reject later transfers. Capture the timestamp before bringing SPI/SD up.
   initSdCard();
+
+  // Stamp sd_ok only now. sdOk is a plain global that starts false on every boot
+  // and prepareSdForSleep() clears it before each deep sleep, so it is always
+  // false while the document above is assembled — stamping it there reported an
+  // SD card fault on every cycle even though the card mounted and the backup
+  // line was written moments later.
+  doc["sd_ok"] = sdOk;
+
+  String json = finalizeMeasurementJson(doc);
 
   if (sdOk) appendBackupLine(json);
 
