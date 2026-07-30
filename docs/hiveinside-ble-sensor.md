@@ -64,10 +64,13 @@ node verifies its own image. The nRF54 node is normally a **non-connectable
 beacon** and opens a connectable OTA window on demand, so the relay locates it by
 its identity address before connecting.
 
-Uploads may be **board-stamped** `nrf54lm20a` (the only HiveInside board). In the
-dashboard firmware tool, pick `HiveInside` as the target, or name the file so the
-board is auto-detected (`hiveinside_nrf54lm20a_1.0.0.bin`). The server refuses a
-release whose declared board disagrees with its filename. A HiveInside release now
+Uploads are **board-stamped** `nrf54lm20a` (the only HiveInside board). In the
+dashboard firmware tool, pick `HiveInside` as the target; the **Board** field then
+shows `HiveInside (nRF54LM20A)` **disabled** — there is nothing to choose, and the
+release is always stamped `nrf54lm20a`. Naming the file
+`hiveinside_nrf54lm20a_1.0.0.bin` keeps the stamp visible in the filename too. The
+API still accepts an omitted board (legacy `board = NULL` releases), but the server
+refuses a release whose declared board disagrees with its filename. A HiveInside release now
 unambiguously means an nRF54 image, so no per-board matching is done — the latest
 active HiveInside release (nrf54lm20a-stamped or a legacy board-agnostic one) is
 relayed.

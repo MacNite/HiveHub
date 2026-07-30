@@ -105,6 +105,9 @@ select {
   border: 1px solid var(--line); background: var(--card); color: var(--ink);
   min-width: 130px; cursor: pointer;
 }
+/* A fixed, non-choosable value (e.g. the Board of a single-board firmware
+   target) stays readable but clearly inert. */
+select:disabled { opacity: .7; cursor: not-allowed; }
 
 /* ── Cross-device hive picker ────────────────────────────────────
    One popover menu, grouped by device, replaces the old Device + Hive
