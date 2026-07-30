@@ -1782,10 +1782,12 @@ function renderDevice(root, state) {
   // BeeCounter OTA over BLE/GATT is not implemented yet — the server rejects
   // beecounter uploads, so the option is gone.)
   // Board options depend on the target: the main unit ships two architectures
-  // (Xtensa ESP32 vs RISC-V ESP32-C6). HiveInside is single-board — the
-  // nRF54LM20A (signed Zephyr image). The server refuses a release whose board
-  // disagrees with its filename, so a cross-architecture image can never be
-  // published.
+  // (Xtensa ESP32 vs RISC-V ESP32-C6), so there it is a real choice. HiveInside
+  // exists only for the nRF54LM20A (signed Zephyr image) — a single-entry list,
+  // which syncBoardRow() renders as a disabled select so the fixed board is
+  // visible without pretending there is something to pick. The server refuses a
+  // release whose board disagrees with its filename, so a cross-architecture
+  // image can never be published.
   const BOARDS_BY_TARGET = {
     hivescale: [
       ["", "Detect from filename (…_esp32_… / …_esp32-c6_…)"],
@@ -1793,7 +1795,6 @@ function renderDevice(root, state) {
       ["esp32-c6", "ESP32-C6"],
     ],
     hiveinside: [
-      ["", "Detect from filename (…_nrf54lm20a_…)"],
       ["nrf54lm20a", "HiveInside (nRF54LM20A)"],
     ],
   };
@@ -1806,7 +1807,7 @@ function renderDevice(root, state) {
     el("label", {}, el("span", {}, "Board "), boardTip), boardSelect);
   const BOARD_NOTES = {
     hivescale: "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.",
-    hiveinside: "HiveInside is the nRF54LM20A node: keep auto-detect when the file is named like hiveinside_nrf54lm20a_1.0.0.bin, or stamp the board explicitly. The release is relayed to the sensor on its next check-in.",
+    hiveinside: "HiveInside ships only for the Nordic nRF54LM20A, so the board is fixed and cannot be changed — the release is always stamped nrf54lm20a (name the file like hiveinside_nrf54lm20a_1.0.0.bin). It is relayed to the sensor with “Relay to node”.",
   };
   const syncBoardRow = () => {
     const opts = BOARDS_BY_TARGET[targetSelect.value];
@@ -1814,6 +1815,11 @@ function renderDevice(root, state) {
     if (!opts) return;
     boardSelect.innerHTML = "";
     opts.forEach(([v, label]) => boardSelect.appendChild(el("option", { value: v }, label)));
+    // Single-board target (HiveInside): show the one board it can be, greyed
+    // out. Disabling is safe here because the submit handler reads
+    // boardSelect.value directly — normal form serialization, which drops
+    // disabled fields, is never used for this form.
+    boardSelect.disabled = opts.length === 1;
     setTipText(boardTip, BOARD_NOTES[targetSelect.value]);
   };
   targetSelect.addEventListener("change", syncBoardRow);
