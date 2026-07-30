@@ -476,10 +476,11 @@
 // MCUboot image and are streamed opaquely — the ESP32 self-OTA architecture
 // guard is never applied to them.
 //
-// The nRF54 HiveInside is normally a NON-connectable beacon and only opens a
-// connectable OTA window on demand, so the relay locates it by its identity
-// address. This needs only a GATT *client* connection. Set to 0 to compile the
-// relay (and its GATT-client scaffolding) out.
+// The nRF54 HiveInside uses connectable legacy advertising continuously: the
+// measurement remains in the primary advertisement while its identity record
+// is returned in the scan response.  The relay locates that connectable peer by
+// its identity address and then uses only a GATT *client* connection. Set to 0
+// to compile the relay (and its GATT-client scaffolding) out.
 #ifndef HIVEINSIDE_OTA_ENABLED
 #define HIVEINSIDE_OTA_ENABLED 1
 #endif

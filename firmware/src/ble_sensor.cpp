@@ -833,10 +833,10 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
   NimBLEDevice::setMTU(247);  // ask for a larger ATT MTU; the device may grant less
 
   // Short locate scan to learn the device's current address + type, reusing the
-  // same scan callback the measurement path uses. An nRF54 HiveInside is normally
-  // a NON-connectable beacon and only opens a connectable OTA window on demand,
-  // so this locates it by its identity address; a node still asleep/out of range
-  // is reported as "not found" and the backend can re-queue.
+  // same scan callback the measurement path uses. An nRF54 HiveInside advertises
+  // connectably at all times, so this locates it by its identity address; a node
+  // that is powered off or out of range is reported as "not found" and the
+  // backend can re-queue.
   uint8_t addrType = BLE_ADDR_PUBLIC;
   bool found = false;
   g_slot.assign(1, Accumulator{}); g_slot[0].mac = m;
@@ -849,7 +849,7 @@ bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
   if (g_slot[0].found_by_mac) { found = true; addrType = g_slot[0].ble_addr_type; }
   if (!found) {
     Serial.printf("[HI-OTA] device %s not found in scan\n", m.c_str());
-    s_otaLastError = "HiveInside not found in scan (asleep or out of range?)";
+    s_otaLastError = "HiveInside not found in scan (powered off or out of range?)";
     NimBLEDevice::deinit(false);  // see scanPairedSensorsMulti: deinit(true) panics on the C6 after a scan
     return false;
   }
