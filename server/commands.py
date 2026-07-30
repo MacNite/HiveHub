@@ -158,6 +158,44 @@ def queue_hiveinside_update(device_id: str, slot: int = Query(1),
     )
 
 
+def latest_hiveinside_relays(device_id: str) -> dict:
+    """The most recent ``update_hiveinside`` command per hive slot.
+
+    The relay already records a specific cause in ``result`` on failure
+    (``invalid firmware content length -1``, ``HiveInside not found in scan``,
+    ``No HiveInside paired in slot N`` …), but nothing surfaced it: a node that
+    never updated looked identical whether the relay was queued and pending,
+    still running, or failing every single attempt with the same error. Feeding
+    this to the dashboard makes the difference visible without a database query.
+
+    Keyed by slot as a string, since it comes from the JSON payload.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (payload->>'slot')
+                       payload->>'slot', status, result->>'message',
+                       payload->>'version', created_at, completed_at
+                FROM device_commands
+                WHERE device_id = %s AND command_type = 'update_hiveinside'
+                ORDER BY payload->>'slot', created_at DESC;
+                """,
+                (device_id,),
+            )
+            rows = cur.fetchall()
+    return {
+        r[0]: {
+            "status": r[1],
+            "message": r[2],
+            "version": r[3],
+            "created_at": r[4],
+            "completed_at": r[5],
+        }
+        for r in rows if r[0]
+    }
+
+
 @router.get("/api/v1/devices/{device_id}/commands/next", dependencies=[Depends(require_device_key)])
 def next_command(device_id: str):
     with get_conn() as conn:

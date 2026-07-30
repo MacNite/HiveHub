@@ -86,6 +86,20 @@ From the dashboard: **Device & admin → Firmware → HiveInside nodes**, then
 only when the uploaded release would actually be accepted (see the guards
 below), and requires an admin login.
 
+The row then shows the relay's state — *relay queued*, *relaying…*, or *relay
+failed* with the reason spelled out underneath (e.g. `HiveInside not found in
+scan (asleep or out of range?)`). The button is disabled while a relay is
+already queued or running, so a second click cannot stack a duplicate transfer.
+A relay that succeeds leaves no badge: the node's advertised version changing is
+the confirmation.
+
+> Firmware downloads are deliberately excluded from response compression
+> (`SelectiveGZipMiddleware`). A gzipped response has no `Content-Length`, and
+> the ESP32 sizes its download from that header — compressing `/firmware/*` made
+> every relay fail with `invalid firmware content length -1` before it opened a
+> BLE session. Keep any reverse proxy in front of the API from re-compressing
+> that path for the same reason.
+
 Over the API:
 
 ```bash

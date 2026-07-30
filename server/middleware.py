@@ -1,9 +1,44 @@
 """ASGI middleware and rate-limiting helpers."""
 
 from fastapi import HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from slowapi.util import get_remote_address
 
 from config import TRUST_PROXY_HEADERS
+
+
+# Paths whose responses must never be compressed. See SelectiveGZipMiddleware.
+NO_COMPRESS_PREFIXES = ("/firmware/",)
+
+
+class SelectiveGZipMiddleware:
+    """GZip every response except firmware binary downloads.
+
+    Compressing the measurement JSON is a large win, but applying it to
+    ``GET /firmware/{filename}`` actively breaks OTA. A gzipped response is
+    streamed without a ``Content-Length``, and the ESP32 sizes its download from
+    that header: ``HTTPClient::getSize()`` returns -1, so the HiveInside relay
+    fails with "invalid firmware content length -1" before it ever opens the BLE
+    session, and the hub's own self-update falls back to the backend-supplied
+    size. Firmware images are already-compact binaries, so compressing them costs
+    CPU on both ends and saves nothing.
+
+    Implemented as a wrapper rather than a GZipMiddleware subclass because
+    Starlette's implementation decides to compress inside its own ASGI callable,
+    with no hook for excluding a path.
+    """
+
+    def __init__(self, app, minimum_size: int = 1024,
+                 exclude_prefixes: tuple = NO_COMPRESS_PREFIXES):
+        self.app = app
+        self.exclude_prefixes = exclude_prefixes
+        self.gzip = GZipMiddleware(app, minimum_size=minimum_size)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").startswith(self.exclude_prefixes):
+            await self.app(scope, receive, send)
+            return
+        await self.gzip(scope, receive, send)
 
 
 class MaxBodySizeMiddleware:

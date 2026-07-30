@@ -35,7 +35,11 @@ from auth import (
     verify_password,
     _public_dashboard_user,
 )
-from commands import create_command, queue_relay_firmware_update
+from commands import (
+    create_command,
+    latest_hiveinside_relays,
+    queue_relay_firmware_update,
+)
 from config import DASHBOARD_SESSION_COOKIE, NOTIFY_MIN_SEVERITY, VAPID_PUBLIC_KEY
 from notifications import (
     delete_push_subscription,
@@ -685,6 +689,9 @@ def local_firmware_status(device_id: str):
         "device_id": device_id,
         "target": "hivescale",
         "hiveinside_latest_version": hiveinside_release[0] if hiveinside_release else None,
+        # Last relay attempt per hive slot, so the node list can show "queued" /
+        # "relaying" / the exact failure instead of silently looking unchanged.
+        "hiveinside_relays": latest_hiveinside_relays(device_id),
         "current_version": current_version,
         "latest_version": latest_version,
         "latest_is_official": latest_is_official,

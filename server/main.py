@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -43,7 +42,7 @@ from config import (
 )
 from db import db_pool, init_db
 from insights_api import start_insight_reconciler, stop_insight_reconciler
-from middleware import MaxBodySizeMiddleware, _client_ip_key
+from middleware import MaxBodySizeMiddleware, SelectiveGZipMiddleware, _client_ip_key
 from mqtt_publisher import publisher as mqtt_publisher
 from notifications import start_notification_worker, stop_notification_worker
 
@@ -79,7 +78,12 @@ if RATE_LIMIT_ENABLED:
 # bodies where the CPU/header overhead would not pay off. Applies to every JSON
 # response, so the HivePal app API (/api/v1/app/*) benefits too, not just the
 # local dashboard.
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+#
+# Firmware downloads are EXCLUDED: a compressed response has no Content-Length,
+# which is exactly what the ESP32 sizes its OTA download from — compressing them
+# broke the HiveInside relay outright ("invalid firmware content length -1").
+# See SelectiveGZipMiddleware.
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
 
 
 @app.on_event("startup")
