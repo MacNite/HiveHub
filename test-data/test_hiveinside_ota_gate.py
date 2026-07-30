@@ -11,7 +11,12 @@ Covers:
     `force` overriding the comparison;
   * the local dashboard's relay endpoint — that one exists at all, and that it
     goes through the same shared helper (and therefore the same gate) as the
-    master-key and HivePal callers.
+    master-key and HivePal callers;
+  * that firmware downloads are never gzipped. This lives here, next to the
+    relay it protects, because compressing them is not a cosmetic problem: a
+    compressed response carries no Content-Length, the ESP32 sizes its download
+    from that header, and the relay died with "invalid firmware content length
+    -1" before it ever opened a BLE session.
 
 The commands import needs a handful of env vars (config.py reads them at import
 time); dummy values are injected below so the test runs without a real database
@@ -19,6 +24,7 @@ or FastAPI runtime. db.py builds its pool with open=False, so importing it does
 not connect.
 """
 
+import asyncio
 import os
 import sys
 from unittest import mock
@@ -34,6 +40,7 @@ from fastapi import HTTPException  # noqa: E402
 
 import auth  # noqa: E402
 import commands  # noqa: E402
+import middleware  # noqa: E402
 from schemas import MAX_HIVES  # noqa: E402
 
 _failures = 0
@@ -98,6 +105,68 @@ def test_unknown_version_never_blocks():
 def test_force_overrides_the_comparison():
     check("force allows the same version", gate("0.4.1", "0.4.1", force=True) == "0.4.1")
     check("force allows an older release", gate("0.5.0", "0.4.1", force=True) == "0.5.0")
+
+
+def _echo_app(body: bytes):
+    """Minimal ASGI app returning `body` with an explicit Content-Length."""
+    async def app(scope, receive, send):
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", b"application/octet-stream"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+    return app
+
+
+def _get(app, path: str):
+    """Drive an ASGI app through one gzip-capable GET; return (headers, body).
+
+    Hand-rolled rather than using starlette's TestClient because that needs
+    httpx, which is not in server/requirements.txt and so is not present in CI.
+    """
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+        "method": "GET", "path": path, "raw_path": path.encode(),
+        "query_string": b"", "root_path": "", "scheme": "http",
+        "headers": [(b"accept-encoding", b"gzip")],
+        "client": ("test", 1), "server": ("test", 80),
+    }
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(app(scope, receive, send))
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    return headers, body
+
+
+def test_firmware_downloads_are_never_compressed():
+    """A firmware download must keep its Content-Length and its exact bytes."""
+    body = b"\xa5" * 8192
+    app = middleware.SelectiveGZipMiddleware(_echo_app(body), minimum_size=1024)
+    headers, payload = _get(app, "/firmware/hiveinside_nrf54lm20a_0.4.2.bin")
+    check("firmware keeps Content-Length", headers.get("content-length") == str(len(body)))
+    check("firmware is not gzipped", "content-encoding" not in headers)
+    check("firmware bytes are unaltered", payload == body)
+
+
+def test_other_responses_are_still_compressed():
+    """The exclusion must be surgical — measurement JSON still gets gzipped."""
+    body = b'{"rows":[' + b'{"weight_kg":12.345},' * 500 + b'{}]}'
+    app = middleware.SelectiveGZipMiddleware(_echo_app(body), minimum_size=1024)
+    headers, payload = _get(app, "/api/v1/devices/dev-1/measurements")
+    check("JSON is gzipped", headers.get("content-encoding") == "gzip")
+    check("JSON is actually smaller", len(payload) < len(body))
 
 
 def test_dashboard_exposes_a_relay_endpoint():

@@ -1715,12 +1715,37 @@ function renderDevice(root, state) {
   // against, and an update may be exactly what such a node needs.
   const insideRelayable = (running) =>
     !!insideLatest && (!running || versionIsNewer(insideLatest, running));
+  // Last relay attempt per hive slot (server: latest_hiveinside_relays). The
+  // relay records a precise cause on failure, but until this was surfaced a node
+  // that never updated looked the same whether the relay was pending, running,
+  // or failing identically every time — so a broken relay could go unnoticed for
+  // days while the version simply never changed.
+  const insideRelays = fw.hiveinside_relays || {};
+  const relayOf = (n) => insideRelays[String(n)] || null;
+  const RELAY_BADGE = {
+    pending: ["info", "relay queued"],
+    claimed: ["info", "relaying…"],
+    failed: ["danger", "relay failed"],
+  };
+  // A relay already queued or in flight must not be queued again: the transfer
+  // takes minutes, and a second command would simply repeat it.
+  const relayInFlight = (relay) =>
+    !!relay && (relay.status === "pending" || relay.status === "claimed");
+  const relayBadge = (relay) => {
+    const spec = relay && RELAY_BADGE[relay.status];
+    if (!spec) return null;
+    const when = relay.completed_at || relay.created_at;
+    const detail = relay.message ? `: ${relay.message}` : "";
+    return el("span", {
+      class: `badge ${spec[0]}`,
+      title: `Relay of ${relay.version || "firmware"} ${relay.status}${detail} (${fmtDateTime(when)})`,
+    }, spec[1]);
+  };
   // Start the transfer. Uploading a .bin only REGISTERS a release — this button
-  // is the only thing in the dashboard that actually sends one to a node. No
-  // reload afterwards: the command is queued as `pending` and nothing observable
-  // changes until the HiveHub picks it up and the node re-advertises its version.
-  // The button stays disabled after a successful queue so an impatient second
-  // click cannot stack a duplicate relay of the same image.
+  // is the only thing in the dashboard that actually sends one to a node.
+  // Reload afterwards so the queued command shows up as a "relay queued" badge
+  // and the button disables itself; without that the button re-enables on the
+  // next render and a second click stacks a duplicate relay.
   const relayToNode = async (btn, node) => {
     if (!window.confirm(
       `Relay HiveInside ${insideLatest} to ${node.label}?\n\n` +
@@ -1735,6 +1760,7 @@ function renderDevice(root, state) {
       state.toast(
         `Relay queued for ${node.label} (${from}${(res && res.version) || insideLatest})`,
         "success");
+      state.reload();
     } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
   };
   const insideSection = insideNodes.length
@@ -1742,17 +1768,33 @@ function renderDevice(root, state) {
         el("h3", { class: "fw-upload-head" }, "HiveInside nodes"),
         el("div", { class: "rows" },
           ...insideNodes.map((d) => {
+            const relay = relayOf(d.n);
             const cell = el("span", { class: "v fw-node-v" },
               [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "),
-              insideFlag(d.fw));
+              insideFlag(d.fw), relayBadge(relay));
             if (insideRelayable(d.fw)) {
-              const relayBtn = el("button", { class: "btn small", type: "button" },
-                "Relay to node");
+              const busy = relayInFlight(relay);
+              const relayBtn = el("button", {
+                class: "btn small", type: "button",
+                title: busy ? "A relay is already queued for this node" : "",
+              }, "Relay to node");
+              relayBtn.disabled = busy;
               relayBtn.addEventListener("click", () => relayToNode(relayBtn, d));
               cell.append(relayBtn);
             }
             return el("div", { class: "row" }, el("span", { class: "k" }, d.label), cell);
           })),
+        // Spell the failure out in full. The badge's tooltip is easy to miss,
+        // and the message names the exact stage that failed — which is the
+        // difference between "move the node closer" and "fix the server".
+        ...insideNodes
+          .filter((d) => (relayOf(d.n) || {}).status === "failed")
+          .map((d) => {
+            const relay = relayOf(d.n);
+            return el("p", { class: "note" },
+              `${d.label}: last relay failed — ${relay.message || "no reason reported"} ` +
+              `(${relAge(relay.completed_at || relay.created_at)})`);
+          }),
         el("p", { class: "note" },
           "Firmware each in-hive node advertises. Uploading an image with target " +
           "“HiveInside” below only registers the release — nothing reaches a node " +
