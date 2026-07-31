@@ -58,6 +58,15 @@ hardware list, firmware/server setup, and API summary, start with the
 - [truenas-install.md](truenas-install.md) — TrueNAS Scale (Custom App) deployment.
 - [test-commands.md](test-commands.md) — `curl` examples for exercising the backend.
 
+## Releases
+
+Release notes for each tagged version, mirroring the
+[GitHub releases](https://github.com/MacNite/HiveHub/releases).
+
+- [releases/v0.3.md](releases/v0.3.md) — **V0.3**: selectable ambient sensor, per-module Home Assistant devices, idempotent ingest, safer self-host defaults, ESP32-C6 field hardening.
+- [releases/v0.2.md](releases/v0.2.md) — **V0.2**: HiveHeart acoustic FFT, e-mail / Web Push alerts, dashboard chart overhaul, the nRF54LM20A HiveInside node.
+- [releases/v0.1.md](releases/v0.1.md) — **V0.1**: first release — tested PCBs, multi-hive firmware, wireless in-hive sensors, the self-hosted backend.
+
 ## Audits
 
 - [audits/full-code-documentation-ux-audit.md](audits/full-code-documentation-ux-audit.md) — repository-wide code, documentation, and UX audit (2026-07): findings, fixes, and roadmap.

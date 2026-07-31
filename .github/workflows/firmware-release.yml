@@ -1,6 +1,6 @@
 # Attach flashable firmware images to a GitHub Release.
 #
-# Push a project tag (e.g. `v0.2`) and this builds both supported targets and
+# Push a project tag (e.g. `V0.4`) and this builds both supported targets and
 # uploads their images to the release for that tag, creating the release as a
 # draft if it does not exist yet. The tag is a PROJECT version and does not have
 # to match FIRMWARE_VERSION in firmware/src/globals.cpp — the firmware version is
@@ -14,7 +14,9 @@ name: Firmware release
 
 on:
   push:
-    tags: ["v*"]
+    # Both cases: this project tags releases uppercase (V0.1 … V0.3), and GitHub
+    # matches tag filters case-sensitively — "v*" alone would never fire.
+    tags: ["v*", "V*"]
   workflow_dispatch:
 
 permissions:

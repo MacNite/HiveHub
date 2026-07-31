@@ -547,7 +547,36 @@ when the node never advertised one):
 
 ## Remote commands
 
-Commands are queued server-side and claimed by the device on a later cycle.
+Commands are queued server-side and claimed by the device on a later cycle. A
+command is picked up **once per upload cycle**, in every mode — there is no
+separate command poll.
+
+### Lifecycle and abandoned claims
+
+A command moves `pending` → `claimed` → `done`/`failed`. Because
+`commands/next` only ever serves `pending` rows, a claim the device never
+reports on would otherwise be invisible to every later poll — never retried and
+never failed. The device does not have to crash for that to happen: the result
+POST is fire-and-forget, so a Wi-Fi hiccup right after a multi-minute BLE relay
+strands the row just the same.
+
+The backend therefore sweeps stale claims (cheap and idempotent, run before
+serving a command — no background job):
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `STALE_CLAIM_MINUTES` | `20` | A claim older than this with no result is abandoned |
+| `MAX_COMMAND_ATTEMPTS` | `3` | How often one command may be handed out before it is failed for good |
+| `RETRYABLE_COMMAND_TYPES` | `update_hiveinside` | Only these go back on the queue |
+
+Retryable commands return to `pending` until the attempt limit, then fail with
+`timed out: claimed by the device N time(s) without reporting a result`.
+Everything else fails on the **first** timeout rather than being repeated —
+silently re-running a `factory_reset` or `reset_wifi` because a result POST was
+lost would destroy state the operator asked to change exactly once. Either way
+the row reaches a terminal state, so the dashboard shows an outcome instead of a
+permanent "relaying…". The attempt counter lives in `device_commands.attempts`
+(migration `021_device_command_attempts.sql`).
 
 ### `POST /api/v1/devices/{device_id}/commands`
 
@@ -998,10 +1027,10 @@ The backend auto-creates and updates the schema on startup.
 | `device_configs` | Send interval, offsets, calibration factors, config version |
 | `measurements` | Measurement records, including power/acoustic/bee-counter columns and `raw_json` |
 | `firmware_releases` | Firmware versions available for OTA, with `target`, `crc32`, and `owner_user_id` (NULL = global/official; otherwise the owner the release is private to) |
-| `device_commands` | Pending, claimed, done, and failed commands |
+| `device_commands` | Pending, claimed, done, and failed commands, with the `attempts` counter used to recover abandoned claims |
 | `insight_alerts` | Persisted lifecycle of insight alerts (first/last seen, peak severity, resolution) powering the history endpoint |
 
-The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields, the normalized per-hive `hive_readings` table (multi-hive payloads), and the dashboard-auth tables (`dashboard_users`, `dashboard_settings`, `push_subscriptions`); `firmware_releases` gains `target`, `crc32`, `owner_user_id`, and `board`. The SQL files in `server/migrations/` (`001_offgrid_telemetry.sql` through `018_notifications.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
+The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields, the normalized per-hive `hive_readings` table (multi-hive payloads), and the dashboard-auth tables (`dashboard_users`, `dashboard_settings`, `push_subscriptions`); `firmware_releases` gains `target`, `crc32`, `owner_user_id`, and `board`; `device_commands` gains `attempts`. The SQL files in `server/migrations/` (`001_offgrid_telemetry.sql` through `021_device_command_attempts.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
 
 ---
 

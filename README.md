@@ -446,7 +446,7 @@ Require the `X-API-Key` header (per-device key, except where noted as master/adm
 | `POST` | `/api/v1/firmware/releases` | Register a firmware release (master/admin) |
 | `GET` | `/firmware/{filename}` | Download a firmware binary |
 | `POST` | `/api/v1/devices/{id}/commands` | Queue a remote command (master/admin) |
-| `POST` | `/api/v1/devices/{id}/commands/update-hiveinside` | Queue a HiveInside OTA relay over BLE (`?slot=1\|2`) |
+| `POST` | `/api/v1/devices/{id}/commands/update-hiveinside` | Queue a HiveInside OTA relay over BLE (`?slot=` hive index, `?force=`) |
 | `GET` | `/api/v1/devices/{id}/commands/next` | Claim next pending command |
 | `POST` | `/api/v1/devices/{id}/commands/{cmd_id}/result` | Report command result |
 
@@ -495,6 +495,7 @@ endpoints power the built-in `/dashboard` UI; see
 | `GET`/`PATCH` | `/api/v1/local/devices/{id}/channels` | Read / rename the hive display names |
 | `GET` | `/api/v1/local/devices/{id}/insights/summary` · `/history` | Highest-severity insight summary / persisted alert history |
 | `GET`/`POST` | `/api/v1/local/devices/{id}/firmware/status` · (upload) · `/approve` | OTA status / upload binary / approve (admin) |
+| `POST` | `/api/v1/local/devices/{id}/hiveinside/update` | Queue a HiveInside BLE OTA relay to the node on `?slot=` (hive index; `?force=`, admin) |
 | `POST` | `/api/v1/local/devices/{id}/calibration/start` · `/stop` | Start / stop calibration mode (admin) |
 | `POST` | `/api/v1/local/devices/{id}/temp-compensation/fit` | Fit a load-cell temperature coefficient (admin) |
 | `GET` | `/api/v1/local/notifications/config` | Which alert channels are enabled + VAPID public key |
@@ -591,7 +592,7 @@ DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_accel_rules.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_ble_sensor_rules.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_sd_import.py
-DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py
+DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py test-data/test_hiveinside_ota_gate.py
 
 # Firmware host tests (plain g++, no Arduino toolchain)
 ./firmware/host_test/run_tests.sh
