@@ -1749,10 +1749,11 @@ function renderDevice(root, state) {
   const relayToNode = async (btn, node) => {
     if (!window.confirm(
       `Relay HiveInside ${insideLatest} to ${node.label}?\n\n` +
-      "The HiveHub starts on its next command check (up to 5 minutes), streams " +
-      "the image over BLE for several minutes, and the node reboots into it. " +
-      "The node must be awake and in range or the relay fails and has to be " +
-      "queued again.")) return;
+      "The HiveHub picks this up on its next upload cycle — normally within " +
+      "about 10 minutes, or whatever send interval this device is set to. It " +
+      "then streams the image over BLE for a few minutes and the node reboots " +
+      "into it. The node must be awake and in range, or the relay fails and " +
+      "has to be queued again.")) return;
     btn.disabled = true;
     try {
       const res = await state.actions.queueHiveInsideUpdate(node.n);
@@ -1798,9 +1799,9 @@ function renderDevice(root, state) {
         el("p", { class: "note" },
           "Firmware each in-hive node advertises. Uploading an image with target " +
           "“HiveInside” below only registers the release — nothing reaches a node " +
-          "until you press “Relay to node”. The HiveHub then streams it over BLE " +
-          "on its next command check, and this version is what confirms the " +
-          "update took."))
+          "until you press “Relay to node”. The HiveHub picks the job up on its " +
+          "next upload cycle (about 10 minutes by default) and streams it over " +
+          "BLE; this version is what confirms the update took."))
     : null;
 
   // Firmware upload form. The main-unit ("hivescale") target ships for two

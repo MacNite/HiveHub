@@ -491,6 +491,21 @@ def init_db():
                     completed_at TIMESTAMPTZ
                 );
 
+                -- How many times a command has been handed to a device (added
+                -- after the table shipped). A device that claims a command and
+                -- then dies — or simply loses the fire-and-forget result POST —
+                -- used to strand the row in 'claimed' forever, since nothing
+                -- expired it and only 'pending' rows are ever served again. The
+                -- counter bounds the retry so a command that reliably kills the
+                -- device cannot loop indefinitely. See expire_stale_claimed_commands.
+                ALTER TABLE device_commands
+                    ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+
+                -- Sweeping stale claims scans by status + claim time.
+                CREATE INDEX IF NOT EXISTS device_commands_claimed_idx
+                    ON device_commands (status, claimed_at)
+                    WHERE status = 'claimed';
+
                 -- Persisted lifecycle of sensor-based insight alerts so HivePal
                 -- can show a *history* (alerts are otherwise recomputed live and
                 -- never stored). One row per distinct alert occurrence: while an

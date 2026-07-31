@@ -107,6 +107,108 @@ def test_force_overrides_the_comparison():
     check("force allows an older release", gate("0.5.0", "0.4.1", force=True) == "0.5.0")
 
 
+class _FakeCursor:
+    """Records the SQL a function issues, so the sweep's rules can be asserted."""
+
+    def __init__(self, rows=None):
+        self.statements = []
+        self._rows = rows or []
+
+    def execute(self, sql, params=None):
+        self.statements.append((" ".join(sql.split()), params))
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeConn:
+    def __init__(self, cur):
+        self._cur = cur
+
+    def cursor(self):
+        return self._cur
+
+    def commit(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _sweep_statements():
+    """Run expire_stale_claimed_commands against a stubbed connection."""
+    cur = _FakeCursor()
+    with mock.patch.object(commands, "get_conn", return_value=_FakeConn(cur)):
+        commands.expire_stale_claimed_commands()
+    return cur.statements
+
+
+def test_abandoned_relay_is_requeued_then_failed():
+    """A claim nobody reported on must not sit in 'claimed' forever.
+
+    Regression guard: next_command only ever serves 'pending' rows, so before
+    this sweep existed a lost result POST stranded a relay permanently — one sat
+    'claimed' for over six hours with the HiveHub alive and polling throughout,
+    and (once the button reflected command state) it disabled the UI with it.
+    """
+    stmts = _sweep_statements()
+    check("sweep issues both a requeue and a give-up pass", len(stmts) == 2)
+    if len(stmts) != 2:
+        return
+    requeue, giveup = stmts
+
+    check("requeue targets only stale claims",
+          "SET status = 'pending'" in requeue[0] and "status = 'claimed'" in requeue[0])
+    check("requeue is bounded by an attempt cap",
+          "attempts < %s" in requeue[0] and commands.MAX_COMMAND_ATTEMPTS in requeue[1])
+    check("requeue is restricted to retryable command types",
+          "command_type = ANY(%s)" in requeue[0]
+          and list(commands.RETRYABLE_COMMAND_TYPES) in requeue[1])
+    check("give-up marks the row failed with a stated reason",
+          "SET status = 'failed'" in giveup[0] and "timed out" in giveup[0])
+    check("both passes use the same staleness threshold",
+          requeue[1][0] == commands.STALE_CLAIM_MINUTES
+          and giveup[1][0] == commands.STALE_CLAIM_MINUTES)
+
+
+def test_destructive_commands_are_never_silently_repeated():
+    """Only a relay may be handed out again after an abandoned claim.
+
+    Re-running a lost factory_reset / reset_wifi because its result POST went
+    missing would destroy device state the operator asked for exactly once.
+    """
+    check("update_hiveinside is retryable",
+          "update_hiveinside" in commands.RETRYABLE_COMMAND_TYPES)
+    for destructive in ("factory_reset", "reset_preferences", "reset_wifi"):
+        check(f"{destructive} is not retryable",
+              destructive not in commands.RETRYABLE_COMMAND_TYPES)
+
+
+def test_stale_threshold_clears_a_real_relay():
+    """The threshold must not cut off a legitimately running transfer.
+
+    The hub polls once per upload cycle (10 min by default) and a relay streams
+    a few hundred KB over BLE synchronously, so the window has to sit clear of
+    that without leaving a dead claim parked for hours.
+    """
+    check("threshold exceeds one default 10-minute cycle",
+          commands.STALE_CLAIM_MINUTES > 10)
+    check("threshold still recovers within the hour",
+          commands.STALE_CLAIM_MINUTES <= 30)
+
+
 def _echo_app(body: bytes):
     """Minimal ASGI app returning `body` with an explicit Content-Length."""
     async def app(scope, receive, send):
@@ -210,6 +312,18 @@ def test_dashboard_relay_delegates_through_the_shared_gate():
         "delegates with the hiveinside target, command type, slot and force",
         queue.call_args == mock.call("dev-1", "hiveinside", "update_hiveinside", 3, True),
     )
+
+
+def test_zz_no_check_failures():
+    """Fail the pytest run if any check() above failed.
+
+    check() tallies failures and prints them, but raises nothing — so under
+    pytest (how CI runs this file) every assertion here was reported green no
+    matter what it found. pytest executes tests in definition order, so this
+    runs last and turns the tally into a real failure. Named to sort last for
+    any runner that orders alphabetically instead.
+    """
+    assert _failures == 0, f"{_failures} check(s) failed — see the FAIL lines above"
 
 
 if __name__ == "__main__":

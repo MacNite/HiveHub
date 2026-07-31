@@ -20,6 +20,73 @@ from schemas import MAX_HIVES, DeviceCommandIn, DeviceCommandResult
 router = APIRouter()
 
 
+# A claim older than this with no result is treated as abandoned. It has to clear
+# the slowest legitimate case comfortably: the HiveHub only polls once per wake
+# cycle, and a HiveInside relay streams a few hundred KB over BLE synchronously,
+# so a genuine relay occupies the device for minutes — not tens of minutes.
+STALE_CLAIM_MINUTES = 20
+
+# How many times one command may be handed out before it is failed for good, so a
+# command that reliably crashes the device cannot be retried forever.
+MAX_COMMAND_ATTEMPTS = 3
+
+# Only these are safe to hand out again after an abandoned claim. Re-running a
+# relay is harmless — worst case the node receives the same image twice, and the
+# version gate already refuses a pointless one. Everything else is left alone:
+# silently repeating a factory_reset or reset_wifi because a result POST was lost
+# would destroy device state the operator asked for exactly once.
+RETRYABLE_COMMAND_TYPES = ("update_hiveinside",)
+
+
+def expire_stale_claimed_commands() -> None:
+    """Recover commands a device claimed and never reported on.
+
+    ``next_command`` serves only ``pending`` rows, so a claim that is never
+    completed is invisible to every later poll: the command is never retried and
+    never fails. The device does not have to crash for this — ``postCommandResult``
+    is fire-and-forget, so a WiFi hiccup right after a multi-minute BLE relay
+    loses the outcome and strands the row just the same.
+
+    Retryable commands go back on the queue until ``MAX_COMMAND_ATTEMPTS``, then
+    fail with a stated reason; everything else fails on the first timeout rather
+    than being repeated. Either way the row reaches a terminal state, so the
+    dashboard can show what happened instead of a permanent "relaying…".
+
+    Cheap and idempotent — called before serving a command and before reading
+    relay state, so no background job is needed.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Hand it back to the queue for another try.
+            cur.execute(
+                """
+                UPDATE device_commands
+                SET status = 'pending', claimed_at = NULL
+                WHERE status = 'claimed'
+                  AND claimed_at < now() - (%s || ' minutes')::interval
+                  AND command_type = ANY(%s)
+                  AND attempts < %s;
+                """,
+                (STALE_CLAIM_MINUTES, list(RETRYABLE_COMMAND_TYPES), MAX_COMMAND_ATTEMPTS),
+            )
+            # Out of retries, or not safe to repeat: record why it ended.
+            cur.execute(
+                """
+                UPDATE device_commands
+                SET status = 'failed',
+                    completed_at = now(),
+                    result = jsonb_build_object(
+                        'success', false,
+                        'message', 'timed out: claimed by the device '
+                                   || attempts || ' time(s) without reporting a result')
+                WHERE status = 'claimed'
+                  AND claimed_at < now() - (%s || ' minutes')::interval;
+                """,
+                (STALE_CLAIM_MINUTES,),
+            )
+            conn.commit()
+
+
 def create_command(device_id: str, payload: DeviceCommandIn) -> dict:
     ensure_device_config(device_id)
     with get_conn() as conn:
@@ -170,6 +237,9 @@ def latest_hiveinside_relays(device_id: str) -> dict:
 
     Keyed by slot as a string, since it comes from the JSON payload.
     """
+    # Sweep first, so an abandoned relay reads as "timed out" (or is back on the
+    # queue) rather than showing "relaying…" indefinitely.
+    expire_stale_claimed_commands()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -198,6 +268,9 @@ def latest_hiveinside_relays(device_id: str) -> dict:
 
 @router.get("/api/v1/devices/{device_id}/commands/next", dependencies=[Depends(require_device_key)])
 def next_command(device_id: str):
+    # Reclaim anything a device abandoned before looking for new work, so a lost
+    # result cannot park a command in 'claimed' forever.
+    expire_stale_claimed_commands()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -215,7 +288,8 @@ def next_command(device_id: str):
                 conn.commit()
                 return {"command": False}
             cur.execute(
-                "UPDATE device_commands SET status = 'claimed', claimed_at = now() WHERE id = %s;",
+                "UPDATE device_commands SET status = 'claimed', claimed_at = now(), "
+                "attempts = attempts + 1 WHERE id = %s;",
                 (r[0],),
             )
             conn.commit()

@@ -759,7 +759,6 @@ static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
 static const unsigned long HTTP_REQUEST_TIMEOUT_MS = 15000;
 static const unsigned long PROVISIONING_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 static const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;
-static const unsigned long COMMAND_CHECK_INTERVAL_MS = 5UL * 60UL * 1000UL;
 static const unsigned long CALIBRATION_MODE_DEFAULT_INTERVAL_MS = 5UL * 1000UL;
 static const unsigned long CALIBRATION_MODE_MIN_INTERVAL_MS = 2UL * 1000UL;
 static const unsigned long CALIBRATION_MODE_MAX_INTERVAL_MS = 30UL * 1000UL;

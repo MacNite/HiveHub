@@ -43,7 +43,6 @@ bool calibrationModeActive = false;
 
 unsigned long lastCycleMs = 0;
 unsigned long lastOtaCheckMs = 0;
-unsigned long lastCommandCheckMs = 0;
 unsigned long provisioningStartedMs = 0;
 unsigned long sendIntervalMs = 10UL * 60UL * 1000UL;
 unsigned long calibrationModeStartedMs = 0;
