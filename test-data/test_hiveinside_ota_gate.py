@@ -314,6 +314,40 @@ def test_dashboard_relay_delegates_through_the_shared_gate():
     )
 
 
+def test_large_crc_survives_into_the_relay_payload():
+    """A CRC above 2^31 must reach the device intact, as a JSON number.
+
+    Regression guard for the half of all CRC-32 values with the high bit set.
+    The HiveHub parsed this field with `payload["crc32"] | 0`, and ArduinoJson
+    deduces the type from the default: a signed 32-bit int cannot hold
+    2602123579, so it fell back to 0, told the node to expect a zero CRC, and
+    the node rejected a fully transferred image with OTA_ERR_CRC. The firmware
+    now uses `| 0U`; this side guards the value the server puts on the wire —
+    it must stay an exact integer, never truncated, clamped or stringified.
+    """
+    big_crc = 2602123579  # hiveinside 0.4.2 — the image that exposed this
+    check("test CRC really is above the signed-32-bit boundary", big_crc > 2**31 - 1)
+
+    captured = {}
+
+    def fake_create_command(device_id, payload):
+        captured["payload"] = payload.payload
+        return {"id": 1, "status": "pending"}
+
+    with mock.patch.object(commands, "get_device_owner_id", return_value=None), \
+         mock.patch.object(commands, "latest_hiveinside_release",
+                           return_value=("0.4.2", "zephyr.signed_0_4_2.bin", big_crc, None)), \
+         mock.patch.object(commands, "reported_hiveinside_version", return_value="0.4.0"), \
+         mock.patch.object(commands, "create_command", side_effect=fake_create_command):
+        commands.queue_relay_firmware_update(
+            "dev-003", "hiveinside", "update_hiveinside", 1)
+
+    sent = captured.get("payload", {})
+    check("crc32 reaches the payload unchanged", sent.get("crc32") == big_crc)
+    check("crc32 is an int, not a string", isinstance(sent.get("crc32"), int))
+    check("the image URL is included", bool(sent.get("url")))
+
+
 def test_zz_no_check_failures():
     """Fail the pytest run if any check() above failed.
 

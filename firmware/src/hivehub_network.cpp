@@ -1069,7 +1069,15 @@ void checkCommands() {
     int slot = payload["slot"] | 1;
     String mac = hivecfg::hiveInsideMacForSlot((uint8_t)slot);
     String fwUrl = payload["url"] | "";
-    uint32_t crc = (uint32_t)(payload["crc32"] | 0);
+    // `| 0U`, never `| 0`: ArduinoJson deduces the type from the default, and a
+    // signed `int` is 32-bit here, so is<int>() is false for any CRC above
+    // 2147483647 and the fallback (0) is taken. The node was then told to expect
+    // crc32 = 0, computed the real one, and rejected a perfectly transferred
+    // image with OTA_ERR_CRC (state=0x13). Since roughly half of all CRC-32
+    // values exceed 2^31 this made the relay a coin flip — it worked with
+    // hiveinside 0.3.5 (crc 128852642) and failed with 0.4.2 (crc 2602123579).
+    // The hub's own self-update path had this right (`| 0U`) all along.
+    uint32_t crc = payload["crc32"] | 0U;
     if (fwUrl.length() == 0) {
       postCommandResult(commandId, false, "update_hiveinside missing url");
     } else if (mac.length() == 0) {
