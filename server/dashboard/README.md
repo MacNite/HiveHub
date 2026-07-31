@@ -89,6 +89,13 @@ Related settings (all optional, see `server/.env.example`):
   broadcasts one; the others report none and show an em-dash.
 - **Calibration:** start/stop calibration mode and fit a load-cell temperature
   coefficient.
+- **Backup & restore:** **Download / backup data** saves the selected readings
+  (any devices, hives and period — everything by default) as an `.ndjson` file in
+  the same format the scale writes to its SD card, and **Import SD card data**
+  reads it back. Re-importing is idempotent, and a whole-server backup is
+  restored device-by-device in one upload — so the database can be re-deployed,
+  or one beekeeper's history handed over when they move to their own server. See
+  [../../docs/backup-restore.md](../../docs/backup-restore.md).
 
 ## How it's built
 

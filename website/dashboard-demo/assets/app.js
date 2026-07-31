@@ -314,6 +314,9 @@ function buildState() {
     actions: {
       uploadFirmware: (fd) => api.uploadFirmware(activeId, fd),
       importSdData: (fd) => api.importSdData(activeId, fd),
+      // Download / backup: read-only in the demo (see api.js).
+      exportSummary: (opts) => api.exportSummary(opts),
+      exportUrl: (opts) => api.exportUrl(opts),
       approveFirmware: () => api.approveFirmware(activeId),
       queueHiveInsideUpdate: (slot, force) => api.queueHiveInsideUpdate(activeId, slot, force),
       startCalibration: (p) => api.startCalibration(activeId, p),

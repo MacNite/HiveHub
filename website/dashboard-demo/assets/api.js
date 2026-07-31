@@ -256,4 +256,10 @@ export const api = {
   changePassword: demoErr,
   updateEmail: demoErr,
   testNotification: demoErr,
+  // Download / backup: the demo's readings are generated in the browser, so
+  // there is nothing on a server to export. Rejecting here is what makes the
+  // panel show its "read-only demo" notice and keep the download disabled.
+  exportSummary: () =>
+    Promise.reject(new Error("This is a read-only demo — the data download is disabled.")),
+  exportUrl: () => "#",
 };

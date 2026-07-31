@@ -64,13 +64,37 @@ export const api = {
     req(`/devices/${encodeURIComponent(deviceId)}/measurements/latest?limit=${limit}`),
 
   // Upload an SD-card backup (measurements.ndjson or hivescale-sd-data.tar) pulled
-  // off the scale in AP mode. formData carries the file under the "file" field;
-  // the browser sets the multipart boundary, so no Content-Type header here.
+  // off the scale in AP mode, or a backup downloaded from the panel below.
+  // formData carries the file under the "file" field; the browser sets the
+  // multipart boundary, so no Content-Type header here.
   importSdData: (deviceId, formData) =>
     req(`/devices/${encodeURIComponent(deviceId)}/measurements/import`, {
       method: "POST",
       body: formData,
     }),
+
+  // ── Download / backup ────────────────────────────────────────────────────
+  // Query string shared by the export summary and the download itself:
+  // repeated device_id / hive params plus an optional time range.
+  exportQuery: ({ deviceIds, hives, start, end } = {}) => {
+    const q = new URLSearchParams();
+    for (const id of deviceIds || []) q.append("device_id", id);
+    for (const h of hives || []) q.append("hive", String(h));
+    if (start) q.set("start_at", start);
+    if (end) q.set("end_at", end);
+    return q.toString();
+  },
+
+  // How many readings a download with these filters would contain, per device.
+  // Checked before downloading: the download itself is a plain browser
+  // navigation, so an error or an empty selection would otherwise only show up
+  // in the saved file.
+  exportSummary: (opts) => req(`/export/measurements/summary?${api.exportQuery(opts)}`),
+
+  // Absolute URL of the download, for an <a download> click. The session rides
+  // in the same-origin cookie, so the navigation is authenticated like any
+  // other dashboard request.
+  exportUrl: (opts) => `${BASE}/export/measurements?${api.exportQuery(opts)}`,
 
   config: (deviceId) => req(`/devices/${encodeURIComponent(deviceId)}/config`),
 
