@@ -239,7 +239,6 @@ void setup() {
 
   lastCycleMs = millis();
   lastOtaCheckMs = millis();
-  lastCommandCheckMs = millis();
 
   if (provisioningActive) {
     Serial.println("[SETUP] Provisioning active; staying awake until portal timeout");
@@ -290,13 +289,13 @@ void loop() {
     runUploadCycle();
   }
 
-  unsigned long activeCommandIntervalMs = calibrationModeActive
-      ? calibrationModeIntervalMs : COMMAND_CHECK_INTERVAL_MS;
-
-  if (now - lastCommandCheckMs >= activeCommandIntervalMs) {
-    lastCommandCheckMs = now;
-    checkCommands();
-  }
+  // Commands are checked once per upload cycle, inside runUploadCycle() above —
+  // there is no separate timer. The old 5-minute poll here was unreachable in the
+  // default configuration anyway (with DEEP_SLEEP_ENABLED, loop() sleeps and
+  // returns before this point), so it only ever ran on an always-awake build and
+  // made the real cadence hard to reason about: the documented "up to 5 minutes"
+  // was never true for a sleeping device. Every mode now shares one rule — a
+  // command is picked up on the next cycle, at the configured send interval.
 
   if (now - lastOtaCheckMs >= OTA_CHECK_INTERVAL_MS) {
     lastOtaCheckMs = now;

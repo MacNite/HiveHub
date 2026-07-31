@@ -94,7 +94,6 @@ extern bool claimRegistered;
 // ---- Timing / scheduling --------------------------------------------------
 extern unsigned long lastCycleMs;
 extern unsigned long lastOtaCheckMs;
-extern unsigned long lastCommandCheckMs;
 extern unsigned long provisioningStartedMs;
 extern unsigned long sendIntervalMs;
 extern unsigned long calibrationModeStartedMs;

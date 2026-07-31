@@ -109,7 +109,17 @@ curl -X POST -H "X-API-Key: $API_KEY" \
 
 `slot` is the **hive index**, so any hive can be updated (up to `MAX_HIVES`), and
 the HiveHub matches only HiveInside pairings when resolving the MAC. The relay
-runs on the HiveHub's next check-in.
+runs on the HiveHub's next upload cycle — about 10 minutes by default, or
+whatever send interval the device is configured for. There is no separate
+command poll; a command is picked up once per cycle, in every mode.
+
+A relay that is claimed but never reported on (the HiveHub crashed, or simply
+lost the fire-and-forget result POST after a multi-minute BLE transfer) is
+swept back onto the queue after `STALE_CLAIM_MINUTES`, up to
+`MAX_COMMAND_ATTEMPTS` times, and then failed with `timed out: claimed by the
+device N time(s) without reporting a result`. Only relays are retried this way;
+destructive commands such as `factory_reset` fail on the first timeout rather
+than being silently repeated.
 
 Two guards apply before the command is queued:
 
