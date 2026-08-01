@@ -396,7 +396,8 @@ select:disabled { opacity: .7; cursor: not-allowed; }
 .note.warn { color: var(--warn); }
 
 /* ── Info tooltips: a "?"/"!" affordance that reveals help text on hover or
-   keyboard focus. Used next to the Board label and the Upload firmware button. */
+   keyboard focus. Used next to the Board label, the Upload firmware button and
+   the HiveInside nodes heading. */
 .info-tip { position: relative; display: inline-flex; align-items: center; align-self: center; vertical-align: middle; cursor: help; }
 .info-tip-icon {
   display: inline-grid; place-items: center; width: 1.05rem; height: 1.05rem;
@@ -404,15 +405,25 @@ select:disabled { opacity: .7; cursor: not-allowed; }
   font-size: .72rem; font-weight: 800; line-height: 1;
 }
 .info-tip-bubble {
-  position: absolute; bottom: calc(100% + .55rem); left: 50%; transform: translateX(-50%);
-  width: max-content; max-width: 17rem; padding: .5rem .65rem;
+  position: absolute; bottom: calc(100% + .55rem); left: 50%;
+  /* Centred on the icon, then nudged back inside the viewport by --tip-shift
+     (set in infoTip() just before the bubble is shown) when a tip sits close
+     enough to a screen edge that half the bubble would hang off it. The bubble
+     also never exceeds the viewport width, so a narrow phone cannot clip a tip
+     that no amount of shifting would fit. */
+  transform: translateX(calc(-50% + var(--tip-shift, 0px)));
+  width: max-content; max-width: min(17rem, calc(100vw - 1.5rem)); padding: .5rem .65rem;
   background: var(--overlay-bg); color: var(--overlay-fg); border-radius: 8px;
   box-shadow: var(--shadow); font-size: .78rem; font-weight: 500; line-height: 1.35;
   text-align: left; white-space: normal; z-index: 40; pointer-events: none;
   opacity: 0; visibility: hidden; transition: opacity .12s ease;
 }
 .info-tip-bubble::after {
-  content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  content: ""; position: absolute; top: 100%;
+  /* Move the arrow back by whatever the bubble was shifted, so it keeps pointing
+     at the icon; clamped to stay on the bubble when the shift is large. */
+  left: clamp(.6rem, calc(50% - var(--tip-shift, 0px)), calc(100% - .6rem));
+  transform: translateX(-50%);
   border: .35rem solid transparent; border-top-color: var(--overlay-bg);
 }
 .info-tip:hover .info-tip-bubble,

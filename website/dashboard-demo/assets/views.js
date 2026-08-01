@@ -1325,9 +1325,32 @@ function collapsible(title, open, ...children) {
 // Update the text later with setTipText() (used for the board note, which
 // changes with the selected target).
 function infoTip(text, icon = "?") {
-  return el("span", { class: "info-tip", tabindex: "0", role: "note", "aria-label": text || "", title: text || "" },
+  const bubble = el("span", { class: "info-tip-bubble" }, text || "");
+  const tip = el("span", { class: "info-tip", tabindex: "0", role: "note", "aria-label": text || "", title: text || "" },
     el("span", { class: "info-tip-icon", "aria-hidden": "true" }, icon),
-    el("span", { class: "info-tip-bubble" }, text || ""));
+    bubble);
+  tip.addEventListener("pointerenter", () => fitTipBubble(bubble));
+  tip.addEventListener("focus", () => fitTipBubble(bubble));
+  return tip;
+}
+
+// Keep a tooltip on screen. The bubble is centred on its icon, so a tip sitting
+// near a screen edge — a card heading on a phone, the left-most column on a
+// laptop — opened half off-screen and lost the start of every line. Measure it
+// just before it is shown and shift it back inside; the arrow follows the same
+// custom property, so it keeps pointing at the icon (see style.css).
+//
+// Measuring works while the bubble is still invisible because it is hidden with
+// visibility/opacity rather than display:none, so it is laid out either way.
+const TIP_VIEWPORT_MARGIN = 8;
+function fitTipBubble(bubble) {
+  bubble.style.setProperty("--tip-shift", "0px");
+  const box = bubble.getBoundingClientRect();
+  const room = window.innerWidth - TIP_VIEWPORT_MARGIN;
+  let shift = 0;
+  if (box.left < TIP_VIEWPORT_MARGIN) shift = TIP_VIEWPORT_MARGIN - box.left;
+  else if (box.right > room) shift = room - box.right;
+  if (shift) bubble.style.setProperty("--tip-shift", `${Math.round(shift)}px`);
 }
 
 function setTipText(tip, text) {
