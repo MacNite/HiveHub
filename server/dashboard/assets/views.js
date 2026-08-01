@@ -1764,9 +1764,19 @@ function renderDevice(root, state) {
       state.reload();
     } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
   };
+  // What the version column means and how an image actually reaches a node. It
+  // explains the section rather than reporting anything, so it hangs off a "?"
+  // next to the heading instead of taking a paragraph under the node list — the
+  // per-node relay failures below are the part worth keeping on screen.
+  const insideTip = infoTip(
+    "Firmware each in-hive node advertises. Uploading an image with target " +
+    "“HiveInside” below only registers the release — nothing reaches a node " +
+    "until you press “Relay to node”. The HiveHub picks the job up on its next " +
+    "upload cycle (about 10 minutes by default) and streams it over BLE; this " +
+    "version is what confirms the update took.");
   const insideSection = insideNodes.length
     ? el("div", {},
-        el("h3", { class: "fw-upload-head" }, "HiveInside nodes"),
+        el("h3", { class: "fw-upload-head" }, "HiveInside nodes ", insideTip),
         el("div", { class: "rows" },
           ...insideNodes.map((d) => {
             const relay = relayOf(d.n);
@@ -1795,13 +1805,7 @@ function renderDevice(root, state) {
             return el("p", { class: "note" },
               `${d.label}: last relay failed — ${relay.message || "no reason reported"} ` +
               `(${relAge(relay.completed_at || relay.created_at)})`);
-          }),
-        el("p", { class: "note" },
-          "Firmware each in-hive node advertises. Uploading an image with target " +
-          "“HiveInside” below only registers the release — nothing reaches a node " +
-          "until you press “Relay to node”. The HiveHub picks the job up on its " +
-          "next upload cycle (about 10 minutes by default) and streams it over " +
-          "BLE; this version is what confirms the update took."))
+          }))
     : null;
 
   // Firmware upload form. The main-unit ("hivescale") target ships for two
