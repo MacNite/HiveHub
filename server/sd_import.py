@@ -157,6 +157,31 @@ def distinct_source_device_ids(records: Iterable[dict]) -> list[str]:
     return out
 
 
+def group_records_by_device(
+    records: Iterable[dict], default_device_id: str
+) -> dict[str, list[dict]]:
+    """Bucket records by the ``device_id`` stamped into each one.
+
+    Used when a single upload legitimately holds several devices' readings — a
+    whole-server backup produced by the dashboard's download panel, restored
+    after a redeploy or handed to a beekeeper moving to their own server. Each
+    bucket is then imported into the device that actually recorded it, instead of
+    the whole file being re-pinned onto one device.
+
+    Rows without a (string) ``device_id`` predate the field and cannot be
+    attributed, so they fall back to ``default_device_id`` — the device the
+    upload was addressed to. Buckets keep first-seen order.
+    """
+    grouped: dict[str, list[dict]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        raw = record.get("device_id")
+        did = raw.strip() if isinstance(raw, str) else ""
+        grouped.setdefault(did or default_device_id, []).append(record)
+    return grouped
+
+
 def split_new_and_duplicate(
     keys: Iterable[Hashable],
     existing_keys: set,

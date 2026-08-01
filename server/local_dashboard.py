@@ -1,7 +1,7 @@
 import os
 import time
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Iterable, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -14,6 +14,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from fastapi.responses import StreamingResponse
 
 from auth import (
     create_dashboard_session_token,
@@ -41,6 +42,12 @@ from commands import (
     queue_relay_firmware_update,
 )
 from config import DASHBOARD_SESSION_COOKIE, NOTIFY_MIN_SEVERITY, VAPID_PUBLIC_KEY
+from data_export import (
+    EXPORT_PAGE_ROWS,
+    FALLBACK_COLUMNS,
+    export_filename,
+    iter_export_lines,
+)
 from notifications import (
     delete_push_subscription,
     email_enabled,
@@ -95,6 +102,7 @@ from schemas import (
     DeviceCommandIn,
     DeviceConfigUpdate,
     DeviceVisibilityUpdateIn,
+    MAX_HIVES,
     MEASUREMENT_IMPORT_MAX,
     MeasurementDeleteIn,
     MeasurementIn,
@@ -102,7 +110,11 @@ from schemas import (
     PushUnsubscribeIn,
     TempCoefficientFitIn,
 )
-from sd_import import distinct_source_device_ids, parse_sd_measurements
+from sd_import import (
+    distinct_source_device_ids,
+    group_records_by_device,
+    parse_sd_measurements,
+)
 
 router = APIRouter()
 
@@ -426,6 +438,192 @@ def local_latest_measurements(device_id: str, limit: int = 1):
     return serialize_measurements(rows)
 
 
+# ── Download / backup ────────────────────────────────────────────────────────
+# Streams stored readings back out in the SD-card backup format, so a self-host
+# can archive its history before re-deploying the stack (or hand one beekeeper
+# their data to take to their own server) and load it back in through the
+# existing "Import SD card data" upload. See server/data_export.py for the
+# record shaping and why device_id / timestamp are re-stamped from the database.
+#
+# Admin-only, matching the import it feeds. A viewer can already read any single
+# device's readings through the chart endpoints, so this grants no new access to
+# the data — but bulk-extracting every device on the server in one file is an
+# operator action, and it sits with the other operator actions on the dashboard's
+# Admin panel.
+
+
+def _resolve_export_devices(device_ids: list[str]) -> list[str]:
+    """Validate the requested device ids; an empty request means *every* device.
+
+    Hidden devices are included: hiding only retires a device from the hive
+    picker, and a backup that quietly skipped retired devices would lose exactly
+    the history nobody is watching any more.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT device_id FROM devices ORDER BY device_id;")
+            known = [r[0] for r in cur.fetchall()]
+
+    if not device_ids:
+        if not known:
+            raise HTTPException(status_code=404, detail="No devices on this server")
+        return known
+
+    known_set = set(known)
+    unknown = [d for d in device_ids if d not in known_set]
+    if unknown:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown device(s): {', '.join(sorted(set(unknown)))}"
+        )
+    # Preserve the caller's order, but never export a device twice.
+    seen: set[str] = set()
+    return [d for d in device_ids if not (d in seen or seen.add(d))]
+
+
+def _export_where(
+    device_id: str, start_at: Optional[datetime], end_at: Optional[datetime]
+) -> tuple[str, list[Any]]:
+    """WHERE clause + params selecting one device's readings in a time range."""
+    parts = ["device_id = %s"]
+    params: list[Any] = [device_id]
+    if start_at is not None:
+        parts.append("measured_at >= %s")
+        params.append(start_at)
+    if end_at is not None:
+        parts.append("measured_at <= %s")
+        params.append(end_at)
+    return " AND ".join(parts), params
+
+
+def _validate_export_hives(hives: list[int]) -> list[int]:
+    out = sorted({int(h) for h in hives})
+    if any(h < 1 or h > MAX_HIVES for h in out):
+        raise HTTPException(
+            status_code=400, detail=f"Hive index must be between 1 and {MAX_HIVES}"
+        )
+    return out
+
+
+def _iter_export_rows(
+    device_ids: list[str], start_at: Optional[datetime], end_at: Optional[datetime]
+):
+    """Yield ``(device_id, measured_at, raw_json, fallback)`` oldest-first.
+
+    Paged with a keyset cursor on ``(measured_at, id)`` and a fresh pooled
+    connection per page, so a multi-year download neither buffers the whole
+    result set nor pins a connection for the lifetime of the response.
+    """
+    columns = ", ".join(FALLBACK_COLUMNS)
+    for device_id in device_ids:
+        after: Optional[tuple[datetime, int]] = None
+        while True:
+            where, params = _export_where(device_id, start_at, end_at)
+            if after is not None:
+                where += " AND (measured_at, id) > (%s, %s)"
+                params = params + [after[0], after[1]]
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT id, measured_at, raw_json, {columns}
+                        FROM measurements
+                        WHERE {where}
+                        ORDER BY measured_at, id
+                        LIMIT %s;
+                        """,
+                        params + [EXPORT_PAGE_ROWS],
+                    )
+                    rows = cur.fetchall()
+            for row in rows:
+                fallback = dict(zip(FALLBACK_COLUMNS, row[3:]))
+                yield (device_id, row[1], row[2], fallback)
+            if len(rows) < EXPORT_PAGE_ROWS:
+                break
+            after = (rows[-1][1], rows[-1][0])
+
+
+@router.get(
+    "/api/v1/local/export/measurements/summary",
+    dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+)
+def local_export_summary(
+    device_id: list[str] = Query(default=[]),
+    start_at: Optional[datetime] = None,
+    end_at: Optional[datetime] = None,
+):
+    """How much a download with these filters would contain, per device.
+
+    The dashboard shows this before the download starts: a browser file download
+    is a plain navigation, so a server-side error or an empty selection would
+    otherwise be invisible until the user opened the saved file. Counts are per
+    measurement row and therefore unaffected by the hive filter, which trims
+    fields inside a row rather than dropping rows.
+    """
+    devices = _resolve_export_devices(device_id)
+    per_device = []
+    total = 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for did in devices:
+                where, params = _export_where(did, start_at, end_at)
+                cur.execute(
+                    f"SELECT count(*), min(measured_at), max(measured_at) "
+                    f"FROM measurements WHERE {where};",
+                    params,
+                )
+                count, first, last = cur.fetchone()
+                total += count
+                per_device.append(
+                    {
+                        "device_id": did,
+                        "measurements": count,
+                        "first_measured_at": first,
+                        "last_measured_at": last,
+                    }
+                )
+    return {
+        "devices": per_device,
+        "total_measurements": total,
+        "filename": export_filename(devices, start_at, end_at),
+    }
+
+
+@router.get("/api/v1/local/export/measurements", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
+def local_export_measurements(
+    device_id: list[str] = Query(default=[]),
+    hive: list[int] = Query(default=[]),
+    start_at: Optional[datetime] = None,
+    end_at: Optional[datetime] = None,
+):
+    """Download stored readings as an SD-style NDJSON backup.
+
+    ``device_id`` may be repeated (omit it for every device on the server),
+    ``hive`` restricts the per-hive fields written into each row (omit for all
+    hives), and ``start_at`` / ``end_at`` bound the period. The response streams,
+    so exporting years of readings costs a page of rows in memory at a time.
+
+    A single-device download imports straight back through
+    ``POST …/devices/{id}/measurements/import``. A download covering several
+    devices carries each row's own ``device_id``, and is imported with
+    ``route_by_device=true`` so every reading lands on the device that recorded
+    it.
+    """
+    devices = _resolve_export_devices(device_id)
+    hives = _validate_export_hives(hive)
+    filename = export_filename(devices, start_at, end_at)
+    rows = _iter_export_rows(devices, start_at, end_at)
+    return StreamingResponse(
+        iter_export_lines(rows, hives),
+        media_type="application/x-ndjson",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # The body is generated on the fly and must not be cached by a proxy
+            # sitting in front of the dashboard.
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 # SD backup uploads are fully buffered in memory, so cap the upload size to
 # avoid excessive memory usage / DoS from oversized files. Overridable via env
 # var to allow tuning without a code change (mirrors the HivePal proxy's cap).
@@ -442,6 +640,7 @@ async def local_import_sd_measurements(
     device_id: str,
     file: UploadFile = File(...),
     force: bool = Form(False),
+    route_by_device: bool = Form(False),
 ):
     """Import measurements from an SD-card backup pulled off the scale in AP mode.
 
@@ -459,6 +658,15 @@ async def local_import_sd_measurements(
     ``device_id`` does not match the import target. ``force=true`` overrides the
     check for the legitimate edge case where a device was re-provisioned under a
     new id.
+
+    ``route_by_device=true`` handles the other legitimate multi-device upload: a
+    whole-server backup from the dashboard's download panel, restored after a
+    redeploy. Instead of re-pinning, every row is imported into the device that
+    recorded it — so the mismatch guard has nothing to protect against and is
+    skipped. Devices the backup names but this server does not know are rejected
+    rather than conjured into existence: a device row is created by the
+    claim/check-in flow, and inventing one from an uploaded file would fabricate
+    a device with no key and no owner.
     """
     data = await file.read()
     if not data:
@@ -474,40 +682,96 @@ async def local_import_sd_measurements(
 
     records, skipped = parse_sd_measurements(data, file.filename)
 
-    # Refuse a backup that belongs to a different device than the one selected,
-    # so its readings are not silently re-pinned onto (and mis-mapped to) this
-    # device. A well-formed single-card upload carries exactly one embedded id;
-    # rows without one predate the field and never trip the guard.
-    mismatched = [d for d in distinct_source_device_ids(records) if d != device_id]
-    if mismatched and not force:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "device_mismatch",
-                "message": (
-                    f"This SD backup was recorded by {', '.join(mismatched)}, "
-                    f"not {device_id}. Importing it here would attach those "
-                    "readings to the wrong device. Select the matching device, "
-                    "or confirm to import anyway."
-                ),
-                "target_device_id": device_id,
-                "file_device_ids": mismatched,
-            },
-        )
+    if route_by_device:
+        groups = group_records_by_device(records, device_id)
+        unknown = sorted(set(groups) - _known_device_ids(groups))
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "unknown_devices",
+                    "message": (
+                        f"This backup holds readings for {', '.join(unknown)}, which "
+                        "this server does not know yet. A device registers itself on "
+                        "its first check-in — wait for it to report once, then import "
+                        "again."
+                    ),
+                    "file_device_ids": unknown,
+                },
+            )
+    else:
+        # Refuse a backup that belongs to a different device than the one selected,
+        # so its readings are not silently re-pinned onto (and mis-mapped to) this
+        # device. A well-formed single-card upload carries exactly one embedded id;
+        # rows without one predate the field and never trip the guard.
+        sources = distinct_source_device_ids(records)
+        mismatched = [d for d in sources if d != device_id]
+        if mismatched and not force:
+            multi = len(sources) > 1
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "device_mismatch",
+                    "message": (
+                        f"This file holds readings for {len(sources)} devices "
+                        f"({', '.join(sources)}). Importing it into {device_id} "
+                        "would attach them all to that one device. Restore each "
+                        "device's readings into the device that recorded them "
+                        "instead."
+                        if multi else
+                        f"This SD backup was recorded by {', '.join(mismatched)}, "
+                        f"not {device_id}. Importing it here would attach those "
+                        "readings to the wrong device. Select the matching device, "
+                        "or confirm to import anyway."
+                    ),
+                    "target_device_id": device_id,
+                    # The devices that do NOT match the import target: what a
+                    # single foreign SD card has to be re-posted to.
+                    "file_device_ids": mismatched,
+                    # Every device the file names, target included. A backup from
+                    # the download panel legitimately carries several, and it
+                    # still lists several when one of them happens to be the
+                    # selected device — which is exactly the case a
+                    # mismatched-only list cannot distinguish from one foreign
+                    # card, and which needs a routed restore rather than a
+                    # re-post.
+                    "source_device_ids": sources,
+                },
+            )
+        groups = {device_id: records}
 
-    # Validate each record independently so a single corrupt row does not sink the
-    # whole upload — invalid rows join the unreadable-line "skipped" tally.
-    measurements: list[MeasurementIn] = []
-    for record in records:
-        # Fill the required device_id when the row omits it; bulk_import_measurements
-        # re-pins it to the path device anyway, so a mismatching value is harmless.
-        record.setdefault("device_id", device_id)
-        try:
-            measurements.append(MeasurementIn.model_validate(record))
-        except ValidationError:
-            skipped += 1
+    per_device = []
+    received = 0
+    inserted = 0
+    duplicates = 0
+    for target_id, group in groups.items():
+        # Validate each record independently so a single corrupt row does not sink
+        # the whole upload — invalid rows join the unreadable-line "skipped" tally.
+        measurements: list[MeasurementIn] = []
+        for record in group:
+            # Fill the required device_id when the row omits it;
+            # bulk_import_measurements re-pins it to the target device anyway, so a
+            # mismatching value is harmless.
+            record.setdefault("device_id", target_id)
+            try:
+                measurements.append(MeasurementIn.model_validate(record))
+            except ValidationError:
+                skipped += 1
+        if not measurements:
+            continue
 
-    if not measurements:
+        result = {"received": 0, "inserted": 0, "duplicates": 0}
+        for start in range(0, len(measurements), MEASUREMENT_IMPORT_MAX):
+            chunk = measurements[start : start + MEASUREMENT_IMPORT_MAX]
+            chunk_result = bulk_import_measurements(target_id, chunk)
+            for key in result:
+                result[key] += chunk_result[key]
+        received += result["received"]
+        inserted += result["inserted"]
+        duplicates += result["duplicates"]
+        per_device.append({"device_id": target_id, **result})
+
+    if not per_device:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -515,16 +779,6 @@ async def local_import_sd_measurements(
                 ".ndjson backup or the .tar SD download."
             ),
         )
-
-    received = 0
-    inserted = 0
-    duplicates = 0
-    for start in range(0, len(measurements), MEASUREMENT_IMPORT_MAX):
-        chunk = measurements[start : start + MEASUREMENT_IMPORT_MAX]
-        result = bulk_import_measurements(device_id, chunk)
-        received += result["received"]
-        inserted += result["inserted"]
-        duplicates += result["duplicates"]
 
     return {
         "status": "ok",
@@ -534,7 +788,23 @@ async def local_import_sd_measurements(
         "received": received,
         "inserted": inserted,
         "duplicates": duplicates,
+        # Per-device breakdown — one entry for a normal SD card, one per device
+        # for a routed whole-server restore.
+        "devices": per_device,
     }
+
+
+def _known_device_ids(candidates: Iterable[str]) -> set[str]:
+    """Which of ``candidates`` are registered devices on this server."""
+    ids = list(candidates)
+    if not ids:
+        return set()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT device_id FROM devices WHERE device_id = ANY(%s);", (ids,)
+            )
+            return {row[0] for row in cur.fetchall()}
 
 
 @router.post(

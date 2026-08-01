@@ -489,7 +489,8 @@ endpoints power the built-in `/dashboard` UI; see
 | `GET` | `/api/v1/local/devices` | List all devices + hive display names |
 | `PATCH` | `/api/v1/local/devices/{id}/visibility` | Hide / show a device in the hive picker (admin) |
 | `GET` | `/api/v1/local/devices/{id}/measurements[/latest]` | Measurements (date filter, down-sampled for charts) / latest |
-| `POST` | `/api/v1/local/devices/{id}/measurements/import` | Import an SD-card backup (`.ndjson` / `.tar`, admin) |
+| `GET` | `/api/v1/local/export/measurements` · `/summary` | Download readings as an `.ndjson` backup (`?device_id=`, `?hive=`, date filter, admin) / what the download would contain |
+| `POST` | `/api/v1/local/devices/{id}/measurements/import` | Import an SD-card backup or a downloaded one (`.ndjson` / `.tar`, admin; `route_by_device=true` restores a multi-device backup) |
 | `POST` | `/api/v1/local/devices/{id}/measurements/delete` | Delete readings in a time range (admin + device claim code) |
 | `GET`/`PATCH` | `/api/v1/local/devices/{id}/config` | Read / update device config (interval, scale offsets/factors, temp comp) |
 | `GET`/`PATCH` | `/api/v1/local/devices/{id}/channels` | Read / rename the hive display names |

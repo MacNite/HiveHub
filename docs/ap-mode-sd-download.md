@@ -193,6 +193,14 @@ readings the device already sent over the network — inserts only the genuinely
 new rows and skips the rest. There is no harm in uploading the full backup every
 time.
 
+The built-in dashboard has the same **Import SD card data** upload on its
+**Device & admin** page (`POST /api/v1/local/devices/{device_id}/measurements/import`),
+so a self-host does not need HivePal for this. It also reads that upload in the
+other direction: **Download / backup data** writes the server's stored readings
+back out in this same NDJSON format, which is what makes a database re-deploy or
+a move to another server recoverable — see
+[backup-restore.md](backup-restore.md).
+
 ## Operational notes
 
 - The SD download button is only shown when the SD card is available.

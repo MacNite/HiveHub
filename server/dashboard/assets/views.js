@@ -1325,9 +1325,32 @@ function collapsible(title, open, ...children) {
 // Update the text later with setTipText() (used for the board note, which
 // changes with the selected target).
 function infoTip(text, icon = "?") {
-  return el("span", { class: "info-tip", tabindex: "0", role: "note", "aria-label": text || "", title: text || "" },
+  const bubble = el("span", { class: "info-tip-bubble" }, text || "");
+  const tip = el("span", { class: "info-tip", tabindex: "0", role: "note", "aria-label": text || "", title: text || "" },
     el("span", { class: "info-tip-icon", "aria-hidden": "true" }, icon),
-    el("span", { class: "info-tip-bubble" }, text || ""));
+    bubble);
+  tip.addEventListener("pointerenter", () => fitTipBubble(bubble));
+  tip.addEventListener("focus", () => fitTipBubble(bubble));
+  return tip;
+}
+
+// Keep a tooltip on screen. The bubble is centred on its icon, so a tip sitting
+// near a screen edge — a card heading on a phone, the left-most column on a
+// laptop — opened half off-screen and lost the start of every line. Measure it
+// just before it is shown and shift it back inside; the arrow follows the same
+// custom property, so it keeps pointing at the icon (see style.css).
+//
+// Measuring works while the bubble is still invisible because it is hidden with
+// visibility/opacity rather than display:none, so it is laid out either way.
+const TIP_VIEWPORT_MARGIN = 8;
+function fitTipBubble(bubble) {
+  bubble.style.setProperty("--tip-shift", "0px");
+  const box = bubble.getBoundingClientRect();
+  const room = window.innerWidth - TIP_VIEWPORT_MARGIN;
+  let shift = 0;
+  if (box.left < TIP_VIEWPORT_MARGIN) shift = TIP_VIEWPORT_MARGIN - box.left;
+  else if (box.right > room) shift = room - box.right;
+  if (shift) bubble.style.setProperty("--tip-shift", `${Math.round(shift)}px`);
 }
 
 function setTipText(tip, text) {
@@ -1764,9 +1787,19 @@ function renderDevice(root, state) {
       state.reload();
     } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
   };
+  // What the version column means and how an image actually reaches a node. It
+  // explains the section rather than reporting anything, so it hangs off a "?"
+  // next to the heading instead of taking a paragraph under the node list — the
+  // per-node relay failures below are the part worth keeping on screen.
+  const insideTip = infoTip(
+    "Firmware each in-hive node advertises. Uploading an image with target " +
+    "“HiveInside” below only registers the release — nothing reaches a node " +
+    "until you press “Relay to node”. The HiveHub picks the job up on its next " +
+    "upload cycle (about 10 minutes by default) and streams it over BLE; this " +
+    "version is what confirms the update took.");
   const insideSection = insideNodes.length
     ? el("div", {},
-        el("h3", { class: "fw-upload-head" }, "HiveInside nodes"),
+        el("h3", { class: "fw-upload-head" }, "HiveInside nodes ", insideTip),
         el("div", { class: "rows" },
           ...insideNodes.map((d) => {
             const relay = relayOf(d.n);
@@ -1795,13 +1828,7 @@ function renderDevice(root, state) {
             return el("p", { class: "note" },
               `${d.label}: last relay failed — ${relay.message || "no reason reported"} ` +
               `(${relAge(relay.completed_at || relay.created_at)})`);
-          }),
-        el("p", { class: "note" },
-          "Firmware each in-hive node advertises. Uploading an image with target " +
-          "“HiveInside” below only registers the release — nothing reaches a node " +
-          "until you press “Relay to node”. The HiveHub picks the job up on its " +
-          "next upload cycle (about 10 minutes by default) and streams it over " +
-          "BLE; this version is what confirms the update took."))
+          }))
     : null;
 
   // Firmware upload form. The main-unit ("hivescale") target ships for two
@@ -1964,14 +1991,18 @@ function renderDevice(root, state) {
     el("div", { class: "form-row" }, el("label", {}, "SD backup file"), sdFileInput),
     sdPicked,
     el("p", { class: "note" },
-      "Accepts measurements.ndjson or the hivescale-sd-data.tar download. " +
-      "Re-uploading the same file is safe — existing readings are skipped automatically."),
+      "Accepts measurements.ndjson, the hivescale-sd-data.tar download, or a " +
+      "backup saved from Admin → Download / backup data below. Re-uploading the " +
+      "same file is safe — existing readings are skipped automatically."),
     el("div", { class: "form-actions" }, sdBtn),
     sdResult);
   // Post the picked file to a specific device (defaults to the selected one).
-  function runSdImport(deviceId) {
+  // `route` sends the readings to the device each row names instead, which is how
+  // a whole-server backup from the download panel is restored.
+  function runSdImport(deviceId, route) {
     const fd = new FormData();
     fd.append("file", sdFileInput.files[0]);
+    if (route) fd.append("route_by_device", "true");
     return state.actions.importSdData(fd, deviceId);
   }
   function renderSdResult(res) {
@@ -1981,7 +2012,12 @@ function renderDevice(root, state) {
     const unreadable = res.skipped
       ? ` · ${res.skipped} unreadable line${res.skipped === 1 ? "" : "s"} skipped`
       : "";
-    const into = res.device_id ? ` into device “${res.device_id}”` : "";
+    // A routed restore spreads one file over several devices, so name the count
+    // rather than a single target.
+    const spread = res.devices || [];
+    const into = spread.length > 1
+      ? ` across ${spread.length} devices`
+      : res.device_id ? ` into device “${res.device_id}”` : "";
     sdResult.hidden = false;
     sdResult.textContent =
       `Imported ${res.inserted} new reading${res.inserted === 1 ? "" : "s"}${into}${dupes}. ` +
@@ -2006,26 +2042,49 @@ function renderDevice(root, state) {
         // Offer to send the readings to their true source device instead of
         // mis-attaching them here.
         if (err.status === 409 && err.detail && err.detail.code === "device_mismatch") {
-          const sources = err.detail.file_device_ids || [];
+          // Every device the file names, not just the ones that differ from the
+          // upload target: a whole-server backup restored while one of its own
+          // devices is selected lists that device too, and it needs routing
+          // rather than a re-post to a single "source".
+          const sources = err.detail.source_device_ids || err.detail.file_device_ids || [];
+          const foreign = err.detail.file_device_ids || [];
           const target = err.detail.target_device_id;
-          if (sources.length !== 1) {
-            // A single file holding several devices' data can't be auto-routed.
+          if (sources.length > 1) {
+            // A whole-server backup from the download panel. Ask the server to
+            // file every row under the device that recorded it, rather than
+            // re-pinning the lot onto the device that happens to be selected.
+            const ok = window.confirm(
+              `This file holds readings for ${sources.length} devices:\n` +
+              `${sources.join(", ")}\n\n` +
+              `Restore each device's readings into that device?\n\n` +
+              `OK — restore all devices      Cancel — stop`
+            );
+            if (!ok) { state.toast("Import cancelled", "error"); return; }
+            sdBtn.textContent = "Restoring…";
+            try {
+              res = await runSdImport(undefined, true);
+            } catch (err2) {
+              state.toast(`Could not restore the backup: ${err2.message}`, "error");
+              return;
+            }
+          } else if (foreign.length === 1) {
+            const source = foreign[0];
+            const ok = window.confirm(
+              `This SD-card data is from device “${source}”, but you are uploading ` +
+              `it to device “${target}”.\n\n` +
+              `Upload the data to its source device “${source}” instead?\n\n` +
+              `OK — import into “${source}”      Cancel — stop`
+            );
+            if (!ok) { state.toast("SD import cancelled", "error"); return; }
+            sdBtn.textContent = "Importing…";
+            try {
+              res = await runSdImport(source);       // re-post to the correct device
+            } catch (err2) {
+              state.toast(`Could not import into “${source}”: ${err2.message}`, "error");
+              return;
+            }
+          } else {
             state.toast(err.detail.message || err.message, "error");
-            return;
-          }
-          const source = sources[0];
-          const ok = window.confirm(
-            `This SD-card data is from device “${source}”, but you are uploading ` +
-            `it to device “${target}”.\n\n` +
-            `Upload the data to its source device “${source}” instead?\n\n` +
-            `OK — import into “${source}”      Cancel — stop`
-          );
-          if (!ok) { state.toast("SD import cancelled", "error"); return; }
-          sdBtn.textContent = "Importing…";
-          try {
-            res = await runSdImport(source);       // re-post to the correct device
-          } catch (err2) {
-            state.toast(`Could not import into “${source}”: ${err2.message}`, "error");
             return;
           }
         } else {
@@ -2078,14 +2137,231 @@ function renderDevice(root, state) {
     el("div", { class: "admin-col" }, channelsCard, sdCard),
     el("div", { class: "admin-col" }, firmwareCard));
 
+  // Download / backup is built only for admins — the export endpoints are
+  // admin-only, so rendering it for a viewer would just be a panel that 403s.
+  // It sits next to "Delete readings": save the data, then prune it.
   const adminCards = [accountCard(state), notificationsCard(state)];
-  if (isAdmin) adminCards.push(usersCard(state), visibleDevicesCard(state), deleteMeasurementsCard(state));
+  if (isAdmin) {
+    adminCards.push(usersCard(state), visibleDevicesCard(state),
+                    downloadBackupCard(state), deleteMeasurementsCard(state));
+  }
 
   node.append(
     topGrid,
     collapsible("Configuration", false, cfgForm, calCard),
     collapsible("Admin", false, el("div", { class: "admin-cols" }, ...adminCards)));
   root.append(node);
+}
+
+// "Download / backup data" (admin only): stream every stored reading back out in
+// the same NDJSON shape the scale writes to its SD card, so a self-host can
+// archive its history before re-deploying the stack — or hand one beekeeper their
+// data when they move to their own server — and load it back through "Import SD
+// card data" at the top of this page. Devices, hives and a time range are all
+// optional filters; leaving them alone backs up everything.
+//
+// The download itself is a plain browser navigation (the session rides in the
+// same-origin cookie), which means a server-side error would only show up inside
+// the saved file. So the panel asks the server how much the current filters
+// match and shows that first — an empty or mistaken selection is visible before
+// anything is saved.
+function downloadBackupCard(state) {
+  const devices = state.devices || [];
+  // The shape availableHives()/hiveLabel() expect. Custom hive names are only
+  // loaded for the active device; the others fall back to the names carried in
+  // the device list (see app.js deviceState).
+  const dstate = (id) => ({
+    latest: state.deviceLatest(id),
+    channels: id === state.activeDeviceId ? state.channels : null,
+    device: state.deviceMeta(id),
+  });
+
+  // Hive indices to offer: the union of what every device on this server
+  // reports, since the filter selects by index across the whole download. A name
+  // is only shown when every device that named that hive agrees on it.
+  const namesByHive = new Map();
+  const hiveSet = new Set();
+  for (const d of devices) {
+    const ds = dstate(d.device_id);
+    for (const n of availableHives(ds)) {
+      hiveSet.add(n);
+      const label = hiveLabel(ds, n);
+      if (label && label !== `Hive ${n}`) {
+        if (!namesByHive.has(n)) namesByHive.set(n, new Set());
+        namesByHive.get(n).add(label);
+      }
+    }
+  }
+  const hives = [...hiveSet].sort((a, b) => a - b);
+  const hiveText = (n) => {
+    const names = [...(namesByHive.get(n) || [])];
+    return names.length === 1 ? `Hive ${n} · ${names[0]}` : `Hive ${n}`;
+  };
+
+  // A checkbox list with All / None shortcuts. Everything starts ticked, so the
+  // untouched panel backs up the whole server.
+  function checkList(items, keyOf, labelOf) {
+    const boxes = new Map();
+    const rows = items.map((it) => {
+      const cb = el("input", { type: "checkbox" });
+      cb.checked = true;
+      cb.addEventListener("change", scheduleRefresh);
+      boxes.set(keyOf(it), cb);
+      return el("label", { class: "row" },
+        el("span", { class: "k" }, labelOf(it)),
+        el("span", { class: "v" }, cb));
+    });
+    const setAll = (on) => {
+      for (const cb of boxes.values()) cb.checked = on;
+      scheduleRefresh();
+    };
+    const head = el("div", { class: "form-actions" },
+      el("button", { class: "btn ghost", type: "button", onclick: () => setAll(true) }, "All"),
+      el("button", { class: "btn ghost", type: "button", onclick: () => setAll(false) }, "None"));
+    return { node: el("div", {}, el("div", { class: "rows" }, ...rows), head), boxes };
+  }
+
+  const picked = (boxes) => [...boxes].filter(([, cb]) => cb.checked).map(([k]) => k);
+
+  const deviceList = checkList(
+    devices,
+    (d) => d.device_id,
+    (d) => (d.display_name ? `${d.display_name} · ${d.device_id}` : d.device_id));
+  const hiveList = checkList(hives, (n) => n, hiveText);
+
+  const startInput = el("input", { type: "datetime-local" });
+  const endInput = el("input", { type: "datetime-local" });
+  startInput.addEventListener("change", scheduleRefresh);
+  endInput.addEventListener("change", scheduleRefresh);
+
+  const summary = el("p", { class: "note" }, "Checking…");
+  const breakdown = el("div", { class: "rows" });
+  const btn = el("button", { class: "btn", type: "button", disabled: true }, "Download backup");
+
+  // Filters in the shape api.exportQuery wants. An untouched (fully ticked) list
+  // is sent as "no filter", which is what the server reads as "everything" — and
+  // keeps a whole-server backup from carrying a URL full of ids.
+  function currentOpts() {
+    const deviceIds = picked(deviceList.boxes);
+    const hiveSel = picked(hiveList.boxes);
+    return {
+      deviceIds: deviceIds.length === devices.length ? [] : deviceIds,
+      hives: hiveSel.length === hives.length ? [] : hiveSel,
+      start: startInput.value ? new Date(startInput.value).toISOString() : null,
+      end: endInput.value ? new Date(endInput.value).toISOString() : null,
+    };
+  }
+
+  let lastSummary = null;
+  let refreshTimer = null;
+  let refreshSeq = 0;
+
+  function block(message) {
+    lastSummary = null;
+    btn.disabled = true;
+    summary.textContent = message;
+    breakdown.replaceChildren();
+  }
+
+  async function refresh() {
+    const deviceIds = picked(deviceList.boxes);
+    const hiveSel = picked(hiveList.boxes);
+    if (!deviceIds.length) return block("Select at least one device to back up.");
+    if (hives.length && !hiveSel.length) return block("Select at least one hive to back up.");
+    if (startInput.value && endInput.value && new Date(endInput.value) < new Date(startInput.value)) {
+      return block("The end of the range is before its start.");
+    }
+    // Only the newest request may paint: ticking through several devices fires
+    // one call per change and they can come back out of order.
+    const seq = ++refreshSeq;
+    summary.textContent = "Checking…";
+    try {
+      const res = await state.actions.exportSummary(currentOpts());
+      if (seq !== refreshSeq) return;
+      lastSummary = res;
+      const rows = res.devices || [];
+      const total = res.total_measurements || 0;
+      const span = rows
+        .flatMap((r) => [r.first_measured_at, r.last_measured_at])
+        .filter(Boolean)
+        .sort();
+      const period = span.length
+        ? ` · ${fmtDateTime(span[0])} → ${fmtDateTime(span[span.length - 1])}`
+        : "";
+      summary.textContent = total
+        ? `${fmtInt(total)} reading${total === 1 ? "" : "s"} from ` +
+          `${rows.length} device${rows.length === 1 ? "" : "s"}${period}.`
+        : "No readings match these filters.";
+      breakdown.replaceChildren(
+        ...(rows.length > 1
+          ? rows.map((r) => el("div", { class: "row" },
+              el("span", { class: "k" }, r.device_id),
+              el("span", { class: "v" }, `${fmtInt(r.measurements)} readings`)))
+          : []));
+      btn.disabled = !total;
+    } catch (err) {
+      if (seq !== refreshSeq) return;
+      block(`Could not check the selection: ${err.message}`);
+    }
+  }
+
+  function scheduleRefresh() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(refresh, 300);
+  }
+
+  btn.addEventListener("click", () => {
+    const name = lastSummary?.filename || "hivehub-backup.ndjson";
+    // Hand the URL to the browser as a download rather than fetching it: the
+    // file can be hundreds of megabytes, and this streams it straight to disk
+    // instead of through a blob in memory.
+    const link = el("a", { href: state.actions.exportUrl(currentOpts()), download: name });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    state.toast(`Downloading ${name}`, "success");
+  });
+
+  const card = el("div", { class: "card" }, el("h2", {}, "Download / backup data"),
+    el("p", { class: "note" },
+      "Saves the selected readings as a HiveHub .ndjson backup — the same format " +
+      "the scale writes to its SD card, so it loads straight back in through " +
+      "“Import SD card data” at the top of this page. Leave the filters untouched " +
+      "to back up everything."),
+    el("h3", { class: "fw-upload-head" }, "Devices"),
+    devices.length
+      ? deviceList.node
+      : el("p", { class: "muted-text" }, "No devices on this server."),
+    hives.length ? el("h3", { class: "fw-upload-head" }, "Hives") : null,
+    hives.length ? hiveList.node : null,
+    hives.length
+      ? el("p", { class: "note" },
+          "Hives are selected by number across every device in the download. " +
+          "Readings that belong to the device rather than a hive — ambient " +
+          "temperature, battery, solar, connectivity — are always included.")
+      : null,
+    el("h3", { class: "fw-upload-head" }, "Period"),
+    el("div", { class: "form-row" }, el("label", {}, "From"), startInput),
+    el("div", { class: "form-row" }, el("label", {}, "To"), endInput),
+    el("p", { class: "note" }, "Leave both blank for the full history."),
+    summary,
+    breakdown,
+    el("div", { class: "form-actions" }, btn));
+
+  if (!devices.length) {
+    block("No devices on this server yet.");
+  } else {
+    // The card sits inside the collapsed "Admin" section, so hold the first
+    // summary until it is actually on screen: the count is one COUNT(*) per
+    // device, and a page render that never opens Admin should not pay for it.
+    // A closed <details> gives its contents no box, so this fires on expand.
+    const seen = new IntersectionObserver((entries, obs) => {
+      if (entries.some((e) => e.isIntersecting)) { obs.disconnect(); refresh(); }
+    });
+    seen.observe(card);
+  }
+
+  return card;
 }
 
 // "Visible devices" (admin only): retire a decommissioned device from the

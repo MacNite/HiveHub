@@ -312,6 +312,10 @@ function buildState() {
     actions: {
       uploadFirmware: (fd) => api.uploadFirmware(activeId, fd),
       importSdData: (fd, deviceId) => api.importSdData(deviceId || activeId, fd),
+      // Download / backup: how much the current filters match, and the URL the
+      // browser then downloads (see views.js downloadBackupCard).
+      exportSummary: (opts) => api.exportSummary(opts),
+      exportUrl: (opts) => api.exportUrl(opts),
       approveFirmware: () => api.approveFirmware(activeId),
       queueHiveInsideUpdate: (slot, force) => api.queueHiveInsideUpdate(activeId, slot, force),
       startCalibration: (p) => api.startCalibration(activeId, p),

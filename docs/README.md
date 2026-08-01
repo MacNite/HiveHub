@@ -54,6 +54,7 @@ hardware list, firmware/server setup, and API summary, start with the
 
 ## Deployment & testing
 
+- [backup-restore.md](backup-restore.md) — **download / back up every reading** from the dashboard and load it back after a redeploy, or hand it to a beekeeper moving to their own server.
 - [docker-install.md](docker-install.md) — generic Docker / Docker Compose deployment.
 - [truenas-install.md](truenas-install.md) — TrueNAS Scale (Custom App) deployment.
 - [test-commands.md](test-commands.md) — `curl` examples for exercising the backend.
