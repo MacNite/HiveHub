@@ -7,8 +7,10 @@ file, and load that file back in later. Use it to
 - **migrate a beekeeper** off a shared server onto their own HiveHub, or
 - **archive** one device (or one hive) for analysis elsewhere.
 
-Both halves live on **Device & admin**: **Download / backup data** saves the
-file, **Import SD card data** reads it back.
+Both halves live on **Device & admin**: **Admin → Download / backup data** saves
+the file, **Import SD card data** reads it back. Both are **admin-only** — the
+panel is not built for a `viewer` account, and the endpoints behind it reject
+one.
 
 > **Scope:** the backup holds **measurements** — every reading, including the
 > per-hive readings of a multi-hive device. It does **not** carry device
@@ -48,8 +50,9 @@ Claim codes are never included.
 
 ## Downloading
 
-**Device & admin → Download / backup data.** Everything starts ticked, so
-pressing **Download backup** without touching anything backs up the whole server.
+**Device & admin → Admin → Download / backup data** (expand the *Admin* section
+at the bottom of the page). Everything starts ticked, so pressing **Download
+backup** without touching anything backs up the whole server.
 
 | Filter | Effect |
 |---|---|
@@ -98,8 +101,8 @@ then succeeds. So the order is **let the device check in once → then restore**
 
 ## Migrating a beekeeper to their own server
 
-1. On the old server, **Download / backup data**, tick only that beekeeper's
-   device(s), and save the file.
+1. On the old server, **Device & admin → Admin → Download / backup data**, tick
+   only that beekeeper's device(s), and save the file.
 2. Point their scale at the new server (`SERVER_URL` in `secrets.h`, or the
    AP-mode setup portal) and wait for one check-in, so the device registers
    itself there.
@@ -116,8 +119,11 @@ then succeeds. So the order is **let the device check in once → then restore**
 
 ## API
 
-Both endpoints are part of the local dashboard API and need a dashboard login
-session (`ENABLE_LOCAL_DASHBOARD=true`).
+Both endpoints are part of the local dashboard API (`ENABLE_LOCAL_DASHBOARD=true`)
+and require a dashboard session with the **admin** role. A `viewer` can already
+read any single device's readings through the chart endpoints, so this is not
+about hiding the data — bulk-extracting every device on the server in one file is
+an operator action, and it is gated like the other ones.
 
 ### `GET /api/v1/local/export/measurements`
 

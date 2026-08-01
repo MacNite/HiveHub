@@ -1965,8 +1965,8 @@ function renderDevice(root, state) {
     sdPicked,
     el("p", { class: "note" },
       "Accepts measurements.ndjson, the hivescale-sd-data.tar download, or a " +
-      "backup saved from the panel above. Re-uploading the same file is safe — " +
-      "existing readings are skipped automatically."),
+      "backup saved from Admin → Download / backup data below. Re-uploading the " +
+      "same file is safe — existing readings are skipped automatically."),
     el("div", { class: "form-actions" }, sdBtn),
     sdResult);
   // Post the picked file to a specific device (defaults to the selected one).
@@ -2071,8 +2071,6 @@ function renderDevice(root, state) {
   });
   const sdCard = el("div", { class: "card" }, el("h2", {}, "Import SD card data"), sdForm);
 
-  const backupCard = downloadBackupCard(state);
-
   // Calibration
   const calBadge = el("span", { class: `badge ${state.latest?.calibration_mode ? "warn" : "muted"}` },
     state.latest?.calibration_mode ? "Calibration mode active" : "Normal mode");
@@ -2099,10 +2097,9 @@ function renderDevice(root, state) {
     el("div", { class: "form-actions" }, startBtn, stopBtn));
 
   // ── Layout ────────────────────────────────────────────────────────────────
-  // Top: three columns — Status (per-sensor health) · Hive names + Download /
-  // backup + Import SD card data · Firmware (status/approve + upload). Backup and
-  // import sit together: one saves the file the other reads back. Each panel
-  // sizes to its own content rather than stretching. Below: a full-width collapsible
+  // Top: three columns — Status (per-sensor health) · Hive names + Import SD card
+  // data · Firmware (status/approve + upload). Each panel sizes to its own
+  // content rather than stretching. Below: a full-width collapsible
   // "Configuration" (general + per-scale calibration/compensation + fit, plus the
   // Calibration-mode controls), collapsed by default; and at the very bottom a
   // full-width collapsible "Admin" grouping the account and admin-only panels.
@@ -2110,11 +2107,17 @@ function renderDevice(root, state) {
 
   const topGrid = el("div", { class: "admin-cols" },
     el("div", { class: "admin-col" }, sensorStatusCard(state)),
-    el("div", { class: "admin-col" }, channelsCard, backupCard, sdCard),
+    el("div", { class: "admin-col" }, channelsCard, sdCard),
     el("div", { class: "admin-col" }, firmwareCard));
 
+  // Download / backup is built only for admins — the export endpoints are
+  // admin-only, so rendering it for a viewer would just be a panel that 403s.
+  // It sits next to "Delete readings": save the data, then prune it.
   const adminCards = [accountCard(state), notificationsCard(state)];
-  if (isAdmin) adminCards.push(usersCard(state), visibleDevicesCard(state), deleteMeasurementsCard(state));
+  if (isAdmin) {
+    adminCards.push(usersCard(state), visibleDevicesCard(state),
+                    downloadBackupCard(state), deleteMeasurementsCard(state));
+  }
 
   node.append(
     topGrid,
@@ -2123,12 +2126,12 @@ function renderDevice(root, state) {
   root.append(node);
 }
 
-// "Download / backup data": stream every stored reading back out in the same
-// NDJSON shape the scale writes to its SD card, so a self-host can archive its
-// history before re-deploying the stack — or hand one beekeeper their data when
-// they move to their own server — and load it back through "Import SD card data"
-// above. Devices, hives and a time range are all optional filters; leaving them
-// alone backs up everything.
+// "Download / backup data" (admin only): stream every stored reading back out in
+// the same NDJSON shape the scale writes to its SD card, so a self-host can
+// archive its history before re-deploying the stack — or hand one beekeeper their
+// data when they move to their own server — and load it back through "Import SD
+// card data" at the top of this page. Devices, hives and a time range are all
+// optional filters; leaving them alone backs up everything.
 //
 // The download itself is a plain browser navigation (the session rides in the
 // same-origin cookie), which means a server-side error would only show up inside
@@ -2292,14 +2295,12 @@ function downloadBackupCard(state) {
     state.toast(`Downloading ${name}`, "success");
   });
 
-  if (!devices.length) block("No devices on this server yet.");
-  else refresh();
-
-  return el("div", { class: "card" }, el("h2", {}, "Download / backup data"),
+  const card = el("div", { class: "card" }, el("h2", {}, "Download / backup data"),
     el("p", { class: "note" },
       "Saves the selected readings as a HiveHub .ndjson backup — the same format " +
       "the scale writes to its SD card, so it loads straight back in through " +
-      "“Import SD card data”. Leave the filters untouched to back up everything."),
+      "“Import SD card data” at the top of this page. Leave the filters untouched " +
+      "to back up everything."),
     el("h3", { class: "fw-upload-head" }, "Devices"),
     devices.length
       ? deviceList.node
@@ -2319,6 +2320,21 @@ function downloadBackupCard(state) {
     summary,
     breakdown,
     el("div", { class: "form-actions" }, btn));
+
+  if (!devices.length) {
+    block("No devices on this server yet.");
+  } else {
+    // The card sits inside the collapsed "Admin" section, so hold the first
+    // summary until it is actually on screen: the count is one COUNT(*) per
+    // device, and a page render that never opens Admin should not pay for it.
+    // A closed <details> gives its contents no box, so this fires on expand.
+    const seen = new IntersectionObserver((entries, obs) => {
+      if (entries.some((e) => e.isIntersecting)) { obs.disconnect(); refresh(); }
+    });
+    seen.observe(card);
+  }
+
+  return card;
 }
 
 // "Visible devices" (admin only): retire a decommissioned device from the

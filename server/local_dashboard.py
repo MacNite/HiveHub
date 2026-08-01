@@ -444,6 +444,12 @@ def local_latest_measurements(device_id: str, limit: int = 1):
 # their data to take to their own server) and load it back in through the
 # existing "Import SD card data" upload. See server/data_export.py for the
 # record shaping and why device_id / timestamp are re-stamped from the database.
+#
+# Admin-only, matching the import it feeds. A viewer can already read any single
+# device's readings through the chart endpoints, so this grants no new access to
+# the data — but bulk-extracting every device on the server in one file is an
+# operator action, and it sits with the other operator actions on the dashboard's
+# Admin panel.
 
 
 def _resolve_export_devices(device_ids: list[str]) -> list[str]:
@@ -536,7 +542,10 @@ def _iter_export_rows(
             after = (rows[-1][1], rows[-1][0])
 
 
-@router.get("/api/v1/local/export/measurements/summary", dependencies=LOCAL_DASHBOARD_DEP)
+@router.get(
+    "/api/v1/local/export/measurements/summary",
+    dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+)
 def local_export_summary(
     device_id: list[str] = Query(default=[]),
     start_at: Optional[datetime] = None,
@@ -579,7 +588,7 @@ def local_export_summary(
     }
 
 
-@router.get("/api/v1/local/export/measurements", dependencies=LOCAL_DASHBOARD_DEP)
+@router.get("/api/v1/local/export/measurements", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_export_measurements(
     device_id: list[str] = Query(default=[]),
     hive: list[int] = Query(default=[]),
