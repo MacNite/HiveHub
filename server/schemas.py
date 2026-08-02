@@ -233,10 +233,16 @@ class MeasurementIn(BaseModel):
     # independent — a paired-but-unreachable unit reports
     # bee_counter_N_ok=False and the rest of its fields null.
     #
-    # interval_*, busy_retries, read_attempts, latch_succeeded and the per-gate
-    # arrays (raw_json bee_counter_N_per_gate_in/out) are LEGACY inputs kept so
-    # historical rows and not-yet-reflashed devices on the old wired firmware
-    # still ingest; new firmware never sends them.
+    # interval_* stay fully live: they are what display clients chart, and the
+    # BLE path backfills them by differencing consecutive totals.
+    #
+    # The wired-only telemetry (busy_retries, read_attempts, latch_succeeded and
+    # the per-gate arrays) is NO LONGER ACCEPTED. It only ever described the I2C
+    # transport — bus retries, and whether CMD_LATCH landed — and that transport
+    # is gone from every firmware. A device sending them now has them ignored
+    # rather than stored. The measurements columns are deliberately left in
+    # place: they hold real readings from the wired era, and the read path still
+    # returns them, so no history is lost.
     bee_counter_1_ok:                Optional[bool] = None
     bee_counter_1_protocol_version:  Optional[int]  = None
     bee_counter_1_status_flags:      Optional[int]  = None
@@ -248,9 +254,6 @@ class MeasurementIn(BaseModel):
     bee_counter_1_interval_in:       Optional[int]  = None
     bee_counter_1_interval_out:      Optional[int]  = None
     bee_counter_1_glitch_count:      Optional[int]  = None
-    bee_counter_1_busy_retries:      Optional[int]  = None
-    bee_counter_1_read_attempts:     Optional[int]  = None
-    bee_counter_1_latch_succeeded:   Optional[bool] = None
 
     bee_counter_2_ok:                Optional[bool] = None
     bee_counter_2_protocol_version:  Optional[int]  = None
@@ -263,9 +266,6 @@ class MeasurementIn(BaseModel):
     bee_counter_2_interval_in:       Optional[int]  = None
     bee_counter_2_interval_out:      Optional[int]  = None
     bee_counter_2_glitch_count:      Optional[int]  = None
-    bee_counter_2_busy_retries:      Optional[int]  = None
-    bee_counter_2_read_attempts:     Optional[int]  = None
-    bee_counter_2_latch_succeeded:   Optional[bool] = None
 
     # ── LIS3DH / LIS2DH12 per-hive vibration (accelerometer) ─────────────────
     # One accelerometer per hive on the shared I2C bus (0x18 / 0x19). Each block

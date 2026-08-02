@@ -217,12 +217,18 @@ consecutive totals. For `N` in `1`, `2`:
 | `bee_counter_N_total_in` / `_total_out` | integer | Cumulative (lifetime) in/out counts |
 | `bee_counter_N_glitch_count` | integer | Diagnostics |
 
-Legacy inputs still accepted for historical rows / not-yet-reflashed devices on
-the removed wired firmware: `bee_counter_N_interval_in`/`_interval_out`
-(device-reported intervals), `_busy_retries`, `_read_attempts`,
-`_latch_succeeded`, and the per-gate 24-byte arrays kept only in `raw_json`
-(`bee_counter_N_per_gate_in` / `bee_counter_N_per_gate_out`). New firmware
-never sends them.
+`bee_counter_N_interval_in` / `_interval_out` are also accepted and are fully
+live — the BLE path leaves them null on ingest and the read APIs backfill them
+by differencing consecutive totals.
+
+The wired-only telemetry — `_busy_retries`, `_read_attempts`,
+`_latch_succeeded`, and the per-gate 24-byte arrays
+(`bee_counter_N_per_gate_in` / `_per_gate_out`) — is **no longer accepted**. It
+described the I2C transport (bus retries, whether `CMD_LATCH` landed), which no
+firmware speaks anymore; a payload carrying these fields has them ignored rather
+than stored. The `measurements` columns are deliberately kept and the read APIs
+still return them, so readings recorded during the wired era stay retrievable.
+Every row written since is null there.
 
 #### Vibration fields (in-hive accelerometer)
 

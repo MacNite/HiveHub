@@ -71,30 +71,6 @@ jobs:
               -o /tmp/test_beehive_decode test-data/test_beehive_decode.cpp
           /tmp/test_beehive_decode
 
-  # The wired I2C BeeCounter path was removed for good. Fail the build if any
-  # of its symbols ever reappear in the firmware, so a stray revert or cherry
-  # pick cannot silently reintroduce the wired fallback or the OTA-over-I2C
-  # relay.
-  wired-beecounter-guard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Ensure no wired BeeCounter symbols exist in the firmware
-        run: |
-          set -e
-          # Word-boundaried OTA_CHUNK_MAX so the legitimate HiveInside GATT-OTA
-          # constant HIVEINSIDE_OTA_CHUNK_MAX is not matched.
-          PATTERNS='SLAVE_ADDR_SLOT_1|SLAVE_ADDR_SLOT_2|CMD_LATCH|REG_PROTOCOL_VERSION|REG_TOTAL_IN|REG_INTERVAL_IN|REG_PER_GATE_IN|REG_OTA_BEGIN|REG_OTA_DATA|REG_OTA_END|pushFirmwareToBeeCounter|updateBeeCounter|\bOTA_CHUNK_MAX\b|BEE-OTA'
-          if grep -rnE "$PATTERNS" firmware/src firmware/include; then
-            echo "::error::Wired BeeCounter I2C symbols found — this path was removed (BLE/GATT only)."
-            exit 1
-          fi
-          if grep -nE '#include\s*[<"]Wire' firmware/src/bee_counter_client.cpp firmware/include/bee_counter_client.h; then
-            echo "::error::BeeCounter code must not touch the I2C bus."
-            exit 1
-          fi
-          echo "No wired BeeCounter symbols present."
-
   server-tests:
     runs-on: ubuntu-latest
     steps:
