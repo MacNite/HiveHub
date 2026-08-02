@@ -75,6 +75,13 @@ class HiveMicIn(BaseModel):
 class HiveBeeCounterIn(BaseModel):
     model_config = ConfigDict(extra="allow")
     ok: Optional[bool] = None
+    # Image version the HiveTraffic counter reports ("ver" in its measurement
+    # JSON), e.g. "0.1.0". Distinct from protocol_version, which versions the
+    # wire format and does not move when the firmware does. Absent from counters
+    # running firmware older than the field. It rides in raw_json rather than a
+    # column — reported_beecounter_version reads it from there — because it
+    # changes only across an OTA and nothing charts it.
+    version: Optional[str] = None
     total_in: Optional[int] = None
     total_out: Optional[int] = None
     interval_in: Optional[int] = None
@@ -226,10 +233,16 @@ class MeasurementIn(BaseModel):
     # independent — a paired-but-unreachable unit reports
     # bee_counter_N_ok=False and the rest of its fields null.
     #
-    # interval_*, busy_retries, read_attempts, latch_succeeded and the per-gate
-    # arrays (raw_json bee_counter_N_per_gate_in/out) are LEGACY inputs kept so
-    # historical rows and not-yet-reflashed devices on the old wired firmware
-    # still ingest; new firmware never sends them.
+    # interval_* stay fully live: they are what display clients chart, and the
+    # BLE path backfills them by differencing consecutive totals.
+    #
+    # The wired-only telemetry (busy_retries, read_attempts, latch_succeeded and
+    # the per-gate arrays) is NO LONGER ACCEPTED. It only ever described the I2C
+    # transport — bus retries, and whether CMD_LATCH landed — and that transport
+    # is gone from every firmware. A device sending them now has them ignored
+    # rather than stored. The measurements columns are deliberately left in
+    # place: they hold real readings from the wired era, and the read path still
+    # returns them, so no history is lost.
     bee_counter_1_ok:                Optional[bool] = None
     bee_counter_1_protocol_version:  Optional[int]  = None
     bee_counter_1_status_flags:      Optional[int]  = None
@@ -241,9 +254,6 @@ class MeasurementIn(BaseModel):
     bee_counter_1_interval_in:       Optional[int]  = None
     bee_counter_1_interval_out:      Optional[int]  = None
     bee_counter_1_glitch_count:      Optional[int]  = None
-    bee_counter_1_busy_retries:      Optional[int]  = None
-    bee_counter_1_read_attempts:     Optional[int]  = None
-    bee_counter_1_latch_succeeded:   Optional[bool] = None
 
     bee_counter_2_ok:                Optional[bool] = None
     bee_counter_2_protocol_version:  Optional[int]  = None
@@ -256,9 +266,6 @@ class MeasurementIn(BaseModel):
     bee_counter_2_interval_in:       Optional[int]  = None
     bee_counter_2_interval_out:      Optional[int]  = None
     bee_counter_2_glitch_count:      Optional[int]  = None
-    bee_counter_2_busy_retries:      Optional[int]  = None
-    bee_counter_2_read_attempts:     Optional[int]  = None
-    bee_counter_2_latch_succeeded:   Optional[bool] = None
 
     # ── LIS3DH / LIS2DH12 per-hive vibration (accelerometer) ─────────────────
     # One accelerometer per hive on the shared I2C bus (0x18 / 0x19). Each block
@@ -508,10 +515,12 @@ class FirmwareReleaseIn(BaseModel):
 
 
 class DeviceCommandIn(BaseModel):
-    # NOTE: "update_beecounter" was removed together with the wired I2C
-    # BeeCounter path — the firmware can no longer perform it, so the server
-    # must not queue it. BeeCounter data collection is BLE/GATT-only; a future
-    # BeeCounter OTA will use GATT but is not implemented yet.
+    # "update_beecounter" is back, but it is NOT the old command: the wired I2C
+    # relay it originally named was deleted, and this one streams the image to
+    # the counter over BLE GATT. The payload shape matches update_hiveinside
+    # (slot + url + version + crc32). Firmware built without
+    # ENABLE_WIRELESS_BEECOUNTER rejects it explicitly rather than faking
+    # success, so queuing it against an old or unequipped device fails visibly.
     command_type: Literal[
         "calibrate_scale_1",
         "calibrate_scale_2",
@@ -522,6 +531,7 @@ class DeviceCommandIn(BaseModel):
         "check_ota",
         "ota_update",
         "update_hiveinside",
+        "update_beecounter",
         "start_provisioning",
         "start_calibration_mode",
         "stop_calibration_mode",

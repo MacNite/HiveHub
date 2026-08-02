@@ -143,28 +143,19 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap);
 String normalizeMac(const String& raw);
 
 #if HIVEINSIDE_OTA_ENABLED
-// ── HiveInside firmware-over-BLE relay (streaming GATT-client session) ──────
-// Bring up the BLE stack, locate `mac`, connect to its OTA service and send the
-// BEGIN frame (image size + end-to-end CRC-32). Returns false (and cleans up) on
-// any failure. On success the session stays open for otaWrite()/otaFinish().
-bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32);
-// Relay one buffer of firmware bytes, in order. Splits across as many GATT
-// writes as the negotiated MTU needs; each write is flow-controlled by the
-// device's ATT response. Returns false on the first failed write.
-bool otaWrite(const uint8_t* data, size_t len);
-// Send END and wait for the device to confirm DONE (CRC verified, slot swapped).
-// Returns true only on a confirmed DONE.
-bool otaFinish();
-// Best-effort cancel of an in-progress transfer (device keeps its old image).
-void otaAbort();
-// Disconnect and tear the BLE stack down. Always call this to end a session,
-// success or failure.
-void otaCleanup();
-// Human-readable reason for the most recent OTA failure (e.g. "device not found
-// in scan", "connect failed", "device reported error"). Set by otaBegin /
-// otaWrite / otaFinish and cleared at the start of each otaBegin so the relay
-// caller can surface a specific cause instead of a bare boolean.
-const String& otaLastError();
+// ── Locate-scan for the firmware-over-BLE relay (src/gatt_ota.cpp) ──────────
+// Run a short scan for `mac` and report the address type it advertised with, so
+// the relay can open a GATT connection to it. Returns false when the node was
+// not seen (powered off or out of range), leaving `addrTypeOut` untouched.
+//
+// Only HiveInside needs this: an nRF54 node is otherwise a passive beacon, so
+// nothing else establishes its address type. HiveTraffic is reached by a direct
+// connect instead — see gattota::Target::locateByScan.
+//
+// The relay session itself (begin/write/finish/abort/cleanup) is NOT here: it
+// moved to gatt_ota.h, which is shared with the BeeCounter relay and must
+// compile on devices built without ENABLE_BLE_SCAN.
+bool locateByScan(const String& mac, uint8_t& addrTypeOut);
 #endif
 
 }  // namespace blesensor

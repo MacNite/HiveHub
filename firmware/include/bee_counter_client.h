@@ -8,10 +8,11 @@
 // LIFETIME totals only — and disconnects. The backend differences consecutive
 // totals into per-interval counts, so no latch/reset command exists.
 //
-// Firmware updates: BeeCounter OTA will eventually run over GATT, but it is
-// NOT implemented yet. There is currently no remote BeeCounter firmware-update
-// path; the obsolete update_beecounter server command is rejected explicitly
-// in checkCommands() (hivehub_network.cpp).
+// Firmware updates run over GATT as well: the backend queues an
+// `update_beecounter` command and HiveHub streams the image into the counter's
+// OTA characteristics (see gatt_ota.h and hivehub_network.cpp). That path is
+// entirely separate from the measurement read below — it opens its own session
+// and shares nothing but the service UUID.
 
 #pragma once
 
@@ -26,7 +27,14 @@ namespace beecnt {
 // 2026-easy-bee-counter repo).
 struct Snapshot {
     bool     present          = false;  // device connected and parsed this cycle
-    uint8_t  fw_version       = 0;      // counter firmware revision ("fw")
+    uint8_t  fw_version       = 0;      // wire-protocol revision ("fw")
+    // Image version ("ver", e.g. "0.1.0"), empty when the counter runs firmware
+    // older than the field. NOT the same thing as fw_version above: that one
+    // versions the wire format and does not move when the firmware does. This
+    // is what the backend gates an OTA relay on and what confirms, after the
+    // counter reboots, that the update actually took. Fixed buffer rather than
+    // a String: Snapshot is used as a MAX_HIVES-sized stack array.
+    char     version[16]      = {0};
     uint8_t  status_flags     = 0;
     uint16_t uptime_s         = 0;
     uint8_t  num_gates        = 0;

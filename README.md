@@ -66,7 +66,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **SD card cache & backup** — local buffering when uploads fail, plus an append-only persistent backup that can be downloaded in AP mode and re-imported via HivePal.
 - **Claim-code pairing** — claim devices from HivePal without manual database setup.
 - **Remote configuration & commands** — sampling interval, scale offsets/factors, calibration, OTA checks, provisioning, reboot, Wi-Fi reset, and factory reset.
-- **OTA firmware updates** — owner-scoped releases with an accept-to-apply gate; the device also relays firmware to a HiveInside sensor (over BLE GATT). There is currently **no remote BeeCounter firmware-update path**: the old OTA-over-I2C relay was removed and a BeeCounter OTA over BLE/GATT is planned but not implemented yet.
+- **OTA firmware updates** — owner-scoped releases with an accept-to-apply gate; the device also relays firmware over BLE GATT to a HiveInside sensor or a HiveTraffic counter. Both relays are version-gated and explicit: publishing a release never pushes it to a sub-device on its own.
 - **Wi-Fi provisioning portal** — opened by the setup button for field configuration, including pairing wireless sensors.
 - **Multi-network Wi-Fi** — up to three saved networks.
 - **Insights** — backend auto-evaluation of weight, temperature, sound, vibration, and entrance traffic per hive, based on [these publications](docs/insights-sources-tldr.md).
@@ -139,7 +139,7 @@ bill of materials with price estimates and shop links lives on the
 Entrance traffic counting (in/out bees) is **BLE/GATT-only**:
 
 - **HiveTraffic** — the wireless [2026-easy-bee-counter](https://github.com/MacNite/2026-easy-bee-counter) board; see [docs/hivetraffic-bee-counter.md](docs/hivetraffic-bee-counter.md). Pairable to any hive.
-- Wired I2C BeeCounters (the old `0x30`/`0x31` slave path, including firmware updates over I2C) are **no longer supported**. BeeCounter firmware update over GATT is planned but not implemented yet, so there is currently no remote BeeCounter update path.
+- Wired I2C BeeCounters (the old `0x30`/`0x31` slave path, including firmware updates over I2C) are **no longer supported**. BeeCounter firmware is updated over BLE GATT instead — see [hivetraffic-bee-counter.md](docs/hivetraffic-bee-counter.md).
 
 ### Firmware pin mapping
 
@@ -544,6 +544,7 @@ Commands are queued by the server and picked up by the device on its next cycle.
 | `reboot` | `{}` | Restart the ESP32 |
 | `check_ota` / `ota_update` | `{}` | Trigger an immediate OTA check |
 | `update_hiveinside` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay firmware to a HiveInside sensor over BLE GATT (usually via the `update-hiveinside` helper) |
+| `update_beecounter` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay firmware to a HiveTraffic counter over BLE GATT (usually via the `update-beecounter` helper). The counter stops counting for the transfer |
 | `start_provisioning` | `{}` | Start the Wi-Fi provisioning AP |
 | `reset_wifi` | `{}` | Clear saved Wi-Fi credentials and reboot |
 | `reset_preferences` / `factory_reset` | `{}` | Clear all Preferences and reboot |
@@ -593,7 +594,7 @@ DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_accel_rules.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_ble_sensor_rules.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_sd_import.py
-DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py test-data/test_hiveinside_ota_gate.py
+DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py test-data/test_relay_ota_gate.py
 
 # Firmware host tests (plain g++, no Arduino toolchain)
 ./firmware/host_test/run_tests.sh

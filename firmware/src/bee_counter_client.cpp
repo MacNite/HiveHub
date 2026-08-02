@@ -4,6 +4,7 @@
 #include "bee_counter_client.h"
 
 #if ENABLE_WIRELESS_BEECOUNTER
+#include <string.h>       // strlcpy for the counter's reported version
 #include <NimBLEDevice.h>
 #include "hive_config.h"
 #endif
@@ -21,6 +22,11 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
     if (!snap.present) return;
 
     bc["protocol_version"] = snap.fw_version;   // key kept for server compat
+    // Image version, when the counter reports one. Omitted rather than sent
+    // empty so the server can tell "counter too old to report a version" from
+    // "counter reported an empty string" — the OTA version gate treats an
+    // unknown version as "never block", which is only correct for the former.
+    if (snap.version[0]) bc["version"] = snap.version;
     bc["status_flags"]     = snap.status_flags;
     bc["uptime_s"]         = snap.uptime_s;
     bc["num_gates"]        = snap.num_gates;
@@ -49,6 +55,8 @@ bool parseTrafficJson(const char* json, size_t len, Snapshot& out) {
     }
     out.present       = true;
     out.fw_version    = doc["fw"]            | 0;
+    const char* ver   = doc["ver"]           | "";
+    strlcpy(out.version, ver, sizeof(out.version));
     out.status_flags  = doc["status"]        | 0;
     out.uptime_s      = doc["uptime_s"]      | 0;
     out.num_gates     = doc["num_gates"]     | 0;
@@ -98,8 +106,10 @@ bool readTrafficSlot(const String& mac, Snapshot& out) {
             } else {
                 ok = parseTrafficJson(v.c_str(), v.size(), out);
                 if (ok) {
-                    Serial.printf("[TRAFFIC] %s: in=%lu out=%lu uptime=%us status=0x%02X\n",
-                                  mac.c_str(), (unsigned long)out.total_in,
+                    Serial.printf("[TRAFFIC] %s: fw=%s in=%lu out=%lu uptime=%us status=0x%02X\n",
+                                  mac.c_str(),
+                                  out.version[0] ? out.version : "?",
+                                  (unsigned long)out.total_in,
                                   (unsigned long)out.total_out,
                                   out.uptime_s, out.status_flags);
                 }

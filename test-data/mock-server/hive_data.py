@@ -107,14 +107,12 @@ MEASUREMENT_KEYS: tuple[str, ...] = (
     "bee_counter_1_uptime_s", "bee_counter_1_num_gates", "bee_counter_1_gates_healthy",
     "bee_counter_1_total_in", "bee_counter_1_total_out",
     "bee_counter_1_interval_in", "bee_counter_1_interval_out",
-    "bee_counter_1_glitch_count", "bee_counter_1_busy_retries",
-    "bee_counter_1_read_attempts", "bee_counter_1_latch_succeeded",
+    "bee_counter_1_glitch_count",
     "bee_counter_2_ok", "bee_counter_2_protocol_version", "bee_counter_2_status_flags",
     "bee_counter_2_uptime_s", "bee_counter_2_num_gates", "bee_counter_2_gates_healthy",
     "bee_counter_2_total_in", "bee_counter_2_total_out",
     "bee_counter_2_interval_in", "bee_counter_2_interval_out",
-    "bee_counter_2_glitch_count", "bee_counter_2_busy_retries",
-    "bee_counter_2_read_attempts", "bee_counter_2_latch_succeeded",
+    "bee_counter_2_glitch_count",
 )
 
 
@@ -335,8 +333,6 @@ def generate_measurements(interval_minutes: int = 30) -> list[dict]:
     total_out_a = 41050
     total_in_b = 38800
     total_out_b = 38760
-    read_attempts_a = 90000
-    read_attempts_b = 90000
     glitch_a = 31
     glitch_b = 27
     boot_count = 142
@@ -487,8 +483,6 @@ def generate_measurements(interval_minutes: int = 30) -> list[dict]:
             total_in_a += interval_in_a
             total_out_b += interval_out_b
             total_in_b += interval_in_b
-            read_attempts_a += 1
-            read_attempts_b += 1
             if rng.random() < 0.02:
                 glitch_a += 1
             if rng.random() < 0.02:
@@ -564,9 +558,6 @@ def generate_measurements(interval_minutes: int = 30) -> list[dict]:
                 "bee_counter_1_interval_in": interval_in_a,
                 "bee_counter_1_interval_out": interval_out_a,
                 "bee_counter_1_glitch_count": glitch_a,
-                "bee_counter_1_busy_retries": 0,
-                "bee_counter_1_read_attempts": read_attempts_a,
-                "bee_counter_1_latch_succeeded": True,
                 "bee_counter_2_ok": True,
                 "bee_counter_2_protocol_version": 1,
                 "bee_counter_2_status_flags": 0,
@@ -578,9 +569,6 @@ def generate_measurements(interval_minutes: int = 30) -> list[dict]:
                 "bee_counter_2_interval_in": interval_in_b,
                 "bee_counter_2_interval_out": interval_out_b,
                 "bee_counter_2_glitch_count": glitch_b,
-                "bee_counter_2_busy_retries": 0,
-                "bee_counter_2_read_attempts": read_attempts_b,
-                "bee_counter_2_latch_succeeded": True,
             })
             records.append(m)
             next_id += 1

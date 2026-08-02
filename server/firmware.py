@@ -89,39 +89,75 @@ def latest_hiveinside_release(owner_user_id: Optional[str]):
     return latest_release_for_owner("hiveinside", owner_user_id)
 
 
-# How far back to look for a HiveInside's advertised firmware version. A node
-# that has not been heard for this long is treated as "version unknown" rather
-# than gating an update on a stale number — an update is exactly what a silent
-# node might need.
-HIVEINSIDE_VERSION_LOOKBACK_DAYS = 30
+def latest_beecounter_release(owner_user_id: Optional[str]):
+    """Resolve the HiveTraffic counter OTA image (ESP32-C6).
 
-
-def reported_hiveinside_version(device_id: str, hive_index: int) -> Optional[str]:
-    """The firmware version the HiveInside on `hive_index` last advertised.
-
-    The nRF54 node broadcasts board + version in its scan-response identity
-    record; the HiveHub forwards it as ``hives[].ble.firmware_version``, which is
-    preserved verbatim in ``hive_readings.raw_json``. Returns None when the hive
-    has never reported one (no HiveInside paired, a HiveHub too old to read the
-    identity record, or a node silent for longer than the lookback).
+    Single-board like hiveinside: a beecounter release is always an ESP32-C6
+    application image built from HiveTraffic's BLE environment. Returns a
+    (version, filename, crc32, owner_user_id) tuple, or None.
     """
+    return latest_release_for_owner("beecounter", owner_user_id)
+
+
+# How far back to look for a sub-device's reported firmware version. A node that
+# has not been heard for this long is treated as "version unknown" rather than
+# gating an update on a stale number — an update is exactly what a silent node
+# might need.
+SUBDEVICE_VERSION_LOOKBACK_DAYS = 30
+
+# Backwards-compatible alias (older name).
+HIVEINSIDE_VERSION_LOOKBACK_DAYS = SUBDEVICE_VERSION_LOOKBACK_DAYS
+
+# Where each relay target's reported version lives inside hive_readings.raw_json.
+# Both are nested one level under a per-subsystem object, so one query serves
+# both; the path is data rather than another near-identical function.
+_VERSION_JSON_PATH = {
+    # nRF54 HiveInside: board + version ride in the scan-response identity
+    # record, forwarded as hives[].ble.firmware_version.
+    "hiveinside": ("ble", "firmware_version"),
+    # HiveTraffic: the "ver" field of the measurement JSON, forwarded as
+    # hives[].bee_counter.version.
+    "beecounter": ("bee_counter", "version"),
+}
+
+
+def reported_subdevice_version(target: str, device_id: str,
+                               hive_index: int) -> Optional[str]:
+    """The firmware version the `target` sub-device on `hive_index` last reported.
+
+    Returns None when the hive has never reported one — nothing paired, a HiveHub
+    or sub-device too old to report a version, or a node silent for longer than
+    the lookback. Callers treat that as "never block an update".
+    """
+    obj, key = _VERSION_JSON_PATH[target]
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT raw_json->'ble'->>'firmware_version'
+                SELECT raw_json->%s->>%s
                 FROM hive_readings
                 WHERE device_id = %s
                   AND hive_index = %s
                   AND measured_at > now() - (%s || ' days')::interval
-                  AND raw_json->'ble'->>'firmware_version' IS NOT NULL
+                  AND raw_json->%s->>%s IS NOT NULL
                 ORDER BY measured_at DESC
                 LIMIT 1;
                 """,
-                (device_id, hive_index, HIVEINSIDE_VERSION_LOOKBACK_DAYS),
+                (obj, key, device_id, hive_index,
+                 SUBDEVICE_VERSION_LOOKBACK_DAYS, obj, key),
             )
             row = cur.fetchone()
     return row[0] if row else None
+
+
+def reported_hiveinside_version(device_id: str, hive_index: int) -> Optional[str]:
+    """The firmware version the HiveInside on `hive_index` last advertised."""
+    return reported_subdevice_version("hiveinside", device_id, hive_index)
+
+
+def reported_beecounter_version(device_id: str, hive_index: int) -> Optional[str]:
+    """The firmware version the HiveTraffic counter on `hive_index` last reported."""
+    return reported_subdevice_version("beecounter", device_id, hive_index)
 
 
 def other_board_releases(target: str, owner_user_id: Optional[str],
@@ -277,12 +313,14 @@ def check_firmware(device_id: str, version: str = Query("0.0.0"),
 # Allowed firmware targets, shared by the JSON registration endpoint and the
 # multipart upload endpoint below.
 #
-# "beecounter" is intentionally NOT a target anymore: BeeCounter images were
-# delivered over the wired I2C relay, which was removed (BeeCounter transport
-# is BLE/GATT-only), and no GATT OTA exists yet — so a registered beecounter
-# release could never reach a device. Existing beecounter rows in
-# firmware_releases are ignored (nothing queries that target).
-FIRMWARE_TARGETS = ("hivescale", "hiveinside")
+# "beecounter" is a target again. It briefly was not: its images were delivered
+# over the wired I2C relay, which was removed, and for a while no replacement
+# existed, so a registered release could never reach a device. The GATT relay
+# (update_beecounter) now delivers them, and old rows left in firmware_releases
+# from the wired era are ESP32-C6 images for the same device — but they predate
+# the "ver" field, so a counter running one reports no version and is simply
+# never blocked from updating.
+FIRMWARE_TARGETS = ("hivescale", "hiveinside", "beecounter")
 
 # Board/architecture labels per multi-board target. These MUST match the
 # firmware's board labels (config.h HIVESCALE_BOARD_LABEL; the HiveInside JSON
@@ -292,8 +330,12 @@ FIRMWARE_TARGETS = ("hivescale", "hiveinside")
 #  * hivescale is dual-architecture (Xtensa ESP32 vs RISC-V ESP32-C6).
 #  * hiveinside is single-board: the Nordic nRF54LM20A (a signed Zephyr/MCUboot
 #    image). The deprecated ESP32-C6 prototype was removed from the ecosystem.
+#  * beecounter is single-board: the HiveTraffic ESP32-C6, an application-only
+#    image from its BLE PlatformIO environment (never a merged factory image —
+#    the counter's Update.begin() writes one app slot).
 HIVESCALE_BOARDS = ("esp32", "esp32-c6")
 HIVEINSIDE_BOARDS = ("nrf54lm20a",)
+BEECOUNTER_BOARDS = ("esp32-c6",)
 # Kept for callers that only reason about the hivescale ?board= query.
 FIRMWARE_BOARDS = HIVESCALE_BOARDS
 
@@ -301,6 +343,7 @@ FIRMWARE_BOARDS = HIVESCALE_BOARDS
 BOARDS_BY_TARGET = {
     "hivescale": HIVESCALE_BOARDS,
     "hiveinside": HIVEINSIDE_BOARDS,
+    "beecounter": BEECOUNTER_BOARDS,
 }
 
 

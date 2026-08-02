@@ -492,23 +492,35 @@ uint8_t totalScaleChannels() {
   return (uint8_t)(n > MAX_SCALES ? MAX_SCALES : n);
 }
 
-String hiveInsideMacForSlot(uint8_t slot) {
-  // "hiveinside" is the retired ESP32-C6 prototype's type string. It is matched
-  // too so a registry that still carries one is addressed by the same slot the
-  // portal shows, rather than silently reporting "no HiveInside paired".
-  auto macOf = [](const Hive& h) -> String {
+// Shared slot resolution for the OTA relays: find the hive numbered `slot` and
+// return the MAC of its first pairing accepted by `matches`. A registry whose
+// hives are not numbered 1..N falls back to position `slot - 1`, which is what
+// the legacy per-slot globals addressed.
+template <typename MatchFn>
+static String macForSlot(uint8_t slot, MatchFn matches) {
+  auto macOf = [&](const Hive& h) -> String {
     for (uint8_t b = 0; b < h.bleCount; b++)
-      if (h.ble[b].type == "hiveinside_nrf54" || h.ble[b].type == "hiveinside")
-        return h.ble[b].mac;
+      if (matches(h.ble[b].type)) return h.ble[b].mac;
     return String("");
   };
   if (slot < 1) return String("");
   for (uint8_t i = 0; i < gHiveCount; i++)
     if (gHives[i].index == slot) return macOf(gHives[i]);
-  // No hive carries that index — address the registry by position, which is what
-  // the legacy per-slot globals did.
   if (slot <= gHiveCount) return macOf(gHives[slot - 1]);
   return String("");
+}
+
+String hiveInsideMacForSlot(uint8_t slot) {
+  // "hiveinside" is the retired ESP32-C6 prototype's type string. It is matched
+  // too so a registry that still carries one is addressed by the same slot the
+  // portal shows, rather than silently reporting "no HiveInside paired".
+  return macForSlot(slot, [](const String& t) {
+    return t == "hiveinside_nrf54" || t == "hiveinside";
+  });
+}
+
+String beeCounterMacForSlot(uint8_t slot) {
+  return macForSlot(slot, [](const String& t) { return t == "beecounter"; });
 }
 
 }  // namespace hivecfg

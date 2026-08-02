@@ -22,14 +22,52 @@ Connection-based reads share the `MAX_GATT_READS_PER_CYCLE` per-cycle budget.
 
 ## Firmware updates
 
-There is currently **no remote BeeCounter firmware-update path**:
+Counters are updated **over GATT**, by the same relay that serves HiveInside:
+HiveHub streams the image from the backend straight into the counter's OTA
+characteristics without ever buffering it (`firmware/src/gatt_ota.cpp`, driven by
+`relayFirmwareOverGatt` in `hivehub_network.cpp`). The counter verifies the
+image's size and CRC-32 before it swaps app slots, so a corrupted relay aborts
+and leaves the old firmware running.
 
-* BeeCounter firmware update over I2C has been **removed** (together with the
-  whole wired path). The firmware explicitly rejects the obsolete
-  `update_beecounter` command should an old server still queue one.
-* BeeCounter firmware update over **GATT is planned but not implemented yet**.
-* Until GATT OTA exists, BeeCounter firmware is updated locally (USB) on the
-  counter itself.
+(The old OTA-over-I2C path is gone for good, along with the rest of the wired
+transport. The `update_beecounter` command name is reused, but it names a
+completely different mechanism.)
+
+To update a counter:
+
+1. Build the BLE environment in HiveTraffic
+   (`pio run -e esp32-c6-devkitc-1-ble`) and name the resulting **application**
+   `firmware.bin` — not a merged factory image — `beecounter_esp32-c6_<ver>.bin`.
+2. Upload it in the dashboard with target *HiveTraffic counter*, or `POST` it to
+   the firmware upload endpoint with `target=beecounter`.
+3. Press **Relay to counter** next to the hive, or call
+   `POST /api/v1/devices/{id}/commands/update-beecounter?slot=N`.
+
+The HiveHub picks the command up on its next upload cycle and streams the image;
+the counter reboots and the following measurement read reports the new version.
+
+**The counter stops counting for the whole transfer.** It parks the IR emitters
+and pauses gate polling while writing flash, so every bee crossing during those
+minutes is lost. Relay at night or in poor flying weather.
+
+### Version gate
+
+The relay is refused with `409` unless the release is strictly newer than the
+version the counter reports, mirroring the HiveInside gate. That version is the
+`"ver"` field of the measurement JSON, carried through as
+`hives[].bee_counter.version` and read back out of `hive_readings.raw_json`.
+
+Counters running firmware from before `"ver"` existed report no version. They
+are never gated — there is nothing to compare against — but nothing confirms the
+update took either, beyond the counter coming back and reporting a version at
+all. Pass `force=true` to reflash the same version after an interrupted update.
+
+### No authentication
+
+The counter's OTA service is unauthenticated, exactly like HiveInside's:
+anything in BLE radio range can push an image, and the only protections are
+proximity and the ESP32's own image validation. Signed firmware is worth having
+before treating this as secure against a nearby active attacker.
 
 ## Enabling
 
@@ -59,9 +97,13 @@ All HiveTraffic devices share one service/characteristic (overridable via
 The characteristic returns a compact JSON document — **totals only**:
 
 ```json
-{ "fw":2, "uptime_s":1234, "status":15, "num_gates":24,
+{ "fw":2, "ver":"0.1.0", "uptime_s":1234, "status":15, "num_gates":24,
   "gates_healthy":3, "total_in":100, "total_out":95, "glitches":2 }
 ```
+
+`fw` is the wire-protocol revision; `ver` is the counter's own image version,
+which is what the OTA version gate compares and what confirms an update took.
+They move independently, and `ver` is absent on firmware that predates it.
 
 HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects.
 The wire format is totals-only by design: no latch/reset command exists over

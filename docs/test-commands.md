@@ -210,9 +210,8 @@ curl -X POST http://HOST:31115/api/v1/devices/DEVICE_ID/commands/55/result \
 ## OTA firmware
 
 Register a release. The binary must already exist in `FIRMWARE_DIR`. `target`
-defaults to `hivescale` and may also be `hiveinside`. (`beecounter` is no longer
-a valid target — the wired I2C update relay was removed and BeeCounter OTA over
-BLE/GATT is not implemented yet.)
+defaults to `hivescale` and may also be `hiveinside` or `beecounter` (the
+HiveTraffic counter); both sub-device targets are relayed over BLE GATT.
 
 ```bash
 curl -X POST http://HOST:31115/api/v1/firmware/releases \
