@@ -35,9 +35,9 @@ completely different mechanism.)
 
 To update a counter:
 
-1. Build the BLE environment in HiveTraffic
-   (`pio run -e esp32-c6-devkitc-1-ble`) and name the resulting **application**
-   `firmware.bin` — not a merged factory image — `beecounter_esp32-c6_<ver>.bin`.
+1. Build HiveTraffic (`pio run`). Its `rename_firmware.py` names the resulting
+   **application** image `hivetraffic_esp32-c6_<ver>.bin` — not a merged factory
+   image — so it can be uploaded as-is.
 2. Upload it in the dashboard with target *HiveTraffic counter*, or `POST` it to
    the firmware upload endpoint with `target=beecounter`.
 3. Press **Relay to counter** next to the hive, or call

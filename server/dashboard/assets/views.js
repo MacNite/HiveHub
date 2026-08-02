@@ -1957,7 +1957,7 @@ function renderDevice(root, state) {
   const BOARD_NOTES = {
     hivescale: "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.",
     hiveinside: "HiveInside ships only for the Nordic nRF54LM20A, so the board is fixed and cannot be changed — the release is always stamped nrf54lm20a (name the file like hiveinside_nrf54lm20a_1.0.0.bin). It is relayed to the sensor with “Relay to node”.",
-    beecounter: "The HiveTraffic counter is an ESP32-C6, so the board is fixed (name the file like beecounter_esp32-c6_0.1.0.bin). Upload the application-only firmware.bin from HiveTraffic’s BLE PlatformIO environment — not a merged factory image — then send it with “Relay to counter”.",
+    beecounter: "The HiveTraffic counter is an ESP32-C6, so the board is fixed. HiveTraffic’s build already names its artifact hivetraffic_esp32-c6_<version>.bin — upload that file as-is (it is the application-only image, not a merged factory image), then send it with “Relay to counter”.",
   };
   const syncBoardRow = () => {
     const opts = BOARDS_BY_TARGET[targetSelect.value];
