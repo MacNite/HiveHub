@@ -488,7 +488,8 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 // remaining HiveInside board is the nRF54LM20A, a NON-connectable beacon whose
 // measurements and identity ('H'/'I' manufacturer elements) come entirely from
 // the passive scan above; it accepts a GATT connection only for the OTA relay
-// (HIVEINSIDE_OTA_ENABLED), which lives near the bottom of this file.
+// (HIVEINSIDE_OTA_ENABLED), which lives in src/gatt_ota.cpp and reaches it via
+// the locate-scan helper near the bottom of this file.
 
 // Reduce the accumulated |a| samples to a per-cycle AC RMS/peak (gravity removed).
 static void finalizeAccel(const Accumulator& a, Snapshot& s) {
@@ -768,205 +769,31 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
 }
 
 // ===========================================================================
-// HiveInside firmware-over-BLE relay (GATT client → HiveInside OTA service)
+// Locate-scan helper for the firmware-over-BLE relay (see src/gatt_ota.cpp)
 // ===========================================================================
-// HiveHub streams a firmware image straight from the HTTPS download into the
-// HiveInside OTA characteristics, chunk by chunk, so a >1 MB image never has to
-// fit in the WROOM's RAM. The relayed bytes are an nRF54 MCUboot image, opaque
-// to HiveHub: the relay never runs the ESP32 self-OTA architecture guard
-// (esp_image_header magic / chip-id) on them — it only forwards and CRCs. The
-// HiveInside device buffers nothing either: it writes each chunk to its inactive
-// OTA slot, tracks a running CRC-32 and only swaps slots if the end-to-end CRC
-// the backend computed matches, so a corrupt relay can never brick it.
-//
-// Session lifecycle (all called from network.cpp::updateHiveInside):
-//   otaBegin(mac,size,crc) → otaWrite(chunk)… → otaFinish() → otaCleanup()
-// The NimBLE stack is brought up inside otaBegin and torn down in otaCleanup,
-// mirroring scanPairedSensors so it coexists with the WiFi download.
+// The relay itself moved to gatt_ota.cpp so it can also serve HiveTraffic on
+// devices built without ENABLE_BLE_SCAN. What stays here is the one piece that
+// genuinely needs this file's scan machinery: an nRF54 HiveInside is otherwise
+// only ever a passive beacon, so nothing establishes which address type to
+// connect with until it has been seen advertising.
 #if HIVEINSIDE_OTA_ENABLED
 
-// Must match HiveInside firmware/src/ble_link.cpp.
-static const char* HI_OTA_SVC    = "8e8b0001-7a1c-4b9e-9a2f-1d6e0b9c1a01";
-static const char* HI_OTA_CTRL   = "8e8b0010-7a1c-4b9e-9a2f-1d6e0b9c1a01"; // write: framed control
-static const char* HI_OTA_DATA   = "8e8b0011-7a1c-4b9e-9a2f-1d6e0b9c1a01"; // write: payload stream
-static const char* HI_OTA_STATUS = "8e8b0013-7a1c-4b9e-9a2f-1d6e0b9c1a01"; // read/notify: state+recv+err
-
-// Control opcodes (first byte of a CTRL write).
-static constexpr uint8_t HI_OTA_OP_BEGIN = 0x01; // + size(4 LE) + crc32(4 LE)
-static constexpr uint8_t HI_OTA_OP_END   = 0x03; // finalize + verify + reboot
-static constexpr uint8_t HI_OTA_OP_ABORT = 0x04; // cancel, stay on current image
-
-// Status state byte values (HiveInside ble_link.cpp). >=0x10 is an error.
-static constexpr uint8_t HI_OTA_DONE_STATE = 0x02;
-
-namespace {
-NimBLEClient*               s_otaClient = nullptr;
-NimBLERemoteCharacteristic* s_otaCtrl   = nullptr;
-NimBLERemoteCharacteristic* s_otaData   = nullptr;
-NimBLERemoteCharacteristic* s_otaStatus = nullptr;
-size_t                      s_otaChunk  = 20;   // negotiated DATA payload size
-String                      s_otaLastError;     // reason for the last OTA failure
-}  // namespace
-
-const String& otaLastError() { return s_otaLastError; }
-
-void otaCleanup() {
-  if (s_otaClient) {
-    if (s_otaClient->isConnected()) s_otaClient->disconnect();
-    NimBLEDevice::deleteClient(s_otaClient);
-    s_otaClient = nullptr;
-  }
-  s_otaCtrl = s_otaData = s_otaStatus = nullptr;
-  NimBLEDevice::deinit(false);  // see scanPairedSensorsMulti: deinit(true) panics on the C6 after a scan
-}
-
-bool otaBegin(const String& mac, uint32_t totalLen, uint32_t crc32) {
-  s_otaLastError = "";
+bool locateByScan(const String& mac, uint8_t& addrTypeOut) {
   String m = normalizeMac(mac);
-  if (m.length() == 0 || totalLen == 0) {
-    Serial.println("[HI-OTA] bad arguments");
-    s_otaLastError = "bad OTA arguments (mac/size)";
-    return false;
-  }
-
-  NimBLEDevice::init("");
-  NimBLEDevice::setMTU(247);  // ask for a larger ATT MTU; the device may grant less
-
-  // Short locate scan to learn the device's current address + type, reusing the
-  // same scan callback the measurement path uses. An nRF54 HiveInside advertises
-  // connectably at all times, so this locates it by its identity address; a node
-  // that is powered off or out of range is reported as "not found" and the
-  // backend can re-queue.
-  uint8_t addrType = BLE_ADDR_PUBLIC;
-  bool found = false;
-  g_slot.assign(1, Accumulator{}); g_slot[0].mac = m;
+  if (m.length() == 0) return false;
+  // Reuse the measurement path's scan callback and slot accumulator: a hit sets
+  // found_by_mac and captures the address type off the advertisement.
+  g_slot.assign(1, Accumulator{});
+  g_slot[0].mac = m;
   g_discover = nullptr;
   {
     ScanCallbacks cb;
     NimBLEScan* scan = startScan(cb, 4);  // 4 s is plenty for a connectable peer
     scan->clearResults();
   }
-  if (g_slot[0].found_by_mac) { found = true; addrType = g_slot[0].ble_addr_type; }
-  if (!found) {
-    Serial.printf("[HI-OTA] device %s not found in scan\n", m.c_str());
-    s_otaLastError = "HiveInside not found in scan (powered off or out of range?)";
-    NimBLEDevice::deinit(false);  // see scanPairedSensorsMulti: deinit(true) panics on the C6 after a scan
-    return false;
-  }
-
-  NimBLEAddress addr(m.c_str(), addrType);
-  s_otaClient = NimBLEDevice::createClient();
-  s_otaClient->setConnectTimeout((uint32_t)HIVEINSIDE_GATT_CONNECT_TIMEOUT_S * 1000UL);
-  Serial.printf("[HI-OTA] connecting to %s ...\n", addr.toString().c_str());
-  if (!s_otaClient->connect(addr)) {
-    Serial.println("[HI-OTA] connect failed");
-    s_otaLastError = "BLE connect to HiveInside failed";
-    otaCleanup();
-    return false;
-  }
-
-  NimBLERemoteService* svc = s_otaClient->getService(HI_OTA_SVC);
-  s_otaCtrl   = svc ? svc->getCharacteristic(HI_OTA_CTRL)   : nullptr;
-  s_otaData   = svc ? svc->getCharacteristic(HI_OTA_DATA)   : nullptr;
-  s_otaStatus = svc ? svc->getCharacteristic(HI_OTA_STATUS) : nullptr;
-  if (!svc || !s_otaCtrl || !s_otaData) {
-    Serial.println("[HI-OTA] OTA service/characteristics not found "
-                   "(HiveInside firmware too old for BLE OTA?)");
-    s_otaLastError = "OTA characteristics not found (HiveInside firmware too old?)";
-    otaCleanup();
-    return false;
-  }
-
-  uint16_t mtu = s_otaClient->getMTU();
-  s_otaChunk = (mtu > 3) ? (size_t)(mtu - 3) : 20;
-  if (s_otaChunk > HIVEINSIDE_OTA_CHUNK_MAX) s_otaChunk = HIVEINSIDE_OTA_CHUNK_MAX;
-  Serial.printf("[HI-OTA] connected: MTU=%u chunk=%u image=%u bytes crc=0x%08X\n",
-                (unsigned)mtu, (unsigned)s_otaChunk, (unsigned)totalLen, (unsigned)crc32);
-
-  uint8_t beg[9];
-  beg[0] = HI_OTA_OP_BEGIN;
-  beg[1] = totalLen & 0xFF;        beg[2] = (totalLen >> 8) & 0xFF;
-  beg[3] = (totalLen >> 16) & 0xFF; beg[4] = (totalLen >> 24) & 0xFF;
-  beg[5] = crc32 & 0xFF;           beg[6] = (crc32 >> 8) & 0xFF;
-  beg[7] = (crc32 >> 16) & 0xFF;   beg[8] = (crc32 >> 24) & 0xFF;
-  if (!s_otaCtrl->writeValue(beg, sizeof(beg), /*response=*/true)) {
-    Serial.println("[HI-OTA] BEGIN write failed");
-    s_otaLastError = "OTA BEGIN write failed";
-    otaCleanup();
-    return false;
-  }
+  if (!g_slot[0].found_by_mac) return false;
+  addrTypeOut = g_slot[0].ble_addr_type;
   return true;
-}
-
-// Relay one buffer, splitting it across as many DATA writes as the negotiated
-// chunk size requires. Each write waits for the ATT response, which the device
-// only sends after it has flashed the chunk — natural flow control.
-bool otaWrite(const uint8_t* data, size_t len) {
-  if (!s_otaData) return false;
-  size_t sent = 0;
-  while (sent < len) {
-    size_t n = len - sent;
-    if (n > s_otaChunk) n = s_otaChunk;
-    if (!s_otaData->writeValue(data + sent, n, /*response=*/true)) {
-      Serial.printf("[HI-OTA] DATA write failed after %u bytes\n", (unsigned)sent);
-      s_otaLastError = "OTA DATA write failed (BLE link lost?)";
-      return false;
-    }
-    sent += n;
-  }
-  return true;
-}
-
-// Send END, then poll STATUS for DONE. The device reboots ~1.5 s after it
-// reports DONE, so a dropped link right after a DONE read is still success.
-bool otaFinish() {
-  if (!s_otaCtrl) return false;
-  uint8_t op = HI_OTA_OP_END;
-  if (!s_otaCtrl->writeValue(&op, 1, /*response=*/true)) {
-    Serial.println("[HI-OTA] END write failed");
-    s_otaLastError = "OTA END write failed";
-    return false;
-  }
-  if (!s_otaStatus || !s_otaStatus->canRead()) {
-    Serial.println("[HI-OTA] no STATUS characteristic — assuming success");
-    return true;
-  }
-  for (int i = 0; i < 25; i++) {
-    std::string s = s_otaStatus->readValue();
-    if (s.size() >= 6) {
-      uint8_t state = (uint8_t)s[0];
-      uint8_t err   = (uint8_t)s[5];
-      if (state == HI_OTA_DONE_STATE) {
-        Serial.println("[HI-OTA] device reports DONE — it will reboot into the new image");
-        return true;
-      }
-      if (state >= 0x10) {
-        Serial.printf("[HI-OTA] device reported error state=0x%02X err=0x%02X\n", state, err);
-        s_otaLastError = String("HiveInside rejected image (state=0x") + String(state, HEX) +
-                         " err=0x" + String(err, HEX) + ", CRC/size mismatch?)";
-        return false;
-      }
-    }
-    if (!s_otaClient || !s_otaClient->isConnected()) {
-      // Link dropped before we read DONE; treat as inconclusive failure so the
-      // caller reports it and the backend can re-queue.
-      Serial.println("[HI-OTA] link dropped before DONE confirmation");
-      s_otaLastError = "BLE link dropped before DONE confirmation";
-      return false;
-    }
-    delay(200);
-  }
-  Serial.println("[HI-OTA] timed out waiting for DONE");
-  s_otaLastError = "timed out waiting for HiveInside DONE";
-  return false;
-}
-
-// Best-effort cancel so a partial transfer leaves the device on its old image.
-void otaAbort() {
-  if (s_otaCtrl) {
-    uint8_t op = HI_OTA_OP_ABORT;
-    s_otaCtrl->writeValue(&op, 1, true);
-  }
 }
 
 #endif  // HIVEINSIDE_OTA_ENABLED

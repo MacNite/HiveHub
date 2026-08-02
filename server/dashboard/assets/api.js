@@ -165,6 +165,13 @@ export const api = {
         `?slot=${encodeURIComponent(slot)}${force ? "&force=true" : ""}`,
       { method: "POST" }),
 
+  // Same for the HiveTraffic counter on `slot`. The counter stops counting for
+  // the duration of the transfer, so this is deliberately never automatic.
+  queueBeeCounterUpdate: (deviceId, slot, force) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/beecounter/update` +
+        `?slot=${encodeURIComponent(slot)}${force ? "&force=true" : ""}`,
+      { method: "POST" }),
+
   startCalibration: (deviceId, payload) =>
     req(`/devices/${encodeURIComponent(deviceId)}/calibration/start`, {
       method: "POST",

@@ -505,6 +505,32 @@
 #define HIVEINSIDE_GATT_CLIENT (HIVEINSIDE_OTA_ENABLED)
 
 // ==============================
+// BEECOUNTER FIRMWARE-OVER-BLE (OTA relay)
+// ==============================
+// The HiveTraffic counter exposes the same OTA framing as HiveInside (BEGIN /
+// DATA / END / ABORT + a 6-byte STATUS), so both are driven by one relay —
+// src/gatt_ota.cpp, parameterised over a gattota::Target descriptor. Only the
+// UUIDs differ: HiveTraffic carries its OTA characteristics inside the
+// measurement service (8e8b0101-…) rather than a separate OTA service.
+//
+// Set to 0 to compile the BeeCounter relay out. It is implied off when
+// ENABLE_WIRELESS_BEECOUNTER is 0 — there is nothing to relay to.
+#ifndef BEECOUNTER_OTA_ENABLED
+#define BEECOUNTER_OTA_ENABLED 1
+#endif
+
+// True when the shared GATT OTA relay must be compiled in at all. Deliberately
+// independent of ENABLE_BLE_SCAN: the configurator only turns the scan on for
+// beacon sensors, so a HiveTraffic-only device has it off, and its OTA relay
+// must still exist. The relay reaches HiveTraffic by connecting straight to the
+// paired MAC (as bee_counter_client.cpp does for measurements); only the
+// HiveInside path needs a locate-scan first, and that branch is what carries the
+// ENABLE_BLE_SCAN guard.
+#define GATT_OTA_ENABLED \
+  ((ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED) || \
+   (ENABLE_WIRELESS_BEECOUNTER && BEECOUNTER_OTA_ENABLED))
+
+// ==============================
 // BLE vs WIRED SENSOR ARBITRATION (collision avoidance)
 // ==============================
 // When a paired in-hive BLE sensor reports a capability, the wired sensor that
@@ -567,15 +593,31 @@
 // ANY hive up to MAX_HIVES. All HiveTraffic devices share one
 // service/characteristic UUID.
 //
-// BeeCounter firmware updates: the old OTA-over-I2C relay was deleted. A future
-// BeeCounter OTA will use GATT, but it is NOT implemented yet — there is
-// currently no remote BeeCounter firmware-update path, and the obsolete
-// update_beecounter server command is rejected explicitly (see checkCommands()).
+// BeeCounter firmware updates: the old OTA-over-I2C relay was deleted and
+// replaced by a GATT relay (`update_beecounter`), which streams an image from
+// the backend straight into the counter's OTA characteristics below. See
+// BEECOUNTER_OTA_ENABLED above and src/gatt_ota.cpp.
 #ifndef BEECOUNTER_GATT_SERVICE_UUID
 #define BEECOUNTER_GATT_SERVICE_UUID "8e8b0101-7a1c-4b9e-9a2f-1d6e0b9c1a01"
 #endif
 #ifndef BEECOUNTER_GATT_CHAR_UUID
 #define BEECOUNTER_GATT_CHAR_UUID    "8e8b0102-7a1c-4b9e-9a2f-1d6e0b9c1a01"
+#endif
+// OTA characteristics. Unlike HiveInside these live in the SAME service as the
+// measurement characteristic above — HiveTraffic has only one service.
+// Must match HiveTraffic Firmware/src/ble_link.cpp.
+#ifndef BEECOUNTER_GATT_OTA_CTRL_UUID
+#define BEECOUNTER_GATT_OTA_CTRL_UUID   "8e8b0110-7a1c-4b9e-9a2f-1d6e0b9c1a01"
+#endif
+#ifndef BEECOUNTER_GATT_OTA_DATA_UUID
+#define BEECOUNTER_GATT_OTA_DATA_UUID   "8e8b0111-7a1c-4b9e-9a2f-1d6e0b9c1a01"
+#endif
+#ifndef BEECOUNTER_GATT_OTA_STATUS_UUID
+#define BEECOUNTER_GATT_OTA_STATUS_UUID "8e8b0113-7a1c-4b9e-9a2f-1d6e0b9c1a01"
+#endif
+// Largest DATA chunk (bytes) per GATT write, clamped to the negotiated MTU − 3.
+#ifndef BEECOUNTER_OTA_CHUNK_MAX
+#define BEECOUNTER_OTA_CHUNK_MAX 244
 #endif
 // Seconds to wait for the GATT connection, then for the characteristic read.
 #ifndef BEECOUNTER_GATT_CONNECT_TIMEOUT_S

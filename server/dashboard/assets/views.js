@@ -1494,6 +1494,39 @@ function hiveInsideNodes(state) {
   return nodes;
 }
 
+// The latest value of `key` inside a hive's nested bee_counter object, newest
+// reading first. Unlike the BLE fields there is no flat `bee_counter_N_*`
+// fallback for the version — it rides in raw_json only — so this looks at the
+// nested form alone.
+function beeCounterFieldLatest(state, n, key) {
+  for (const m of [state.latest, ...(state.measurements || [])]) {
+    if (!m) continue;
+    const hv = (m.hives || []).find((h) => Number(h?.index) === Number(n));
+    const v = hv && hv.bee_counter ? hv.bee_counter[key] : null;
+    if (v != null && v !== "") return v;
+  }
+  return null;
+}
+
+// Hives with a paired HiveTraffic counter. Identified by the counter having
+// reported at all — a hive with no counter carries no bee_counter object, while
+// one that is paired but unreachable this cycle still carries ok:false, and
+// that hive should stay listed so a failed relay to it remains visible.
+//
+// `fw` is the counter's image version ("ver"), which only firmware from the
+// version-reporting release onwards sends. An older counter therefore lists
+// with no version — correct, and exactly the case the server never gates.
+function beeCounterNodes(state) {
+  const nodes = [];
+  for (const n of availableHives(state)) {
+    const seen = beeCounterFieldLatest(state, n, "ok") != null;
+    const fw = beeCounterFieldLatest(state, n, "version");
+    if (!seen && !fw) continue;
+    nodes.push({ n, label: hiveLabel(state, n), fw, board: null });
+  }
+  return nodes;
+}
+
 function renderDevice(root, state) {
   const cfg = state.config || {};
   const fw = state.firmware || {};
@@ -1715,121 +1748,166 @@ function renderDevice(root, state) {
   // reverted silently, so the node keeps advertising the old version. The whole
   // section stays out of the card unless a HiveInside node has actually been
   // heard, so a HolyIot/RuuviTag-only device sees nothing new.
-  const insideNodes = hiveInsideNodes(state);
-  // Newest uploaded HiveInside release, shown inline next to each node's running
-  // version as "latest x.y.z". It is flagged as an available update only when it
-  // is strictly newer than what the node advertises — the same comparison the
-  // server applies before it will queue a relay (see check_hiveinside_is_newer),
-  // so the badge never promises an update the backend would refuse.
-  const insideLatest = fw.hiveinside_latest_version || null;
-  const insideFlag = (running) => {
-    if (!insideLatest) return null;
-    const newer = running && versionIsNewer(insideLatest, running);
-    return el("span", {
-      class: `badge ${newer ? "warn" : "muted"}`,
-      title: newer
-        ? `A newer HiveInside release (${insideLatest}) is uploaded and ready to relay`
-        : `Newest uploaded HiveInside release: ${insideLatest}`,
-    }, `latest ${insideLatest}`);
+  // Sub-devices run their own firmware, and both kinds report the version they
+  // are running with every reading — HiveInside in its scan-response identity
+  // record, a HiveTraffic counter in its measurement JSON. Showing that next to
+  // the HiveHub's own version is what makes a relayed update verifiable: an
+  // image a node fails to confirm is reverted silently, so it just keeps
+  // reporting the old version. Each section stays out of the card entirely
+  // unless a node of that kind has actually been heard, so a device with
+  // neither sees nothing new.
+  //
+  // The two relays behave identically — same server gate, same command queue,
+  // same failure reporting — so one builder renders both. `cfg` carries only
+  // what genuinely differs.
+  const buildRelaySection = (cfg) => {
+    const nodes = cfg.nodes;
+    if (!nodes.length) return null;
+    // Newest uploaded release for this target, shown inline next to each node's
+    // running version as "latest x.y.z". It is flagged as an available update
+    // only when it is strictly newer than what the node reports — the same
+    // comparison the server applies before it will queue a relay (see
+    // check_relay_is_newer), so the badge never promises an update the backend
+    // would refuse.
+    const latest = cfg.latestVersion || null;
+    const flag = (running) => {
+      if (!latest) return null;
+      const newer = running && versionIsNewer(latest, running);
+      return el("span", {
+        class: `badge ${newer ? "warn" : "muted"}`,
+        title: newer
+          ? `A newer ${cfg.name} release (${latest}) is uploaded and ready to relay`
+          : `Newest uploaded ${cfg.name} release: ${latest}`,
+      }, `latest ${latest}`);
+    };
+    // Whether a relay would be accepted for this node, mirroring the server gate:
+    // strictly newer than the reported version, and ungated for a node that never
+    // reported one — there is nothing to compare against, and an update may be
+    // exactly what such a node needs.
+    const relayable = (running) =>
+      !!latest && (!running || versionIsNewer(latest, running));
+    // Last relay attempt per hive slot (server: latest_relays). The relay records
+    // a precise cause on failure, but until this was surfaced a node that never
+    // updated looked the same whether the relay was pending, running, or failing
+    // identically every time — so a broken relay could go unnoticed for days
+    // while the version simply never changed.
+    const relays = cfg.relays || {};
+    const relayOf = (n) => relays[String(n)] || null;
+    const RELAY_BADGE = {
+      pending: ["info", "relay queued"],
+      claimed: ["info", "relaying…"],
+      failed: ["danger", "relay failed"],
+    };
+    // A relay already queued or in flight must not be queued again: the transfer
+    // takes minutes, and a second command would simply repeat it.
+    const relayInFlight = (relay) =>
+      !!relay && (relay.status === "pending" || relay.status === "claimed");
+    const relayBadge = (relay) => {
+      const spec = relay && RELAY_BADGE[relay.status];
+      if (!spec) return null;
+      const when = relay.completed_at || relay.created_at;
+      const detail = relay.message ? `: ${relay.message}` : "";
+      return el("span", {
+        class: `badge ${spec[0]}`,
+        title: `Relay of ${relay.version || "firmware"} ${relay.status}${detail} (${fmtDateTime(when)})`,
+      }, spec[1]);
+    };
+    // Start the transfer. Uploading a .bin only REGISTERS a release — this button
+    // is the only thing in the dashboard that actually sends one to a node.
+    // Reload afterwards so the queued command shows up as a "relay queued" badge
+    // and the button disables itself; without that the button re-enables on the
+    // next render and a second click stacks a duplicate relay.
+    const startRelay = async (btn, node) => {
+      if (!window.confirm(
+        `Relay ${cfg.name} ${latest} to ${node.label}?\n\n` +
+        "The HiveHub picks this up on its next upload cycle — normally within " +
+        "about 10 minutes, or whatever send interval this device is set to. It " +
+        "then streams the image over BLE for a few minutes and the node reboots " +
+        "into it. The node must be awake and in range, or the relay fails and " +
+        "has to be queued again." + (cfg.confirmExtra ? `\n\n${cfg.confirmExtra}` : ""))) return;
+      btn.disabled = true;
+      try {
+        const res = await cfg.queue(node.n);
+        const from = res && res.current_version ? `${res.current_version} → ` : "";
+        state.toast(
+          `Relay queued for ${node.label} (${from}${(res && res.version) || latest})`,
+          "success");
+        state.reload();
+      } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
+    };
+    return el("div", {},
+      el("h3", { class: "fw-upload-head" }, `${cfg.heading} `, infoTip(cfg.tip)),
+      el("div", { class: "rows" },
+        ...nodes.map((d) => {
+          const relay = relayOf(d.n);
+          const cell = el("span", { class: "v fw-node-v" },
+            [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "),
+            flag(d.fw), relayBadge(relay));
+          if (relayable(d.fw)) {
+            const busy = relayInFlight(relay);
+            const relayBtn = el("button", {
+              class: "btn small", type: "button",
+              title: busy ? "A relay is already queued for this node" : "",
+            }, cfg.buttonLabel);
+            relayBtn.disabled = busy;
+            relayBtn.addEventListener("click", () => startRelay(relayBtn, d));
+            cell.append(relayBtn);
+          }
+          return el("div", { class: "row" }, el("span", { class: "k" }, d.label), cell);
+        })),
+      // Spell the failure out in full. The badge's tooltip is easy to miss,
+      // and the message names the exact stage that failed — which is the
+      // difference between "move the node closer" and "fix the server".
+      ...nodes
+        .filter((d) => (relayOf(d.n) || {}).status === "failed")
+        .map((d) => {
+          const relay = relayOf(d.n);
+          return el("p", { class: "note" },
+            `${d.label}: last relay failed — ${relay.message || "no reason reported"} ` +
+            `(${relAge(relay.completed_at || relay.created_at)})`);
+        }));
   };
-  // Whether a relay would be accepted for this node, mirroring the server gate
-  // (check_hiveinside_is_newer): strictly newer than the advertised version, and
-  // ungated for a node that never advertised one — there is nothing to compare
-  // against, and an update may be exactly what such a node needs.
-  const insideRelayable = (running) =>
-    !!insideLatest && (!running || versionIsNewer(insideLatest, running));
-  // Last relay attempt per hive slot (server: latest_hiveinside_relays). The
-  // relay records a precise cause on failure, but until this was surfaced a node
-  // that never updated looked the same whether the relay was pending, running,
-  // or failing identically every time — so a broken relay could go unnoticed for
-  // days while the version simply never changed.
-  const insideRelays = fw.hiveinside_relays || {};
-  const relayOf = (n) => insideRelays[String(n)] || null;
-  const RELAY_BADGE = {
-    pending: ["info", "relay queued"],
-    claimed: ["info", "relaying…"],
-    failed: ["danger", "relay failed"],
-  };
-  // A relay already queued or in flight must not be queued again: the transfer
-  // takes minutes, and a second command would simply repeat it.
-  const relayInFlight = (relay) =>
-    !!relay && (relay.status === "pending" || relay.status === "claimed");
-  const relayBadge = (relay) => {
-    const spec = relay && RELAY_BADGE[relay.status];
-    if (!spec) return null;
-    const when = relay.completed_at || relay.created_at;
-    const detail = relay.message ? `: ${relay.message}` : "";
-    return el("span", {
-      class: `badge ${spec[0]}`,
-      title: `Relay of ${relay.version || "firmware"} ${relay.status}${detail} (${fmtDateTime(when)})`,
-    }, spec[1]);
-  };
-  // Start the transfer. Uploading a .bin only REGISTERS a release — this button
-  // is the only thing in the dashboard that actually sends one to a node.
-  // Reload afterwards so the queued command shows up as a "relay queued" badge
-  // and the button disables itself; without that the button re-enables on the
-  // next render and a second click stacks a duplicate relay.
-  const relayToNode = async (btn, node) => {
-    if (!window.confirm(
-      `Relay HiveInside ${insideLatest} to ${node.label}?\n\n` +
-      "The HiveHub picks this up on its next upload cycle — normally within " +
-      "about 10 minutes, or whatever send interval this device is set to. It " +
-      "then streams the image over BLE for a few minutes and the node reboots " +
-      "into it. The node must be awake and in range, or the relay fails and " +
-      "has to be queued again.")) return;
-    btn.disabled = true;
-    try {
-      const res = await state.actions.queueHiveInsideUpdate(node.n);
-      const from = res && res.current_version ? `${res.current_version} → ` : "";
-      state.toast(
-        `Relay queued for ${node.label} (${from}${(res && res.version) || insideLatest})`,
-        "success");
-      state.reload();
-    } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
-  };
-  // What the version column means and how an image actually reaches a node. It
-  // explains the section rather than reporting anything, so it hangs off a "?"
-  // next to the heading instead of taking a paragraph under the node list — the
-  // per-node relay failures below are the part worth keeping on screen.
-  const insideTip = infoTip(
-    "Firmware each in-hive node advertises. Uploading an image with target " +
-    "“HiveInside” below only registers the release — nothing reaches a node " +
-    "until you press “Relay to node”. The HiveHub picks the job up on its next " +
-    "upload cycle (about 10 minutes by default) and streams it over BLE; this " +
-    "version is what confirms the update took.");
-  const insideSection = insideNodes.length
-    ? el("div", {},
-        el("h3", { class: "fw-upload-head" }, "HiveInside nodes ", insideTip),
-        el("div", { class: "rows" },
-          ...insideNodes.map((d) => {
-            const relay = relayOf(d.n);
-            const cell = el("span", { class: "v fw-node-v" },
-              [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "),
-              insideFlag(d.fw), relayBadge(relay));
-            if (insideRelayable(d.fw)) {
-              const busy = relayInFlight(relay);
-              const relayBtn = el("button", {
-                class: "btn small", type: "button",
-                title: busy ? "A relay is already queued for this node" : "",
-              }, "Relay to node");
-              relayBtn.disabled = busy;
-              relayBtn.addEventListener("click", () => relayToNode(relayBtn, d));
-              cell.append(relayBtn);
-            }
-            return el("div", { class: "row" }, el("span", { class: "k" }, d.label), cell);
-          })),
-        // Spell the failure out in full. The badge's tooltip is easy to miss,
-        // and the message names the exact stage that failed — which is the
-        // difference between "move the node closer" and "fix the server".
-        ...insideNodes
-          .filter((d) => (relayOf(d.n) || {}).status === "failed")
-          .map((d) => {
-            const relay = relayOf(d.n);
-            return el("p", { class: "note" },
-              `${d.label}: last relay failed — ${relay.message || "no reason reported"} ` +
-              `(${relAge(relay.completed_at || relay.created_at)})`);
-          }))
-    : null;
+
+  const insideSection = buildRelaySection({
+    nodes: hiveInsideNodes(state),
+    name: "HiveInside",
+    heading: "HiveInside nodes",
+    buttonLabel: "Relay to node",
+    latestVersion: fw.hiveinside_latest_version,
+    relays: fw.hiveinside_relays,
+    queue: (n) => state.actions.queueHiveInsideUpdate(n),
+    // What the version column means and how an image actually reaches a node. It
+    // explains the section rather than reporting anything, so it hangs off a "?"
+    // next to the heading instead of taking a paragraph under the node list —
+    // the per-node relay failures below are the part worth keeping on screen.
+    tip: "Firmware each in-hive node advertises. Uploading an image with target " +
+      "“HiveInside” below only registers the release — nothing reaches a node " +
+      "until you press “Relay to node”. The HiveHub picks the job up on its next " +
+      "upload cycle (about 10 minutes by default) and streams it over BLE; this " +
+      "version is what confirms the update took.",
+  });
+
+  const counterSection = buildRelaySection({
+    nodes: beeCounterNodes(state),
+    name: "HiveTraffic",
+    heading: "HiveTraffic counters",
+    buttonLabel: "Relay to counter",
+    latestVersion: fw.beecounter_latest_version,
+    relays: fw.beecounter_relays,
+    queue: (n) => state.actions.queueBeeCounterUpdate(n),
+    // Worth stating outright rather than burying: unlike a HiveInside relay,
+    // this one costs data. The counter parks its IR emitters and stops polling
+    // its gates while it writes flash, so every bee that passes during the
+    // transfer goes uncounted.
+    confirmExtra: "The counter stops counting bees for the whole transfer — " +
+      "any traffic during those few minutes is lost.",
+    tip: "Firmware each HiveTraffic counter reports. Uploading an image with " +
+      "target “HiveTraffic counter” below only registers the release — nothing " +
+      "reaches a counter until you press “Relay to counter”. The counter stops " +
+      "counting while the image transfers, so relay when traffic is low. A " +
+      "counter running firmware older than about v0.1.0 reports no version and " +
+      "shows none here; it can still be updated.",
+  });
 
   // Firmware upload form. The main-unit ("hivescale") target ships for two
   // boards, and the server refuses a release whose board it cannot determine
@@ -1847,10 +1925,8 @@ function renderDevice(root, state) {
   });
   const targetSelect = el("select", { class: "full" },
     el("option", { value: "hivescale" }, "Main unit (HiveHub / HiveScale)"),
-    el("option", { value: "hiveinside" }, "HiveInside"));
-  // (No BeeCounter target: the wired I2C update relay was removed, and
-  // BeeCounter OTA over BLE/GATT is not implemented yet — the server rejects
-  // beecounter uploads, so the option is gone.)
+    el("option", { value: "hiveinside" }, "HiveInside"),
+    el("option", { value: "beecounter" }, "HiveTraffic counter"));
   // Board options depend on the target: the main unit ships two architectures
   // (Xtensa ESP32 vs RISC-V ESP32-C6), so there it is a real choice. HiveInside
   // exists only for the nRF54LM20A (signed Zephyr image) — a single-entry list,
@@ -1867,6 +1943,9 @@ function renderDevice(root, state) {
     hiveinside: [
       ["nrf54lm20a", "HiveInside (nRF54LM20A)"],
     ],
+    beecounter: [
+      ["esp32-c6", "HiveTraffic counter (ESP32-C6)"],
+    ],
   };
   const boardSelect = el("select", { class: "full" });
   // The board guidance lives in a hover/focus tooltip next to the Board label
@@ -1878,6 +1957,7 @@ function renderDevice(root, state) {
   const BOARD_NOTES = {
     hivescale: "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.",
     hiveinside: "HiveInside ships only for the Nordic nRF54LM20A, so the board is fixed and cannot be changed — the release is always stamped nrf54lm20a (name the file like hiveinside_nrf54lm20a_1.0.0.bin). It is relayed to the sensor with “Relay to node”.",
+    beecounter: "The HiveTraffic counter is an ESP32-C6, so the board is fixed (name the file like beecounter_esp32-c6_0.1.0.bin). Upload the application-only firmware.bin from HiveTraffic’s BLE PlatformIO environment — not a merged factory image — then send it with “Relay to counter”.",
   };
   const syncBoardRow = () => {
     const opts = BOARDS_BY_TARGET[targetSelect.value];
@@ -1903,10 +1983,10 @@ function renderDevice(root, state) {
   const uploadResult = el("div", { hidden: true });
   const showUploadApply = (res) => {
     uploadResult.innerHTML = "";
-    // Only the main unit ("hivescale") is applied from here. A HiveInside release
-    // is NOT relayed automatically on any check-in — it is sent by the "Relay to
-    // node" button in the HiveInside nodes section above, which is per-node
-    // (the relay targets one hive index at a time), so there is nothing
+    // Only the main unit ("hivescale") is applied from here. A sub-device release
+    // (HiveInside, HiveTraffic) is NOT relayed automatically on any check-in — it
+    // is sent by the "Relay to …" button in the matching section above, which is
+    // per-node (the relay targets one hive index at a time), so there is nothing
     // meaningful to apply from the upload form.
     if (!res || res.target !== "hivescale") { uploadResult.hidden = true; return; }
     // Approve flashes the latest release for the DEVICE's board, so a .bin
@@ -1929,7 +2009,7 @@ function renderDevice(root, state) {
   // What "Upload" does lives in a tooltip next to the button rather than a
   // paragraph — the Firmware status above is where the release is installed from.
   const uploadTip = infoTip(
-    "Uploading only registers a new firmware release for this target — it never installs anything on its own. For the main unit, use “Approve & flash” in the Firmware panel; it appears once the upload is newer than what the device runs, and the device flashes on its next check-in. For HiveInside, use “Relay to node” next to the node you want to update.");
+    "Uploading only registers a new firmware release for this target — it never installs anything on its own. For the main unit, use “Approve & flash” in the Firmware panel; it appears once the upload is newer than what the device runs, and the device flashes on its next check-in. For a sub-device, use the “Relay to …” button next to the node or counter you want to update.");
   const uploadForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Firmware .bin"), fileInput),
     el("div", { class: "form-row" }, el("label", {}, "Version"), versionInput),
@@ -1944,7 +2024,7 @@ function renderDevice(root, state) {
     fd.append("file", fileInput.files[0]);
     fd.append("version", versionInput.value.trim());
     fd.append("target", targetSelect.value);
-    if ((targetSelect.value === "hivescale" || targetSelect.value === "hiveinside") && boardSelect.value) {
+    if (BOARDS_BY_TARGET[targetSelect.value] && boardSelect.value) {
       fd.append("board", boardSelect.value);
     }
     uploadBtn.disabled = true;
@@ -1963,10 +2043,11 @@ function renderDevice(root, state) {
     finally { uploadBtn.disabled = false; }
   });
   // One "Firmware" card: status/approve (fwInfo) on top, the versions any
-  // HiveInside nodes report, then the upload form.
+  // sub-devices report, then the upload form.
   const firmwareCard = el("div", { class: "card" },
     fwInfo,
     insideSection,
+    counterSection,
     el("h3", { class: "fw-upload-head" }, "Upload firmware"),
     uploadForm, uploadResult);
 

@@ -19,6 +19,9 @@
 #if ENABLE_BLE_SCAN
 #include "ble_sensor.h"
 #endif
+#if GATT_OTA_ENABLED
+#include "gatt_ota.h"
+#endif
 
 // NTP sync — called once after WiFi connects each wake cycle.
 // Certificate validation requires the device clock to be accurate.
@@ -829,14 +832,8 @@ bool performFirmwareUpdate(const String& firmwareUrl, int expectedSize,
   return true;
 }
 
-// NOTE: the BeeCounter OTA-over-the-wire relay was removed with the rest of the
-// wired BeeCounter path. BeeCounter firmware updates will eventually run over
-// BLE/GATT, but that is NOT implemented yet — there is currently no remote
-// BeeCounter update path. The obsolete update_beecounter command from older
-// servers is rejected explicitly in checkCommands() below.
-
-#if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
-// Relay a HiveInside firmware image to the paired sensor at `mac` over BLE GATT.
+#if GATT_OTA_ENABLED
+// Relay a firmware image to a paired BLE sub-device over GATT.
 //
 // A HiveInside (nRF54LM20A MCUboot) image is >1 MB and will NOT fit in the
 // WROOM's RAM. So this STREAMS: it opens the HTTPS download, opens the BLE OTA
@@ -844,32 +841,38 @@ bool performFirmwareUpdate(const String& firmwareUrl, int expectedSize,
 // characteristic a chunk at a time. The image is forwarded opaquely — this relay
 // path does NOT run the ESP32 self-OTA architecture guard (OtaUpdateSink /
 // esp_image_header chip-id check); that guard is only for the hub's own Xtensa/
-// RISC-V image. The HiveInside device verifies the end-to-end CRC-32 (passed in
+// RISC-V image. The receiving device verifies the end-to-end CRC-32 (passed in
 // BEGIN) before swapping its OTA slot, so a corrupted relay can never brick the
-// sensor — it just aborts and keeps running the old image.
-bool updateHiveInside(const String& mac, const String& firmwareUrl,
-                      uint32_t expectedCrc32, String* outMsg) {
+// sub-device — it just aborts and keeps running the old image.
+//
+// Everything here is target-agnostic: `target` (gatt_ota.h) carries the UUIDs
+// and how to reach the peer. HiveTraffic images are far smaller than HiveInside
+// ones but travel the identical path.
+static bool relayFirmwareOverGatt(const gattota::Target& target,
+                                  const String& mac, const String& firmwareUrl,
+                                  uint32_t expectedCrc32, String* outMsg) {
   auto setMsg = [&](const String& m) { if (outMsg) *outMsg = m; };
+  const char* tag = target.logTag;
 
   if (!connectWifi()) { setMsg("WiFi connect failed"); return false; }
 
   String url = absoluteUrl(firmwareUrl);
-  Serial.print("[HI-OTA] Downloading HiveInside firmware: ");
-  Serial.println(url);
+  Serial.printf("[%s] Downloading %s firmware: %s\n", tag, target.deviceLabel,
+                url.c_str());
 
   WiFiClientSecure secureClient;
   WiFiClient plainClient;
   HTTPClient http;
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   if (!beginHttpRequest(http, url, secureClient, plainClient)) {
-    Serial.println("[HI-OTA] http.begin failed");
+    Serial.printf("[%s] http.begin failed\n", tag);
     setMsg("firmware download init failed");
     return false;
   }
 
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    Serial.printf("[HI-OTA] Download failed. HTTP %d\n", code);
+    Serial.printf("[%s] Download failed. HTTP %d\n", tag, code);
     http.end();
     setMsg(String("firmware download failed (HTTP ") + code + ")");
     return false;
@@ -877,25 +880,25 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl,
 
   int contentLength = http.getSize();
   if (contentLength <= 0 || contentLength > 4 * 1024 * 1024) {
-    Serial.printf("[HI-OTA] Invalid content length %d\n", contentLength);
+    Serial.printf("[%s] Invalid content length %d\n", tag, contentLength);
     http.end();
     setMsg(String("invalid firmware content length ") + contentLength);
     return false;
   }
 
-  // Open the BLE OTA session (locates the device, connects, sends BEGIN). Do
+  // Open the BLE OTA session (locates/connects the device, sends BEGIN). Do
   // this AFTER we have the Content-Length so the device sizes its OTA slot.
-  if (!blesensor::otaBegin(mac, (uint32_t)contentLength, expectedCrc32)) {
-    Serial.println("[HI-OTA] otaBegin failed");
+  if (!gattota::begin(target, mac, (uint32_t)contentLength, expectedCrc32)) {
+    Serial.printf("[%s] session begin failed\n", tag);
     http.end();
-    setMsg(blesensor::otaLastError().length() ? blesensor::otaLastError()
-                                              : String("BLE OTA begin failed"));
+    setMsg(gattota::lastError().length() ? gattota::lastError()
+                                         : String("BLE OTA begin failed"));
     return false;
   }
 
   // Pump the HTTPS body straight into the GATT DATA characteristic. The relay
-  // buffer is tiny (one MTU-sized chunk is written per otaWrite call internally);
-  // 1 KB here just amortises socket reads.
+  // buffer is tiny (one MTU-sized chunk is written per gattota::write call
+  // internally); 1 KB here just amortises socket reads.
   static const size_t RELAY_BUF = 1024;
   uint8_t buf[RELAY_BUF];
   WiFiClient* stream = http.getStreamPtr();
@@ -908,19 +911,19 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl,
     if (avail) {
       int r = stream->readBytes(buf, min(min(avail, RELAY_BUF), (size_t)(contentLength - read)));
       if (r > 0) {
-        if (!blesensor::otaWrite(buf, (size_t)r)) {
-          Serial.printf("[HI-OTA] relay write failed at %d/%d\n", read, contentLength);
+        if (!gattota::write(buf, (size_t)r)) {
+          Serial.printf("[%s] relay write failed at %d/%d\n", tag, read, contentLength);
           relayOk = false;
           break;
         }
         read += r;
         lastData = millis();
         if ((read % (32 * 1024)) < (size_t)r) {
-          Serial.printf("[HI-OTA] relayed %d/%d bytes\n", read, contentLength);
+          Serial.printf("[%s] relayed %d/%d bytes\n", tag, read, contentLength);
         }
       }
     } else if (millis() - lastData > 15000) {
-      Serial.println("[HI-OTA] download stalled");
+      Serial.printf("[%s] download stalled\n", tag);
       relayOk = false;
       stalled = true;
       break;
@@ -932,29 +935,45 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl,
 
   bool ok = false;
   if (relayOk && read == contentLength) {
-    ok = blesensor::otaFinish();
+    ok = gattota::finish();
     if (!ok) {
-      setMsg(blesensor::otaLastError().length() ? blesensor::otaLastError()
-                                                : String("OTA finalize/verify failed"));
+      setMsg(gattota::lastError().length() ? gattota::lastError()
+                                           : String("OTA finalize/verify failed"));
     }
   } else {
-    Serial.printf("[HI-OTA] incomplete relay %d/%d — aborting\n", read, contentLength);
-    blesensor::otaAbort();
+    Serial.printf("[%s] incomplete relay %d/%d — aborting\n", tag, read, contentLength);
+    gattota::abort();
     if (stalled) {
       setMsg(String("firmware download stalled at ") + read + "/" + contentLength + " bytes");
     } else {
-      setMsg(blesensor::otaLastError().length()
-                 ? blesensor::otaLastError()
+      setMsg(gattota::lastError().length()
+                 ? gattota::lastError()
                  : String("incomplete relay ") + read + "/" + contentLength + " bytes");
     }
   }
-  blesensor::otaCleanup();
+  gattota::cleanup();
 
-  if (ok) setMsg("HiveInside OTA completed");
-  Serial.printf("[HI-OTA] result: %s\n", ok ? "OK" : "FAIL");
+  if (ok) setMsg(String(target.deviceLabel) + " OTA completed");
+  Serial.printf("[%s] result: %s\n", tag, ok ? "OK" : "FAIL");
   return ok;
 }
-#endif  // ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
+#endif  // GATT_OTA_ENABLED
+
+#if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
+bool updateHiveInside(const String& mac, const String& firmwareUrl,
+                      uint32_t expectedCrc32, String* outMsg) {
+  return relayFirmwareOverGatt(gattota::HIVEINSIDE, mac, firmwareUrl,
+                               expectedCrc32, outMsg);
+}
+#endif
+
+#if ENABLE_WIRELESS_BEECOUNTER && BEECOUNTER_OTA_ENABLED
+bool updateBeeCounter(const String& mac, const String& firmwareUrl,
+                      uint32_t expectedCrc32, String* outMsg) {
+  return relayFirmwareOverGatt(gattota::BEECOUNTER, mac, firmwareUrl,
+                               expectedCrc32, outMsg);
+}
+#endif
 
 void checkForOtaUpdate() {
   if (!connectNetwork()) {
@@ -1046,17 +1065,18 @@ void checkCommands() {
   } else if (type == "check_ota" || type == "ota_update") {
     postCommandResult(commandId, true, "OTA check started");
     checkForOtaUpdate();
-  } else if (type == "update_beecounter") {
-    // Obsolete command from an older server. The wired I2C BeeCounter path —
-    // including its OTA relay — was removed, and BeeCounter OTA over BLE/GATT
-    // is not implemented yet. Fail EXPLICITLY (never pretend to have updated,
-    // never touch the bus) so the queued command surfaces as failed in the
-    // backend instead of hanging or faking success.
-    Serial.println("[CMD] Rejecting obsolete update_beecounter command (wired I2C BeeCounter support removed)");
-    postCommandResult(commandId, false,
-                      "update_beecounter is no longer supported: the wired I2C BeeCounter "
-                      "path was removed and BeeCounter OTA over BLE/GATT is not implemented yet");
   }
+#if !(ENABLE_WIRELESS_BEECOUNTER && BEECOUNTER_OTA_ENABLED)
+  else if (type == "update_beecounter") {
+    // This build has no counter to relay to (or the relay was compiled out).
+    // Fail EXPLICITLY — never pretend to have updated — so the queued command
+    // surfaces as failed in the backend instead of hanging or faking success.
+    Serial.println("[CMD] Rejecting update_beecounter: BeeCounter OTA is not compiled into this build");
+    postCommandResult(commandId, false,
+                      "update_beecounter is not supported by this firmware build "
+                      "(rebuild with ENABLE_WIRELESS_BEECOUNTER=1)");
+  }
+#endif
 #if ENABLE_BLE_SCAN && HIVEINSIDE_OTA_ENABLED
   else if (type == "update_hiveinside") {
     // payload: { "slot": 1..MAX_HIVES, "url": "/firmware/hiveinside-x.y.bin", "crc32": <uint32> }
@@ -1095,6 +1115,40 @@ void checkCommands() {
                         resultMsg.length() ? resultMsg
                                            : (ok ? "HiveInside OTA completed"
                                                  : "HiveInside OTA failed"));
+    }
+  }
+#endif
+#if ENABLE_WIRELESS_BEECOUNTER && BEECOUNTER_OTA_ENABLED
+  else if (type == "update_beecounter") {
+    // payload: { "slot": 1..MAX_HIVES, "url": "/firmware/beecounter-x.y.bin", "crc32": <uint32> }
+    // Same shape and same resolution rules as update_hiveinside above: the MAC
+    // comes from the local hive registry, so the backend never needs to know
+    // the device address, and `slot` is the hive index rather than one of two
+    // legacy globals.
+    int slot = payload["slot"] | 1;
+    String mac = hivecfg::beeCounterMacForSlot((uint8_t)slot);
+    String fwUrl = payload["url"] | "";
+    // `| 0U`, never `| 0` — see the note on the HiveInside handler above. A
+    // signed-int default makes is<int>() false for any CRC above 2147483647,
+    // silently substituting 0 and making the relay fail on roughly half of all
+    // images with a bogus CRC mismatch.
+    uint32_t crc = payload["crc32"] | 0U;
+    if (fwUrl.length() == 0) {
+      postCommandResult(commandId, false, "update_beecounter missing url");
+    } else if (mac.length() == 0) {
+      postCommandResult(commandId, false, String("No HiveTraffic counter paired in slot ") + slot);
+    } else {
+      // Report the FINAL result, not "started": the relay is synchronous and
+      // the counter stops counting throughout, so the outcome matters and is
+      // only known once updateBeeCounter returns.
+      String resultMsg;
+      bool ok = updateBeeCounter(mac, fwUrl, crc, &resultMsg);
+      Serial.printf("[BC-OTA] update result: %s (%s)\n",
+                    ok ? "OK" : "FAIL", resultMsg.c_str());
+      postCommandResult(commandId, ok,
+                        resultMsg.length() ? resultMsg
+                                           : (ok ? "HiveTraffic counter OTA completed"
+                                                 : "HiveTraffic counter OTA failed"));
     }
   }
 #endif

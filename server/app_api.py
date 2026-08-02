@@ -7,7 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from auth import require_device_role, require_hivepal_service_key, require_user_id
-from commands import check_hiveinside_slot, create_command, queue_relay_firmware_update
+from commands import check_relay_slot, create_command, queue_relay_firmware_update
 from db import get_conn, hash_claim_code
 from devices import (
     apply_device_channels,
@@ -515,7 +515,7 @@ def queue_hiveinside_update_from_app(
     two. The relay is refused with 409 when the release is not newer than the
     version that node advertises; ``force=true`` relays it regardless.
     """
-    check_hiveinside_slot(slot)
+    check_relay_slot(slot)
     require_device_role(user_id, device_id, ["owner", "admin"])
     result = queue_relay_firmware_update(
         device_id, "hiveinside", "update_hiveinside", slot, force
@@ -530,8 +530,34 @@ def queue_hiveinside_update_from_app(
     }
 
 
-# NOTE: the app-facing update-beecounter endpoint was removed together with the
-# wired I2C BeeCounter path. BeeCounter data collection is BLE/GATT-only, and a
-# BeeCounter OTA over BLE/GATT is planned but not implemented yet — there is
-# currently no supported remote BeeCounter firmware-update path for HivePal to
-# trigger.
+@router.post(
+    "/api/v1/app/devices/{device_id}/commands/update-beecounter",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def queue_beecounter_update_from_app(
+    device_id: str,
+    slot: int = Query(1),
+    force: bool = Query(False),
+    user_id: str = Depends(require_user_id),
+):
+    """App-facing trigger for a HiveTraffic counter OTA relay.
+
+    Same contract as update-hiveinside above: uploading a binary only registers
+    the release, and this is what actually queues the relay. The counter stops
+    counting bees for the duration of the transfer, so the 409 version gate
+    matters more here than it does for HiveInside — a redundant relay costs real
+    traffic data. ``force=true`` relays anyway.
+    """
+    check_relay_slot(slot)
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    result = queue_relay_firmware_update(
+        device_id, "beecounter", "update_beecounter", slot, force
+    )
+    return {
+        "status": result["status"],
+        "id": result["id"],
+        "command_type": "update_beecounter",
+        "payload": {"slot": slot},
+        "version": result.get("version"),
+        "current_version": result.get("current_version"),
+    }

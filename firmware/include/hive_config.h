@@ -137,6 +137,13 @@ uint8_t totalScaleChannels();
 // pointed an OTA relay straight at the wrong device.
 String hiveInsideMacForSlot(uint8_t slot);
 
+// The paired HiveTraffic counter's MAC for hive index `slot`, or "" when that
+// hive has no counter. Same index-then-position resolution as
+// hiveInsideMacForSlot, matching only "beecounter" pairings. Used by the
+// update_beecounter OTA relay; the measurement path walks the registry itself
+// (bee_counter_client.cpp::bleRunCycleRegistry) rather than going slot by slot.
+String beeCounterMacForSlot(uint8_t slot);
+
 // Format/parse a DS18B20 ROM as 16 hex chars ("28FF64...") for the portal/NVS.
 String   romToHex(const uint8_t rom[8]);
 bool     romFromHex(const String& hex, uint8_t rom[8]);

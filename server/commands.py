@@ -10,10 +10,9 @@ from config import PUBLIC_BASE_URL
 from db import get_conn
 from devices import ensure_device_config, get_device_owner_id
 from firmware import (
-    latest_hiveinside_release,
     latest_release_for_owner,
     parse_version,
-    reported_hiveinside_version,
+    reported_subdevice_version,
 )
 from schemas import MAX_HIVES, DeviceCommandIn, DeviceCommandResult
 
@@ -35,7 +34,21 @@ MAX_COMMAND_ATTEMPTS = 3
 # version gate already refuses a pointless one. Everything else is left alone:
 # silently repeating a factory_reset or reset_wifi because a result POST was lost
 # would destroy device state the operator asked for exactly once.
-RETRYABLE_COMMAND_TYPES = ("update_hiveinside",)
+RETRYABLE_COMMAND_TYPES = ("update_hiveinside", "update_beecounter")
+
+# Relay targets, and the command each is delivered by. Both stream an image to a
+# BLE sub-device through the same firmware path, differing only in UUIDs, so
+# everything below is keyed off this rather than duplicated per target.
+RELAY_COMMAND_TYPES = {
+    "hiveinside": "update_hiveinside",
+    "beecounter": "update_beecounter",
+}
+
+# What to call each target when explaining a refusal to a human.
+RELAY_LABELS = {
+    "hiveinside": "HiveInside",
+    "beecounter": "HiveTraffic counter",
+}
 
 
 def expire_stale_claimed_commands() -> None:
@@ -110,7 +123,7 @@ def queue_command(device_id: str, payload: DeviceCommandIn):
     return {"status": result["status"], "id": result["id"]}
 
 
-def check_hiveinside_slot(slot: int) -> int:
+def check_relay_slot(slot: int) -> int:
     """Validate the hive index an OTA relay targets.
 
     `slot` is the hive index (1..MAX_HIVES): the HiveHub resolves it against its
@@ -125,33 +138,45 @@ def check_hiveinside_slot(slot: int) -> int:
     return slot
 
 
-def check_hiveinside_is_newer(device_id: str, slot: int, version: str,
-                              force: bool) -> Optional[str]:
-    """Refuse to relay a HiveInside image that is not newer than what runs there.
+# Backwards-compatible alias (older name).
+check_hiveinside_slot = check_relay_slot
 
-    The node advertises its running version, so a relay that would install the
-    same or an older build is a pointless several-minute BLE transfer plus a
-    reboot of a healthy hive sensor. It is refused with 409 rather than queued.
+
+def check_relay_is_newer(target: str, device_id: str, slot: int, version: str,
+                         force: bool) -> Optional[str]:
+    """Refuse to relay an image that is not newer than what the sub-device runs.
+
+    The node reports its running version, so a relay that would install the same
+    or an older build is a pointless multi-minute BLE transfer plus a reboot of a
+    healthy device — and for a HiveTraffic counter it also stops the counting for
+    the duration. It is refused with 409 rather than queued.
 
     Returns the version currently reported for the slot (None when unknown). An
-    unknown version never blocks: a node that has never advertised one cannot be
+    unknown version never blocks: a node that has never reported one cannot be
     compared against, and an update may be exactly what it needs. `force` skips
     the comparison entirely, for reflashing the same version after a reverted or
     interrupted update.
     """
-    current = reported_hiveinside_version(device_id, slot)
+    current = reported_subdevice_version(target, device_id, slot)
     if force or current is None:
         return current
     if parse_version(version) > parse_version(current):
         return current
+    label = RELAY_LABELS[target]
     raise HTTPException(
         status_code=409,
         detail=(
-            f"HiveInside on hive {slot} already runs {current}; release {version} "
+            f"{label} on hive {slot} already runs {current}; release {version} "
             f"is not newer. Upload a higher version, or pass force=true to relay "
             f"it anyway."
         ),
     )
+
+
+def check_hiveinside_is_newer(device_id: str, slot: int, version: str,
+                              force: bool) -> Optional[str]:
+    """Backwards-compatible wrapper (older name) for the hiveinside target."""
+    return check_relay_is_newer("hiveinside", device_id, slot, version, force)
 
 
 def queue_relay_firmware_update(device_id: str, target: str,
@@ -171,42 +196,34 @@ def queue_relay_firmware_update(device_id: str, target: str,
     back to a global release, so a sub-device only ever receives an image its
     owner published or an official build.
 
-    For ``hiveinside`` the image is the latest active HiveInside release: the
-    HiveInside node is now unambiguously the nRF54LM20A, so no per-board matching
-    is needed (the ESP32-C6 prototype was removed from the ecosystem). That relay
-    is additionally gated on the version the target node advertises — see
-    check_hiveinside_is_newer — so only a genuinely newer image is queued.
+    Both relay targets are single-board, so no per-board matching is needed:
+    ``hiveinside`` is unambiguously the nRF54LM20A and ``beecounter`` the
+    HiveTraffic ESP32-C6. Both are additionally gated on the version the target
+    node reports — see check_relay_is_newer — so only a genuinely newer image is
+    queued.
     """
     owner_id = get_device_owner_id(device_id)
-    if target == "hiveinside":
-        check_hiveinside_slot(slot)
-        r = latest_hiveinside_release(owner_id)
-    else:
-        r = latest_release_for_owner(target, owner_id)
+    is_relay = target in RELAY_COMMAND_TYPES
+    if is_relay:
+        check_relay_slot(slot)
+    r = latest_release_for_owner(target, owner_id)
     if not r:
         raise HTTPException(status_code=404, detail=f"No active {target} firmware release")
     version, filename, crc32 = r[0], r[1], r[2]
     current = None
-    if target == "hiveinside":
-        current = check_hiveinside_is_newer(device_id, slot, version, force)
+    if is_relay:
+        current = check_relay_is_newer(target, device_id, slot, version, force)
     url = f"{PUBLIC_BASE_URL}/firmware/{filename}" if PUBLIC_BASE_URL else f"/firmware/{filename}"
     result = create_command(device_id, DeviceCommandIn(
         command_type=command_type,
         payload={"slot": slot, "url": url, "version": version, "crc32": int(crc32 or 0)},
     ))
     # Echo what the relay will replace, so a caller can tell "0.4.0 -> 0.4.1" from
-    # "unknown -> 0.4.1" (a node that never advertised a version) without a second
+    # "unknown -> 0.4.1" (a node that never reported a version) without a second
     # request.
-    if target == "hiveinside":
+    if is_relay:
         result = {**result, "version": version, "current_version": current, "slot": slot}
     return result
-
-
-# NOTE: the update-beecounter endpoint was removed together with the wired I2C
-# BeeCounter path. The firmware cannot relay BeeCounter images anymore (it
-# rejects the obsolete update_beecounter command explicitly), and a BeeCounter
-# OTA over BLE/GATT is planned but NOT implemented yet — so there is currently
-# no supported remote BeeCounter firmware-update path.
 
 
 @router.post("/api/v1/devices/{device_id}/commands/update-hiveinside",
@@ -225,18 +242,38 @@ def queue_hiveinside_update(device_id: str, slot: int = Query(1),
     )
 
 
-def latest_hiveinside_relays(device_id: str) -> dict:
-    """The most recent ``update_hiveinside`` command per hive slot.
+@router.post("/api/v1/devices/{device_id}/commands/update-beecounter",
+          dependencies=[Depends(require_api_key)])
+def queue_beecounter_update(device_id: str, slot: int = Query(1),
+                            force: bool = Query(False)):
+    """Queue a relay of the active HiveTraffic firmware to the bee counter on
+    hive ``slot`` over BLE GATT.
+
+    Same contract as update-hiveinside above. Note the counter stops counting
+    bees for the duration of the transfer — it parks the IR emitters and pauses
+    gate polling while writing flash — so an unnecessary relay costs real data,
+    which is what the version gate exists to prevent. Refused with 409 when the
+    release is not newer than the version the counter reports; ``force=true``
+    relays it regardless."""
+    return queue_relay_firmware_update(
+        device_id, "beecounter", "update_beecounter", slot, force
+    )
+
+
+def latest_relays(device_id: str, target: str) -> dict:
+    """The most recent relay command for `target` per hive slot.
 
     The relay already records a specific cause in ``result`` on failure
     (``invalid firmware content length -1``, ``HiveInside not found in scan``,
-    ``No HiveInside paired in slot N`` …), but nothing surfaced it: a node that
-    never updated looked identical whether the relay was queued and pending,
-    still running, or failing every single attempt with the same error. Feeding
-    this to the dashboard makes the difference visible without a database query.
+    ``No HiveTraffic counter paired in slot N`` …), but nothing surfaced it: a
+    node that never updated looked identical whether the relay was queued and
+    pending, still running, or failing every single attempt with the same error.
+    Feeding this to the dashboard makes the difference visible without a database
+    query.
 
     Keyed by slot as a string, since it comes from the JSON payload.
     """
+    command_type = RELAY_COMMAND_TYPES[target]
     # Sweep first, so an abandoned relay reads as "timed out" (or is back on the
     # queue) rather than showing "relaying…" indefinitely.
     expire_stale_claimed_commands()
@@ -248,10 +285,10 @@ def latest_hiveinside_relays(device_id: str) -> dict:
                        payload->>'slot', status, result->>'message',
                        payload->>'version', created_at, completed_at
                 FROM device_commands
-                WHERE device_id = %s AND command_type = 'update_hiveinside'
+                WHERE device_id = %s AND command_type = %s
                 ORDER BY payload->>'slot', created_at DESC;
                 """,
-                (device_id,),
+                (device_id, command_type),
             )
             rows = cur.fetchall()
     return {
@@ -264,6 +301,15 @@ def latest_hiveinside_relays(device_id: str) -> dict:
         }
         for r in rows if r[0]
     }
+
+
+def latest_hiveinside_relays(device_id: str) -> dict:
+    """Backwards-compatible wrapper (older name)."""
+    return latest_relays(device_id, "hiveinside")
+
+
+def latest_beecounter_relays(device_id: str) -> dict:
+    return latest_relays(device_id, "beecounter")
 
 
 @router.get("/api/v1/devices/{device_id}/commands/next", dependencies=[Depends(require_device_key)])

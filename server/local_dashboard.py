@@ -38,6 +38,7 @@ from auth import (
 )
 from commands import (
     create_command,
+    latest_beecounter_relays,
     latest_hiveinside_relays,
     queue_relay_firmware_update,
 )
@@ -67,6 +68,7 @@ from devices import (
 from firmware import (
     get_approved_firmware_version,
     get_device_board,
+    latest_beecounter_release,
     latest_hiveinside_release,
     latest_release_for_owner,
     other_board_releases,
@@ -955,6 +957,10 @@ def local_firmware_status(device_id: str):
     # advertises. This is release metadata only — relaying it is a separate,
     # explicit command (see docs/hiveinside-ble-sensor.md).
     hiveinside_release = latest_hiveinside_release(owner_id)
+    # Same, for the HiveTraffic counters. A counter reports its version only from
+    # the firmware that added the "ver" field onwards, so an older one shows no
+    # running version and is never gated — see check_relay_is_newer.
+    beecounter_release = latest_beecounter_release(owner_id)
     return {
         "device_id": device_id,
         "target": "hivescale",
@@ -962,6 +968,8 @@ def local_firmware_status(device_id: str):
         # Last relay attempt per hive slot, so the node list can show "queued" /
         # "relaying" / the exact failure instead of silently looking unchanged.
         "hiveinside_relays": latest_hiveinside_relays(device_id),
+        "beecounter_latest_version": beecounter_release[0] if beecounter_release else None,
+        "beecounter_relays": latest_beecounter_relays(device_id),
         "current_version": current_version,
         "latest_version": latest_version,
         "latest_is_official": latest_is_official,
@@ -1039,6 +1047,22 @@ def local_queue_hiveinside_update(
     """
     return queue_relay_firmware_update(
         device_id, "hiveinside", "update_hiveinside", slot, force
+    )
+
+
+@router.post("/api/v1/local/devices/{device_id}/beecounter/update", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
+def local_queue_beecounter_update(
+    device_id: str, slot: int = Query(...), force: bool = Query(False)
+):
+    """Queue a BLE relay of the active HiveTraffic release to the counter on ``slot``.
+
+    The HiveInside endpoint above, for the other relay target, through the same
+    shared helper — so the release lookup, slot bounds check and version gate
+    behave identically (400 / 404 / 409). The counter stops counting for the
+    duration of the transfer, which is why the gate is not skipped by default.
+    """
+    return queue_relay_firmware_update(
+        device_id, "beecounter", "update_beecounter", slot, force
     )
 
 

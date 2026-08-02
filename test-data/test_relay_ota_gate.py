@@ -1,14 +1,17 @@
-"""Tests for the HiveInside OTA relay gating (server/commands.py).
+"""Tests for the sub-device OTA relay gating (server/commands.py).
 
-Run: python3 -m pytest test-data/test_hiveinside_ota_gate.py
- or: PYTHONPATH=server python3 test-data/test_hiveinside_ota_gate.py
+Covers both relay targets — HiveInside (nRF54 node) and beecounter (HiveTraffic
+counter) — which share one code path and must therefore share one set of rules.
+
+Run: python3 -m pytest test-data/test_relay_ota_gate.py
+ or: PYTHONPATH=server python3 test-data/test_relay_ota_gate.py
 
 Covers:
   * the slot check — `slot` is a hive index, so every hive (1..MAX_HIVES) can be
     targeted, not just the two the legacy bleSensorMac0/1 globals could reach;
-  * the version gate — a release is only relayed when it is strictly newer than
-    the version the node advertises, with an unknown version never blocking and
-    `force` overriding the comparison;
+  * the version gate, FOR EVERY TARGET — a release is only relayed when it is
+    strictly newer than the version the node reports, with an unknown version
+    never blocking and `force` overriding the comparison;
   * the local dashboard's relay endpoint — that one exists at all, and that it
     goes through the same shared helper (and therefore the same gate) as the
     master-key and HivePal callers;
@@ -53,58 +56,98 @@ def check(label, cond):
         _failures += 1
 
 
-def gate(current, release, force=False):
-    """Run the version gate with `current` as the node's advertised version."""
-    with mock.patch.object(commands, "reported_hiveinside_version", return_value=current):
-        return commands.check_hiveinside_is_newer("dev-1", 1, release, force)
+# Every relay target, so a new one cannot be added without inheriting the rules
+# below. Keyed the same way commands.py keys its own dispatch.
+TARGETS = tuple(commands.RELAY_COMMAND_TYPES)
+
+
+def gate(current, release, force=False, target="hiveinside"):
+    """Run the version gate with `current` as the node's reported version."""
+    with mock.patch.object(commands, "reported_subdevice_version", return_value=current):
+        return commands.check_relay_is_newer(target, "dev-1", 1, release, force)
 
 
 def test_every_hive_index_is_a_valid_slot():
     for n in (1, 2, 3, 9, MAX_HIVES):
-        commands.check_hiveinside_slot(n)
+        commands.check_relay_slot(n)
         check(f"slot {n} accepted", True)
 
 
 def test_out_of_range_slots_are_rejected():
     for bad in (0, -1, MAX_HIVES + 1):
         try:
-            commands.check_hiveinside_slot(bad)
+            commands.check_relay_slot(bad)
             check(f"slot {bad} rejected", False)
         except HTTPException as e:
             check(f"slot {bad} rejected with 400", e.status_code == 400)
 
 
 def test_newer_release_passes_and_reports_what_it_replaces():
-    # The returned value is the version being replaced, so a caller can render
-    # "0.4.0 -> 0.4.1" without a second request.
-    check("0.4.0 -> 0.4.1 allowed", gate("0.4.0", "0.4.1") == "0.4.0")
-    # Numeric, not lexical: 10 > 9.
-    check("0.9.9 -> 0.10.0 allowed", gate("0.9.9", "0.10.0") == "0.9.9")
-    # Uneven component counts compare as tuples.
-    check("0.4 -> 0.4.1 allowed", gate("0.4", "0.4.1") == "0.4")
+    for t in TARGETS:
+        # The returned value is the version being replaced, so a caller can render
+        # "0.4.0 -> 0.4.1" without a second request.
+        check(f"[{t}] 0.4.0 -> 0.4.1 allowed", gate("0.4.0", "0.4.1", target=t) == "0.4.0")
+        # Numeric, not lexical: 10 > 9.
+        check(f"[{t}] 0.9.9 -> 0.10.0 allowed", gate("0.9.9", "0.10.0", target=t) == "0.9.9")
+        # Uneven component counts compare as tuples.
+        check(f"[{t}] 0.4 -> 0.4.1 allowed", gate("0.4", "0.4.1", target=t) == "0.4")
 
 
 def test_same_or_older_release_is_refused():
-    for current, release in (("0.4.1", "0.4.1"), ("0.4.1", "0.4.0"), ("1.0.0", "0.9.9")):
+    for t in TARGETS:
+        for current, release in (("0.4.1", "0.4.1"), ("0.4.1", "0.4.0"), ("1.0.0", "0.9.9")):
+            try:
+                gate(current, release, target=t)
+                check(f"[{t}] {current} -> {release} refused", False)
+            except HTTPException as e:
+                check(
+                    f"[{t}] {current} -> {release} refused with 409 naming both versions",
+                    e.status_code == 409 and current in e.detail and release in e.detail,
+                )
+
+
+def test_refusal_names_the_device_it_is_about():
+    """A 409 that says "HiveInside" while the operator pressed relay on a bee
+    counter is worse than no message. The label comes from RELAY_LABELS."""
+    for t in TARGETS:
         try:
-            gate(current, release)
-            check(f"{current} -> {release} refused", False)
+            gate("0.4.1", "0.4.1", target=t)
+            check(f"[{t}] refused", False)
         except HTTPException as e:
-            check(
-                f"{current} -> {release} refused with 409 naming both versions",
-                e.status_code == 409 and current in e.detail and release in e.detail,
-            )
+            check(f"[{t}] 409 names the target device",
+                  commands.RELAY_LABELS[t] in e.detail)
 
 
 def test_unknown_version_never_blocks():
-    # A node that never advertised a version cannot be compared against — and an
-    # update may be exactly what a silent node needs.
-    check("unknown current allowed", gate(None, "0.4.1") is None)
+    # A node that never reported a version cannot be compared against — and an
+    # update may be exactly what a silent node needs. A HiveTraffic counter on
+    # firmware that predates the "ver" field is exactly this case.
+    for t in TARGETS:
+        check(f"[{t}] unknown current allowed", gate(None, "0.4.1", target=t) is None)
 
 
 def test_force_overrides_the_comparison():
-    check("force allows the same version", gate("0.4.1", "0.4.1", force=True) == "0.4.1")
-    check("force allows an older release", gate("0.5.0", "0.4.1", force=True) == "0.5.0")
+    for t in TARGETS:
+        check(f"[{t}] force allows the same version",
+              gate("0.4.1", "0.4.1", force=True, target=t) == "0.4.1")
+        check(f"[{t}] force allows an older release",
+              gate("0.5.0", "0.4.1", force=True, target=t) == "0.5.0")
+
+
+def test_every_relay_target_is_queueable_and_retryable():
+    """A target that is not in all three places is unreachable or unrecoverable.
+
+    A missing schema literal makes create_command reject the row outright; a
+    missing RETRYABLE entry means an abandoned relay fails permanently on the
+    first lost result POST instead of going back on the queue.
+    """
+    from schemas import DeviceCommandIn
+
+    for t, cmd in commands.RELAY_COMMAND_TYPES.items():
+        check(f"[{t}] {cmd} is an accepted command type",
+              DeviceCommandIn(command_type=cmd).command_type == cmd)
+        check(f"[{t}] {cmd} is retryable", cmd in commands.RETRYABLE_COMMAND_TYPES)
+        check(f"[{t}] has a human label", bool(commands.RELAY_LABELS.get(t)))
 
 
 class _FakeCursor:
@@ -303,15 +346,22 @@ def test_dashboard_relay_delegates_through_the_shared_gate():
     """
     import local_dashboard
 
-    with mock.patch.object(local_dashboard, "queue_relay_firmware_update") as queue:
-        queue.return_value = {"id": 7, "status": "pending"}
-        result = local_dashboard.local_queue_hiveinside_update("dev-1", slot=3, force=True)
+    endpoints = {
+        "hiveinside": local_dashboard.local_queue_hiveinside_update,
+        "beecounter": local_dashboard.local_queue_beecounter_update,
+    }
+    for t, fn in endpoints.items():
+        with mock.patch.object(local_dashboard, "queue_relay_firmware_update") as queue:
+            queue.return_value = {"id": 7, "status": "pending"}
+            result = fn("dev-1", slot=3, force=True)
 
-    check("returns the helper's result unchanged", result == {"id": 7, "status": "pending"})
-    check(
-        "delegates with the hiveinside target, command type, slot and force",
-        queue.call_args == mock.call("dev-1", "hiveinside", "update_hiveinside", 3, True),
-    )
+        check(f"[{t}] returns the helper's result unchanged",
+              result == {"id": 7, "status": "pending"})
+        check(
+            f"[{t}] delegates with the target, command type, slot and force",
+            queue.call_args == mock.call(
+                "dev-1", t, commands.RELAY_COMMAND_TYPES[t], 3, True),
+        )
 
 
 def test_large_crc_survives_into_the_relay_payload():
@@ -334,18 +384,19 @@ def test_large_crc_survives_into_the_relay_payload():
         captured["payload"] = payload.payload
         return {"id": 1, "status": "pending"}
 
-    with mock.patch.object(commands, "get_device_owner_id", return_value=None), \
-         mock.patch.object(commands, "latest_hiveinside_release",
-                           return_value=("0.4.2", "zephyr.signed_0_4_2.bin", big_crc, None)), \
-         mock.patch.object(commands, "reported_hiveinside_version", return_value="0.4.0"), \
-         mock.patch.object(commands, "create_command", side_effect=fake_create_command):
-        commands.queue_relay_firmware_update(
-            "dev-003", "hiveinside", "update_hiveinside", 1)
+    for t, cmd in commands.RELAY_COMMAND_TYPES.items():
+        captured.clear()
+        with mock.patch.object(commands, "get_device_owner_id", return_value=None), \
+             mock.patch.object(commands, "latest_release_for_owner",
+                               return_value=("0.4.2", "image_0_4_2.bin", big_crc, None)), \
+             mock.patch.object(commands, "reported_subdevice_version", return_value="0.4.0"), \
+             mock.patch.object(commands, "create_command", side_effect=fake_create_command):
+            commands.queue_relay_firmware_update("dev-003", t, cmd, 1)
 
-    sent = captured.get("payload", {})
-    check("crc32 reaches the payload unchanged", sent.get("crc32") == big_crc)
-    check("crc32 is an int, not a string", isinstance(sent.get("crc32"), int))
-    check("the image URL is included", bool(sent.get("url")))
+        sent = captured.get("payload", {})
+        check(f"[{t}] crc32 reaches the payload unchanged", sent.get("crc32") == big_crc)
+        check(f"[{t}] crc32 is an int, not a string", isinstance(sent.get("crc32"), int))
+        check(f"[{t}] the image URL is included", bool(sent.get("url")))
 
 
 def test_zz_no_check_failures():

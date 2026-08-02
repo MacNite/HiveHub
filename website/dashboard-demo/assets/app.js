@@ -319,6 +319,7 @@ function buildState() {
       exportUrl: (opts) => api.exportUrl(opts),
       approveFirmware: () => api.approveFirmware(activeId),
       queueHiveInsideUpdate: (slot, force) => api.queueHiveInsideUpdate(activeId, slot, force),
+      queueBeeCounterUpdate: (slot, force) => api.queueBeeCounterUpdate(activeId, slot, force),
       startCalibration: (p) => api.startCalibration(activeId, p),
       stopCalibration: () => api.stopCalibration(activeId),
       fitTempComp: (p) => api.fitTempCompensation(activeId, p),

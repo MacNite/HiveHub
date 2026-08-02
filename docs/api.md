@@ -485,9 +485,8 @@ Registers or updates a firmware release. The binary must already exist in `FIRMW
 }
 ```
 
-`target` defaults to `hivescale` and may also be `hiveinside`. (`beecounter`
-is no longer a valid target: the wired I2C update relay was removed and
-BeeCounter OTA over BLE/GATT is not implemented yet.) Response:
+`target` defaults to `hivescale` and may also be `hiveinside` or `beecounter`
+(the HiveTraffic counter). Response:
 
 ```json
 { "status": "ok", "version": "0.9.3", "target": "hivescale", "crc32": 2882343476 }
@@ -529,6 +528,31 @@ Returns `400` for a slot outside `1..18`, `404` if there is no active
 { "detail": "HiveInside on hive 1 already runs 0.4.1; release 0.4.1 is not newer. Upload a higher version, or pass force=true to relay it anyway." }
 ```
 
+### `POST /api/v1/devices/{device_id}/commands/update-beecounter`
+
+Queues an `update_beecounter` command that tells the HiveHub to relay the active
+`beecounter` firmware image to the HiveTraffic counter paired in the given slot
+over BLE GATT. Identical mechanics to `update-hiveinside` above — same
+server-side URL/CRC lookup, same local MAC resolution, same query parameters,
+same `400`/`404`/`409` responses.
+
+**Auth:** `X-API-Key` (master/admin key)
+
+| Query parameter | Default | Description |
+|---|---|---|
+| `slot` | `1` | Hive index (`1`..`18`) carrying the counter to update |
+| `force` | `false` | Relay even when the release is not newer than the running version |
+
+The version compared is the counter's own image version, reported as
+`hives[].bee_counter.version` (the `"ver"` field of its measurement JSON). A
+counter on firmware that predates that field reports none and is therefore never
+gated.
+
+**The counter stops counting bees for the whole transfer.** It parks its IR
+emitters and pauses gate polling while writing flash, so an unnecessary relay
+costs real traffic data — which is what the version gate exists to prevent.
+Prefer relaying at night or in poor flying weather.
+
 Response on success — `current_version` is the version being replaced (`null`
 when the node never advertised one):
 
@@ -567,7 +591,7 @@ serving a command — no background job):
 |---|---|---|
 | `STALE_CLAIM_MINUTES` | `20` | A claim older than this with no result is abandoned |
 | `MAX_COMMAND_ATTEMPTS` | `3` | How often one command may be handed out before it is failed for good |
-| `RETRYABLE_COMMAND_TYPES` | `update_hiveinside` | Only these go back on the queue |
+| `RETRYABLE_COMMAND_TYPES` | `update_hiveinside`, `update_beecounter` | Only these go back on the queue |
 
 Retryable commands return to `pending` until the attempt limit, then fail with
 `timed out: claimed by the device N time(s) without reporting a result`.
@@ -601,6 +625,7 @@ permanent "relaying…". The attempt counter lives in `device_commands.attempts`
 | `reset_wifi` | `{}` | Clear saved Wi-Fi credentials and reboot |
 | `check_ota` / `ota_update` | `{}` | Trigger immediate OTA check/update |
 | `update_hiveinside` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a HiveInside sensor over BLE GATT (normally queued via the `update-hiveinside` helper above) |
+| `update_beecounter` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a HiveTraffic counter over BLE GATT (normally queued via the `update-beecounter` helper above) |
 | `start_provisioning` | `{}` | Start provisioning AP |
 
 Response:
@@ -849,7 +874,7 @@ fleet. Pushing a global / official build is still done with the master-key
 |---|---:|---|
 | `file` | Yes | The firmware binary |
 | `version` | Yes | Release version string |
-| `target` | No | `hivescale` (default) or `hiveinside`. **`hivehub` is accepted as an alias for `hivescale`** and is stored as `hivescale`, so HiveHub firmware needs no special handling. (`beecounter` is no longer accepted: the wired I2C update relay was removed and BeeCounter OTA over BLE/GATT is not implemented yet.) |
+| `target` | No | `hivescale` (default), `hiveinside` or `beecounter`. **`hivehub` is accepted as an alias for `hivescale`** and is stored as `hivescale`, so HiveHub firmware needs no special handling. |
 | `active` | No | Whether the release is active (default `true`) |
 
 ```json
@@ -925,6 +950,17 @@ when the release is not newer than the version the node advertises.
 
 ```json
 { "status": "pending", "id": 72, "command_type": "update_hiveinside", "payload": { "slot": 1 }, "version": "0.4.1", "current_version": "0.4.0" }
+```
+
+### `POST /api/v1/app/devices/{device_id}/commands/update-beecounter`
+
+The HiveTraffic counter equivalent of the endpoint above: same auth (HivePal
+service key + user JWT, `owner`/`admin` on the device), same query parameters,
+same slot semantics and version gate. Note the counter stops counting for the
+duration of the transfer.
+
+```json
+{ "status": "pending", "id": 73, "command_type": "update_beecounter", "payload": { "slot": 1 }, "version": "0.2.0", "current_version": "0.1.0" }
 ```
 
 ### `GET /api/v1/app/devices/{device_id}/insights`
