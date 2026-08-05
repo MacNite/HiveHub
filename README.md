@@ -535,8 +535,9 @@ The backend accepts `network_transport` for the future Power Module; on-device f
 The pairing is fully reversible, from either end:
 
 - **Removing the device in the app** deletes your membership, and releases the device when you were the last member — `claimed_at` is cleared so the same claim code pairs it again. An owner can release a *shared* device in one step with `DELETE /api/v1/app/devices/{id}/claim` instead of waiting for every member to remove themselves.
-- **The device notices** on its next upload: the server answers `"claimed": false`, the firmware drops its local "claim registered" latch, and the claim code starts flowing again automatically. No reflash, no factory reset.
-- **Re-submitting the claim code in the setup portal** also clears that latch, which is how a device that latched under older firmware is brought back without a factory reset.
+- **The device notices** on its next upload (firmware 0.24.9+): the server answers `"claimed": false`, the firmware drops its local "claim registered" latch, and the claim code starts flowing again automatically. No reflash, no factory reset.
+- **Re-submitting the claim code in the setup portal** also clears that latch (0.24.9+), which is how a device that latched under older firmware is brought back without a factory reset.
+- **Older firmware** (≤ 0.24.8) never clears the latch by itself, so a device that already stopped sending its claim code needs one of: the portal route above after an OTA to 0.24.9+, a `CLAIM_CODE_REVISION` bump plus re-flash, or a factory reset.
 - **Readings survive** an un-pair, so re-claiming restores the history. To erase a device for good, use the local dashboard's **Delete device** (admin + claim code + typed device ID).
 
 Databases that predate this behaviour may hold devices left claimed with no members — claimed by nobody, visible to nobody, and un-claimable. Run [`server/migrations/022_release_orphaned_devices.sql`](server/migrations/022_release_orphaned_devices.sql) once to release them; it only touches devices with zero members and changes no readings.
