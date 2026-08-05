@@ -610,6 +610,13 @@ DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_sd_import.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py test-data/test_relay_ota_gate.py
 
+# Claim / release lifecycle (needs a real PostgreSQL — it builds the schema and
+# calls the endpoints for real). Skips with a message when the DB is unreachable;
+# pass --require-db to make that a failure instead, as CI does.
+docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=hivehub_test --name hivehub-test-db postgres:16
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/hivehub_test PYTHONPATH=server python3 test-data/test_pairing_lifecycle.py --require-db
+docker rm -f hivehub-test-db
+
 # Firmware host tests (plain g++, no Arduino toolchain)
 ./firmware/host_test/run_tests.sh
 g++ -std=gnu++17 -I firmware/include -o /tmp/t1 test-data/test_ruuvi_decode.cpp   && /tmp/t1

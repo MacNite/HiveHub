@@ -73,6 +73,22 @@ jobs:
 
   server-tests:
     runs-on: ubuntu-latest
+    # The pairing-lifecycle suite needs a real database: the claim/release bug it
+    # guards lived in SQL, so there is nothing to unit-test around it. Every other
+    # suite here is pure logic and ignores this service.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hivehub_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -94,6 +110,14 @@ jobs:
           python3 test-data/test_data_export.py
           python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py \
                             test-data/test_relay_ota_gate.py
+      # --require-db turns an unreachable database into a failure rather than a
+      # skip, so a broken service container can never leave this job green while
+      # silently testing nothing.
+      - name: Run pairing lifecycle tests against PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hivehub_test
+          PYTHONPATH: server
+        run: python3 test-data/test_pairing_lifecycle.py --require-db
 
   # The website/configurator and dashboard have no test suite yet; keep them at
   # least syntactically sound so a broken script cannot ship unnoticed.
