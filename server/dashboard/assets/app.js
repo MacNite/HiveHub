@@ -141,6 +141,24 @@ async function setDeviceVisibility(deviceId, hidden) {
   render();
 }
 
+// Erase a device from the admin panel: delete it server-side, then drop it from
+// local state and repaint. Unlike hiding, the device is gone — leaving it in
+// state.devices would keep it in the picker and in any active comparison until
+// the next full reload, and every request for it would 404.
+async function deleteDevice(deviceId, payload) {
+  const res = await api.deleteDevice(deviceId, payload);
+  state.devices = (state.devices || []).filter((d) => d.device_id !== deviceId);
+  state.selection = state.selection.filter((s) => s.deviceId !== deviceId);
+  if (!state.selection.length) resetSelectionToFirstDevice();
+  if (state.activeDeviceId === deviceId) state.activeDeviceId = null;
+  normalizeActiveDevice();
+  renderPicker();
+  renderSelectionStrip();
+  renderActiveDeviceField();
+  render();
+  return res;
+}
+
 // ── toast ────────────────────────────────────────────────────────────────────
 let toastTimer = null;
 function toast(msg, kind = "") {
@@ -329,6 +347,9 @@ function buildState() {
       setDeviceVisibility: (deviceId, hidden) => setDeviceVisibility(deviceId, hidden),
       // Delete a device's readings in a time range, authed by its claim code.
       deleteMeasurements: (deviceId, p) => api.deleteMeasurements(deviceId, p),
+      // Erase a device outright (admin): drops it from state and repaints so the
+      // picker cannot keep pointing at a device the server no longer has.
+      deleteDevice: (deviceId, p) => deleteDevice(deviceId, p),
       // Dashboard account management (auth API). User-management calls require
       // the admin role server-side.
       listUsers: () => auth.listUsers(),

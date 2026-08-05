@@ -51,6 +51,16 @@ export const api = {
       body: JSON.stringify(payload || {}),
     }),
 
+  // Erase a device and all of its data (admin). Unlike the `hidden` flag this is
+  // irreversible, so the server wants both the claim code and the device_id
+  // typed back — payload carries { claim_code, confirm_device_id }.
+  deleteDevice: (deviceId, payload) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    }),
+
   measurements: (deviceId, { start, end, limit } = {}) => {
     const q = new URLSearchParams();
     if (start) q.set("start_at", start);

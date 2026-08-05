@@ -103,6 +103,7 @@ from schemas import (
     DeviceChannelsUpdateIn,
     DeviceCommandIn,
     DeviceConfigUpdate,
+    DeviceDeleteIn,
     DeviceVisibilityUpdateIn,
     MAX_HIVES,
     MEASUREMENT_IMPORT_MAX,
@@ -858,6 +859,74 @@ def local_delete_measurements(device_id: str, body: MeasurementDeleteIn):
             conn.commit()
 
     return {"status": "ok", "device_id": device_id, "deleted": deleted}
+
+
+@router.post(
+    "/api/v1/local/devices/{device_id}/delete",
+    dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+)
+def local_delete_device(device_id: str, body: DeviceDeleteIn):
+    """Erase a device and everything belonging to it (admin only).
+
+    Until now the only device lifecycle control was the `hidden` flag, which
+    retires a device from the hive picker but keeps ingesting its uploads
+    forever — there was no way to actually remove a device that has been
+    decommissioned, was created by a typo'd device_id, or was only ever a test.
+
+    Destructive and irreversible, so it carries the same claim-code second
+    factor as the measurement delete plus a typed device_id confirmation.
+
+    Power the device down first if it is still running: `ensure_device_config`
+    re-creates the row on the next upload, so a live device simply comes back
+    (unclaimed, and carrying a claim code hash again only once the firmware
+    notices it is unclaimed and resumes sending its claim code).
+
+    `device_members`, `device_channels` and `insight_alerts` disappear via
+    ON DELETE CASCADE. `measurements`, `device_configs` and `device_commands`
+    carry no foreign key to devices, so they are deleted explicitly first —
+    dropping measurements also drops their `hive_readings` children via that
+    table's own cascade.
+    """
+    if body.confirm_device_id != device_id:
+        raise HTTPException(
+            status_code=400,
+            detail="confirm_device_id does not match the device being deleted",
+        )
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT claim_code_hash FROM devices WHERE device_id = %s;",
+                (device_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Device not found")
+            stored_hash = row[0]
+            if not stored_hash:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "This device has no claim code on record, so a deletion "
+                        "cannot be authenticated."
+                    ),
+                )
+            if hash_claim_code(body.claim_code) != stored_hash:
+                raise HTTPException(status_code=403, detail="Claim code does not match this device")
+
+            cur.execute("DELETE FROM measurements WHERE device_id = %s;", (device_id,))
+            measurements_deleted = cur.rowcount
+            cur.execute("DELETE FROM device_commands WHERE device_id = %s;", (device_id,))
+            cur.execute("DELETE FROM device_configs WHERE device_id = %s;", (device_id,))
+            # Cascades to device_members, device_channels and insight_alerts.
+            cur.execute("DELETE FROM devices WHERE device_id = %s;", (device_id,))
+            conn.commit()
+
+    return {
+        "status": "deleted",
+        "device_id": device_id,
+        "measurements_deleted": measurements_deleted,
+    }
 
 
 @router.get("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_DEP)

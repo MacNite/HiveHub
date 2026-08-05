@@ -579,6 +579,19 @@ class MeasurementDeleteIn(BaseModel):
     claim_code: str = Field(..., min_length=4, max_length=128)
 
 
+class DeviceDeleteIn(BaseModel):
+    """Erase a device and every row that belongs to it.
+
+    The dashboard's ``hidden`` flag only retires a device from the hive picker;
+    this is the actual delete for a device that is gone for good. Irreversible,
+    so it carries the same claim-code second factor as MeasurementDeleteIn plus
+    an explicit confirmation of the device_id being erased (typed by the admin),
+    which makes an accidental click on the wrong row impossible.
+    """
+    claim_code: str = Field(..., min_length=4, max_length=128)
+    confirm_device_id: str = Field(..., min_length=1, max_length=128)
+
+
 class DeviceChannelsUpdateIn(BaseModel):
     # Legacy two-channel fields, kept so the HivePal app endpoints keep working.
     scale_1_display_name: Optional[str] = None

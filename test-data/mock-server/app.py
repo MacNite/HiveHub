@@ -554,10 +554,29 @@ def remove_device_membership(device_id: str, user_id: str = Depends(require_user
     members = STORE["members"].get(device_id, [])
     if not any(m["user_id"] == user_id for m in members):
         raise HTTPException(status_code=404, detail="Device membership not found")
-    # Mirrors server/main.py: the membership row is removed; claimed_at is left
-    # untouched (the device does not automatically become claimable again).
+    # Mirrors server/app_api.py: the membership is removed, and losing the last
+    # member releases the device (claimed_at cleared) so its claim code pairs it
+    # again instead of leaving it claimed by nobody.
     STORE["members"][device_id] = [m for m in members if m["user_id"] != user_id]
-    return {"status": "removed", "device_id": device_id}
+    released = not STORE["members"][device_id]
+    if released and device_id in STORE["devices"]:
+        STORE["devices"][device_id]["claimed_at"] = None
+    return {"status": "removed", "device_id": device_id, "released": released}
+
+
+@app.delete("/api/v1/app/devices/{device_id}/claim", dependencies=[Depends(require_hivepal_service_key)])
+def release_device_claim(device_id: str, user_id: str = Depends(require_user_id)):
+    """Owner-only "forget this device": drop every member and unclaim it."""
+    require_device_role(user_id, device_id, ["owner"])
+    members = STORE["members"].get(device_id, [])
+    STORE["members"][device_id] = []
+    if device_id in STORE["devices"]:
+        STORE["devices"][device_id]["claimed_at"] = None
+    return {
+        "status": "released",
+        "device_id": device_id,
+        "members_removed": len(members),
+    }
 
 
 @app.get("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])
