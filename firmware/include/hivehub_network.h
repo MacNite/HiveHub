@@ -22,10 +22,20 @@ bool httpPostJson(const String& url, const String& json, String* response = null
 bool httpPatchJson(const String& url, const String& json, String* response = nullptr);
 
 // ---- Upload ---------------------------------------------------------------
-// claimConfirmed (optional out-param) is set to true only when the server
-// reports the device as claimed, so the caller can defer latching the local
-// "claim registered" flag until the claim actually exists server-side.
-bool uploadLine(const String& line, bool* claimConfirmed = nullptr);
+// What the server said about this device's claim in its upload response. The
+// three cases must stay distinct: a server that says nothing (old builds) must
+// not be read as "not claimed", or the device would re-offer its claim code
+// forever.
+enum class ClaimStatus : uint8_t {
+  Unknown = 0,   // upload failed, or the response carried no "claimed" field
+  Claimed,       // server reports the device as claimed
+  Unclaimed,     // server explicitly reports the device as NOT claimed
+};
+
+// claimStatus (optional out-param) lets the caller defer latching the local
+// "claim registered" flag until the claim actually exists server-side, and
+// clear it again when the claim goes away (device removed in the app).
+bool uploadLine(const String& line, ClaimStatus* claimStatus = nullptr);
 bool uploadCachedLines();
 
 // ---- Config / OTA / commands ---------------------------------------------

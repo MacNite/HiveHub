@@ -49,10 +49,16 @@ def claim_device(payload: ClaimDeviceIn, user_id: str = Depends(require_user_id)
     claim_hash = hash_claim_code(payload.claim_code)
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # Prefer an unclaimed device (NULLS FIRST) but still select a claimed
+            # one so an already-claimed code can be reported as such instead of
+            # collapsing into the generic "no device found" 404 below. Telling the
+            # two apart is what lets the app say "this device is already paired"
+            # rather than sending the beekeeper hunting for a typo in the code.
             cur.execute(
                 """
-                SELECT device_id FROM devices
-                WHERE claim_code_hash = %s AND claimed_at IS NULL
+                SELECT device_id, claimed_at FROM devices
+                WHERE claim_code_hash = %s
+                ORDER BY claimed_at NULLS FIRST
                 LIMIT 1;
                 """,
                 (claim_hash,),
@@ -60,7 +66,24 @@ def claim_device(payload: ClaimDeviceIn, user_id: str = Depends(require_user_id)
             r = cur.fetchone()
             if not r:
                 raise HTTPException(status_code=404, detail="No unclaimed device found with that claim code")
-            device_id = r[0]
+            device_id, already_claimed_at = r
+            if already_claimed_at is not None:
+                cur.execute(
+                    "SELECT 1 FROM device_members WHERE device_id = %s AND user_id = %s;",
+                    (device_id, user_id),
+                )
+                if cur.fetchone():
+                    raise HTTPException(
+                        status_code=409,
+                        detail="You have already claimed this device; it should be in your device list.",
+                    )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This claim code belongs to a device that is already claimed. "
+                        "Its owner must release it (remove it in the app) before it can be claimed again."
+                    ),
+                )
             cur.execute(
                 "UPDATE devices SET claimed_at = now(), display_name = %s WHERE device_id = %s;",
                 (payload.display_name, device_id),
@@ -141,6 +164,18 @@ def list_devices(user_id: str = Depends(require_user_id)):
 
 @router.delete("/api/v1/app/devices/{device_id}", dependencies=[Depends(require_hivepal_service_key)])
 def remove_device_membership(device_id: str, user_id: str = Depends(require_user_id)):
+    """Remove the caller's membership, releasing the device when nobody is left.
+
+    Dropping the last member also clears ``claimed_at``. Without that, a device
+    removed in the app kept its "claimed" flag with zero members: nobody could
+    see its readings and nobody could ever claim it again, because
+    ``claim_device`` only matches rows with ``claimed_at IS NULL``. Releasing it
+    puts the device back in the pool so the same claim code re-pairs it.
+
+    The device row, its config, channel names and stored measurements all
+    survive, so re-claiming restores the history rather than starting over. Use
+    the local dashboard's device delete to erase the data itself.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -154,8 +189,49 @@ def remove_device_membership(device_id: str, user_id: str = Depends(require_user
                 "DELETE FROM device_members WHERE device_id = %s AND user_id = %s;",
                 (device_id, user_id),
             )
+            cur.execute(
+                "SELECT count(*) FROM device_members WHERE device_id = %s;",
+                (device_id,),
+            )
+            released = cur.fetchone()[0] == 0
+            if released:
+                cur.execute(
+                    "UPDATE devices SET claimed_at = NULL WHERE device_id = %s;",
+                    (device_id,),
+                )
             conn.commit()
-    return {"status": "removed", "device_id": device_id}
+    return {"status": "removed", "device_id": device_id, "released": released}
+
+
+@router.delete("/api/v1/app/devices/{device_id}/claim", dependencies=[Depends(require_hivepal_service_key)])
+def release_device_claim(device_id: str, user_id: str = Depends(require_user_id)):
+    """Owner-only "forget this device": drop every member and unclaim it.
+
+    ``remove_device_membership`` only removes the caller, so a shared device
+    stays claimed until every member happens to remove themselves. An owner who
+    wants the device back in the unclaimed pool — to re-pair it, hand it on, or
+    recover from a half-broken pairing — needs to be able to do that in one
+    step without chasing the people they shared it with.
+
+    Measurements, config and channel names are kept; only the pairing is undone.
+    """
+    require_device_role(user_id, device_id, ["owner"])
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM device_members WHERE device_id = %s;", (device_id,))
+            members_removed = cur.rowcount
+            cur.execute(
+                "UPDATE devices SET claimed_at = NULL WHERE device_id = %s;",
+                (device_id,),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Device not found")
+            conn.commit()
+    return {
+        "status": "released",
+        "device_id": device_id,
+        "members_removed": members_removed,
+    }
 
 
 @router.get("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])

@@ -2224,7 +2224,8 @@ function renderDevice(root, state) {
   const adminCards = [accountCard(state), notificationsCard(state)];
   if (isAdmin) {
     adminCards.push(usersCard(state), visibleDevicesCard(state),
-                    downloadBackupCard(state), deleteMeasurementsCard(state));
+                    downloadBackupCard(state), deleteMeasurementsCard(state),
+                    deleteDeviceCard(state));
   }
 
   node.append(
@@ -2481,8 +2482,71 @@ function visibleDevicesCard(state) {
   return el("div", { class: "card" }, el("h2", {}, "Visible devices"),
     el("p", { class: "note" },
       "Uncheck a retired device to remove it from the hive picker at the top of the page. " +
-      "Its readings are kept and it can be shown again at any time."),
+      "Its readings are kept and it can be shown again at any time. " +
+      "To erase a device for good, use “Delete device” below."),
     listEl);
+}
+
+// "Delete device" (admin only): erase a device and everything belonging to it.
+// Hiding only retires a device from the picker; a decommissioned device, or one
+// created by a typo'd device_id, otherwise stays in the database forever and
+// keeps ingesting uploads. Irreversible, so the server requires both the claim
+// code and the device_id typed back (see local_delete_device).
+function deleteDeviceCard(state) {
+  const devices = state.devices || [];
+  const select = el("select", {});
+  for (const d of devices) {
+    select.append(el("option", { value: d.device_id },
+      d.display_name ? `${d.display_name} · ${d.device_id}` : d.device_id));
+  }
+  const idInput = el("input", { type: "text", autocomplete: "off", placeholder: "Type the device ID to confirm" });
+  const codeInput = el("input", { type: "text", autocomplete: "off", placeholder: "e.g. ABCD-1234" });
+  const out = el("p", { class: "note", hidden: true });
+  const btn = el("button", { class: "btn danger", type: "submit" }, "Delete device");
+  const form = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Device"), select),
+    el("div", { class: "form-row" }, el("label", {}, "Confirm device ID"), idInput),
+    el("div", { class: "form-row" }, el("label", {}, "Device claim code"), codeInput),
+    el("div", { class: "form-actions" }, btn),
+    out);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const deviceId = select.value;
+    if (!deviceId) { state.toast("No device selected", "error"); return; }
+    if (idInput.value.trim() !== deviceId) { state.toast("Confirm the device ID exactly as shown", "error"); return; }
+    if (!codeInput.value.trim()) { state.toast("Enter the device's claim code to confirm", "error"); return; }
+    if (!window.confirm(
+      `Permanently delete “${deviceId}” and every reading, command and config row\n` +
+      "belonging to it?\n\nThis cannot be undone.")) return;
+    btn.disabled = true;
+    try {
+      const res = await state.actions.deleteDevice(deviceId, {
+        claim_code: codeInput.value.trim(),
+        confirm_device_id: deviceId,
+      });
+      const n = res?.measurements_deleted ?? 0;
+      out.hidden = false;
+      out.textContent = `Deleted “${deviceId}” and ${n} reading${n === 1 ? "" : "s"}.`;
+      state.toast(`Deleted ${deviceId}`, "success");
+      idInput.value = codeInput.value = "";
+      state.reload();
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { btn.disabled = false; }
+  });
+  if (!devices.length) {
+    return el("div", { class: "card" }, el("h2", {}, "Delete device"),
+      el("p", { class: "note" }, "No devices on this server."));
+  }
+  return el("div", { class: "card" }, el("h2", {}, "Delete device"),
+    el("p", { class: "note" },
+      "Erase a device and all of its readings, commands and configuration. " +
+      "Use this for a device that is gone for good — to keep the history but " +
+      "tidy the picker, hide it instead. Type the device ID and its claim code " +
+      "to authorise the deletion."),
+    el("p", { class: "note" },
+      "Power the device down first if it is still running: a device that uploads " +
+      "again simply re-registers itself."),
+    form);
 }
 
 // "Delete readings" (admin only): remove a time range of measurements for the

@@ -457,7 +457,8 @@ Require both `X-HivePal-Service-Key` and a per-user `Authorization: Bearer <hive
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/v1/app/devices/claim` | Claim a device by claim code |
-| `GET`/`DELETE` | `/api/v1/app/devices` · `/{id}` | List devices · remove own membership |
+| `GET`/`DELETE` | `/api/v1/app/devices` · `/{id}` | List devices · remove own membership (releases the device when it was the last one) |
+| `DELETE` | `/api/v1/app/devices/{id}/claim` | Release the device outright: drop every member and unclaim it (owner) |
 | `GET`/`PATCH` | `/api/v1/app/devices/{id}/config` | Get / update config (incl. `tempco_*`) |
 | `GET`/`PATCH` | `/api/v1/app/devices/{id}/channels` | List / update scale display names |
 | `GET` | `/api/v1/app/devices/{id}/measurements[/latest]` | Measurements (with date filter) / latest |
@@ -492,6 +493,7 @@ endpoints power the built-in `/dashboard` UI; see
 | `GET` | `/api/v1/local/export/measurements` · `/summary` | Download readings as an `.ndjson` backup (`?device_id=`, `?hive=`, date filter, admin) / what the download would contain |
 | `POST` | `/api/v1/local/devices/{id}/measurements/import` | Import an SD-card backup or a downloaded one (`.ndjson` / `.tar`, admin; `route_by_device=true` restores a multi-device backup) |
 | `POST` | `/api/v1/local/devices/{id}/measurements/delete` | Delete readings in a time range (admin + device claim code) |
+| `POST` | `/api/v1/local/devices/{id}/delete` | Erase a device and all of its rows (admin + device claim code + typed `confirm_device_id`; power the device down first or it re-registers) |
 | `GET`/`PATCH` | `/api/v1/local/devices/{id}/config` | Read / update device config (interval, scale offsets/factors, temp comp) |
 | `GET`/`PATCH` | `/api/v1/local/devices/{id}/channels` | Read / rename the hive display names |
 | `GET` | `/api/v1/local/devices/{id}/insights/summary` · `/history` | Highest-severity insight summary / persisted alert history |
@@ -523,10 +525,22 @@ The backend accepts `network_transport` for the future Power Module; on-device f
 ## Claim-code pairing
 
 1. Set `CLAIM_CODE` in `secrets.h` before flashing, for example `ABCD-1234`.
-2. The firmware includes the claim code in measurements until its first successful upload, then stops sending it to limit exposure. (Bumping `CLAIM_CODE_REVISION` makes it send the new code once more.)
+2. The firmware includes the claim code in every measurement until the **server confirms the device is claimed** (the upload response carries `"claimed": true`), then stops sending it to limit exposure. Confirming rather than assuming matters: a rebuilt or restored backend has no record of the device, and a device that stopped sending its code could never be claimed again.
 3. The backend stores a hash of the claim code and creates an unclaimed device record on the first measurement.
 4. HivePal (or another app client) calls `POST /api/v1/app/devices/claim` with the code.
 5. The matched device is assigned to the user as `owner`.
+
+### Un-pairing and re-pairing
+
+The pairing is fully reversible, from either end:
+
+- **Removing the device in the app** deletes your membership, and releases the device when you were the last member — `claimed_at` is cleared so the same claim code pairs it again. An owner can release a *shared* device in one step with `DELETE /api/v1/app/devices/{id}/claim` instead of waiting for every member to remove themselves.
+- **The device notices** on its next upload (firmware 0.24.9+): the server answers `"claimed": false`, the firmware drops its local "claim registered" latch, and the claim code starts flowing again automatically. No reflash, no factory reset.
+- **Re-submitting the claim code in the setup portal** also clears that latch (0.24.9+), which is how a device that latched under older firmware is brought back without a factory reset.
+- **Older firmware** (≤ 0.24.8) never clears the latch by itself, so a device that already stopped sending its claim code needs one of: the portal route above after an OTA to 0.24.9+, a `CLAIM_CODE_REVISION` bump plus re-flash, or a factory reset.
+- **Readings survive** an un-pair, so re-claiming restores the history. To erase a device for good, use the local dashboard's **Delete device** (admin + claim code + typed device ID).
+
+Databases that predate this behaviour may hold devices left claimed with no members — claimed by nobody, visible to nobody, and un-claimable. Run [`server/migrations/022_release_orphaned_devices.sql`](server/migrations/022_release_orphaned_devices.sql) once to release them; it only touches devices with zero members and changes no readings.
 
 To push a new claim code through OTA, change `CLAIM_CODE`, increment `CLAIM_CODE_REVISION`, and publish a new firmware build.
 
@@ -595,6 +609,13 @@ DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_ble_sensor_rules.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_sd_import.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py test-data/test_relay_ota_gate.py
+
+# Claim / release lifecycle (needs a real PostgreSQL — it builds the schema and
+# calls the endpoints for real). Skips with a message when the DB is unreachable;
+# pass --require-db to make that a failure instead, as CI does.
+docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=hivehub_test --name hivehub-test-db postgres:16
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/hivehub_test PYTHONPATH=server python3 test-data/test_pairing_lifecycle.py --require-db
+docker rm -f hivehub-test-db
 
 # Firmware host tests (plain g++, no Arduino toolchain)
 ./firmware/host_test/run_tests.sh

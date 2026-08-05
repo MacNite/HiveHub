@@ -203,6 +203,15 @@ void markClaimRegistered() {
   Serial.println("[PREFS] Claim registered; claim_code will no longer be sent");
 }
 
+void clearClaimRegistered() {
+  if (!claimRegistered) return;
+  claimRegistered = false;
+  prefs.begin("hivescale", false);
+  prefs.putBool("claim_reg", false);
+  prefs.end();
+  Serial.println("[PREFS] Claim released; claim_code will be sent again");
+}
+
 void saveScaleConfig() {
   prefs.begin("hivescale", false);
   prefs.putUInt("interval", sendIntervalMs / 1000UL);

@@ -283,7 +283,7 @@ bool httpPatchJson(const String& url, const String& json, String* response) {
   return false;
 }
 
-bool uploadLine(const String& line, bool* claimConfirmed) {
+bool uploadLine(const String& line, ClaimStatus* claimStatus) {
   String response;
   bool ok = httpPostJson(apiUrl("/api/v1/measurements"), line, &response);
 
@@ -297,16 +297,21 @@ bool uploadLine(const String& line, bool* claimConfirmed) {
   // device stopped sending its claim code it could never be claimed again.
   // Older servers do not return "claimed"; fall back to treating a successful
   // upload as confirmation so behaviour against them is unchanged.
-  if (claimConfirmed) {
-    bool confirmed = ok;
+  //
+  // An explicit "claimed": false is reported separately from "the server said
+  // nothing", because it is the signal that the pairing was released (the app
+  // removed the device) and the claim code must start flowing again.
+  if (claimStatus) {
+    ClaimStatus status = ok ? ClaimStatus::Claimed : ClaimStatus::Unknown;
     if (ok && response.length()) {
       JsonDocument doc;
       if (deserializeJson(doc, response) == DeserializationError::Ok &&
           doc["claimed"].is<bool>()) {
-        confirmed = doc["claimed"].as<bool>();
+        status = doc["claimed"].as<bool>() ? ClaimStatus::Claimed
+                                           : ClaimStatus::Unclaimed;
       }
     }
-    *claimConfirmed = confirmed;
+    *claimStatus = status;
   }
 
   return ok;
@@ -529,6 +534,9 @@ void fetchRemoteConfig() {
       Serial.println("[CONFIG] Updating claim code from remote config");
       claimCode = remoteClaimCode;
       putPrefString("claim_code", claimCode);
+      // A new code must actually reach the server, and the "claim registered"
+      // latch would otherwise suppress it for good.
+      clearClaimRegistered();
     }
   }
 

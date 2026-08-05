@@ -704,13 +704,38 @@ Claims an unclaimed device by claim code. The device must have sent at least one
 }
 ```
 
+Failure modes are reported separately, because they need different fixes:
+
+| Status | Meaning |
+|---|---|
+| `404` | No device on this server has ever sent that claim code. Check the code, and check the device has uploaded at least once. |
+| `409` | The code matches a device that is already claimed. If you are already a member it is in your device list; otherwise its owner must release it first (see below). |
+
 ### `GET /api/v1/app/devices`
 
 Lists all devices the current user can access. Device objects include `device_id`, `display_name`, `claimed_at`, `last_seen_at`, `last_firmware_version`, `role`, and `channels`.
 
 ### `DELETE /api/v1/app/devices/{device_id}`
 
-Removes the current user's membership. If no members remain, the device becomes claimable again.
+Removes the current user's membership. When that was the last member, the device is released — `claimed_at` is cleared and its claim code pairs it again.
+
+```json
+{ "status": "removed", "device_id": "hive_scale_01", "released": true }
+```
+
+`released` is `false` when other members still hold the device; it stays claimed for them and the claim code will not work until they leave too (or the owner releases it outright).
+
+Measurements, config and channel names are kept, so re-claiming restores the history. To erase the data as well, use the local dashboard's device delete.
+
+### `DELETE /api/v1/app/devices/{device_id}/claim`
+
+Owner only. Releases the device outright: removes **every** member and clears `claimed_at`, so it can be claimed again with its claim code. Use this instead of removing yourself when a shared device needs to be re-paired or handed on — otherwise it stays claimed until each member happens to remove themselves.
+
+```json
+{ "status": "released", "device_id": "hive_scale_01", "members_removed": 3 }
+```
+
+Readings, config and channel names are untouched; only the pairing is undone.
 
 ### `GET /api/v1/app/devices/{device_id}/channels`
 

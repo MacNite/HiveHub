@@ -44,9 +44,16 @@ void runUploadCycle() {
 
   if (sdOk) appendBackupLine(json);
 
-  bool serverConfirmedClaim = false;
-  bool currentUploaded = uploadLine(json, &serverConfirmedClaim);
-  if (serverConfirmedClaim) markClaimRegistered();
+  // Track the claim in both directions: latch it once the server confirms the
+  // device is claimed, and un-latch it when the server explicitly says it is
+  // not. The second half is what makes "remove the device in the app" a
+  // recoverable action — the device notices the pairing is gone and starts
+  // offering its claim code again, so it can simply be re-claimed. A server
+  // that reports nothing (older build, or a failed upload) changes neither.
+  ClaimStatus claimStatus = ClaimStatus::Unknown;
+  bool currentUploaded = uploadLine(json, &claimStatus);
+  if (claimStatus == ClaimStatus::Claimed) markClaimRegistered();
+  else if (claimStatus == ClaimStatus::Unclaimed) clearClaimRegistered();
 
   if (!currentUploaded) {
     if (sdOk) {

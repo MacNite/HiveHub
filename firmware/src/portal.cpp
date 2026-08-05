@@ -1086,6 +1086,21 @@ void handleSetupSave() {
   if (newApiBase.length() > 0) prefs.putString("api_base", newApiBase);
   if (newApiKey.length() > 0) prefs.putString("api_key", newApiKey);
 
+  // Submitting a claim code here is an explicit "pair me" action, so drop the
+  // "claim registered" latch that otherwise stops the code ever being sent
+  // again. Without this the portal could store a new code that the device would
+  // never offer, and re-pairing meant a factory reset or a re-flash. Sending it
+  // once more costs nothing: the server re-confirms the claim on the next
+  // upload and the latch closes again immediately.
+  //
+  // Written on the handle this function already opened — clearClaimRegistered()
+  // would call Preferences::begin() on an open handle (a no-op that returns
+  // false) and then end() it, closing NVS underneath the writes below.
+  if (newClaimCode.length() > 0) {
+    prefs.putBool("claim_reg", false);
+    claimRegistered = false;
+  }
+
   int savedCount = 0;
   for (int i = 0; i < MAX_WIFI_NETWORKS; i++) {
     String ssid = setupServer.arg("ssid" + String(i));
