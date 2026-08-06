@@ -291,6 +291,23 @@
 #ifndef NAU7802_SETTLE_DISCARD
 #define NAU7802_SETTLE_DISCARD 4
 #endif
+// Analog warm-up between powering the front end and capturing the AFE offset
+// calibration. configure() is the moment the internal LDO switches on — i.e.
+// the moment bridge excitation first reaches the load cells — and the offset
+// that calibrateAfe() captures is then baked into every conversion until the
+// next re-init. Calibrating microseconds after the LDO comes up therefore
+// freezes an offset taken mid-transient: on a cold chip that has been powered
+// down through deep sleep the error is tens of microvolts at the PGA input,
+// which at gain 128 is worth on the order of a kilogram on a load cell sized
+// for a hive. The scale bus waits this long after configure() before
+// calibrating, and amortizes the wait across chips by configuring them all
+// first (see scale_bus.cpp begin()), so a full mux of eight costs one warm-up,
+// not eight. Raise it if a device still reads low on its first cycle after a
+// long power-off; the cost is awake time per wake, negligible beside the WiFi
+// association that follows.
+#ifndef NAU7802_WARMUP_MS
+#define NAU7802_WARMUP_MS 1000UL
+#endif
 // Overall per-read deadline. 15 samples + 4 discards at 80 SPS need ~240 ms;
 // 1 s bounds a missing/silent chip so a sweep of many channels stays responsive.
 #ifndef NAU7802_READ_TIMEOUT_MS

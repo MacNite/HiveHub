@@ -60,6 +60,13 @@ struct Diag {
 // power-up, LDO/gain/rate, CH2-cap policy, AFE calibration of every USED ADC
 // channel — each step checked) for every chip the registry references. A chip
 // is marked initialized only when everything succeeded. Requires i2cbus::ok().
+//
+// Bring-up runs in two passes: every chip is configured and left converting,
+// and only then — once NAU7802_WARMUP_MS has elapsed since its front end was
+// powered — is its AFE offset calibration captured. Calibrating a cold chip
+// freezes an offset taken on the power-up transient, which after deep sleep
+// biases the cycle's reading low. Configuring the remaining chips consumes part
+// of the wait, so the whole bus costs about one warm-up, not one per chip.
 void begin();
 
 // Read one scale channel. Never blocks longer than the bounded sample timeout;

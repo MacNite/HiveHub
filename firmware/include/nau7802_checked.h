@@ -147,7 +147,8 @@ class Nau7802Checked {
   // reset → power-up (wait PUR) → LDO 3.3 V + AVDDS → gain 128 → 80 SPS →
   // ADC reg 0x30 (CLK_CHP off) → CH2 decoupling cap per `ch2Used` → start
   // conversions. AFE calibration is separate (calibrateAfe) so the caller can
-  // run and record it per ADC channel.
+  // let the front end warm up first (awaitWarmup) and then run and record the
+  // calibration per ADC channel.
   bool configure(bool ch2Used) {
     if (!writeReg(_bus, _addr, REG_PU_CTRL, PU_RR)) return false;      // reset
     _bus.delayMs(1);
@@ -178,8 +179,21 @@ class Nau7802Checked {
     return true;
   }
 
+  // Block until `warmupMs` have elapsed since `poweredAtMs` — the millisMs()
+  // stamp the caller took when configure() returned, i.e. when the internal LDO
+  // came up and continuous conversions started. Call this before calibrateAfe()
+  // so the captured offset is a settled one rather than a point on the
+  // power-up transient (see NAU7802_WARMUP_MS). Unsigned arithmetic, so it is
+  // correct across a millis() wrap; a caller that has already spent the warm-up
+  // elsewhere (configuring the next chip behind the mux) does not wait again.
+  void awaitWarmup(uint32_t poweredAtMs, uint32_t warmupMs) {
+    uint32_t elapsed = _bus.millisMs() - poweredAtMs;
+    if (elapsed < warmupMs) _bus.delayMs(warmupMs - elapsed);
+  }
+
   // Internal AFE (offset) calibration for the CURRENTLY selected channel.
   // Sets CALS, waits (bounded) for it to self-clear, then checks CAL_ERR.
+  // The front end must be warm — see awaitWarmup().
   bool calibrateAfe() {
     uint8_t ctrl2;
     if (!readReg(_bus, _addr, REG_CTRL2, ctrl2)) return false;

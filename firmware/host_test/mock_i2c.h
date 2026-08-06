@@ -22,6 +22,9 @@ struct MockNau {
   bool failCalibration = false;      // CALS never clears / CAL_ERR set
   int  shortReadAfterN = -1;         // deliver a short conversion read after N good ones
   int  conversionsRead = 0;
+  uint32_t poweredAtMs = 0;          // bus clock when PU_CTRL last powered the analog front end
+  uint32_t calsAtMs = 0;             // bus clock when CTRL2 CALS was last set (warm-up assertions)
+  int  calsWrites = 0;
   std::vector<long> script;          // optional explicit per-read conversion values
   size_t scriptPos = 0;
 
@@ -91,14 +94,23 @@ class MockBus : public hivei2c::I2cBusIface {
       if (txBuf.size() >= 2) {                 // register write
         uint8_t reg = txBuf[0], val = txBuf[1];
         if (reg == 0x02 && n->failChannelSwitchWrite) return 3;
+        const uint8_t prevPuCtrl = n->regs[0x00];
         if (reg < sizeof(n->regs)) n->regs[reg] = val;
         // PU_CTRL semantics: reads reflect written bits + PUR follows PUD|PUA.
         if (reg == 0x00) {
-          if (val & 0x06) n->regs[0] |= 0x08;  // PUR ready immediately
-          else n->regs[0] &= ~0x08;
+          if (val & 0x06) {
+            // Rising edge of PUD|PUA — the analog front end (and with it the
+            // bridge excitation) comes up here; the warm-up clock starts now.
+            if (!(prevPuCtrl & 0x06)) n->poweredAtMs = nowMs;
+            n->regs[0] |= 0x08;                  // PUR ready immediately
+          } else {
+            n->regs[0] &= ~0x08;
+          }
         }
         // CTRL2 CALS: complete instantly unless failing.
         if (reg == 0x02 && (val & 0x04)) {
+          n->calsAtMs = nowMs;
+          n->calsWrites++;
           if (n->failCalibration) n->regs[2] = val | 0x08;      // CAL_ERR, CALS kept? clear CALS, set ERR
           else n->regs[2] = val & ~0x04;                        // CALS self-clears
           if (n->failCalibration) n->regs[2] &= ~0x04;

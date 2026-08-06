@@ -99,6 +99,64 @@ static void testNauConfigureAndCalibrate() {
   CHECK(!nau.calibrateAfe());                       // CAL_ERR must be detected
 }
 
+static void testNauWarmupBeforeCalibration() {
+  // The AFE offset calibration is baked into every conversion until the next
+  // re-init, so capturing it microseconds after configure() switched the LDO on
+  // freezes an offset taken on the power-up transient. On a chip that spent the
+  // sleep window powered down that is worth roughly a kilogram at gain 128 —
+  // the "first reading after a reboot reads ~1 kg low" failure. Bring-up must
+  // warm the front end before it calibrates.
+  const uint32_t kWarmupMs = 1000;
+
+  MockBus bus = healthyBusWithDirectNau();
+  nauchk::Nau7802Checked nau(bus, 0x2A);
+  bus.nowMs = 5000;                                 // arbitrary boot offset
+
+  CHECK(nau.configure(/*ch2Used=*/false));
+  const uint32_t poweredAt = bus.nowMs;
+  CHECK(bus.direct.poweredAtMs == poweredAt);       // LDO up = warm-up clock start
+  CHECK(bus.direct.calsWrites == 0);                // nothing calibrated yet
+
+  nau.awaitWarmup(poweredAt, kWarmupMs);
+  CHECK(nau.calibrateAfe());
+  CHECK(bus.direct.calsWrites == 1);
+  CHECK(bus.direct.calsAtMs - bus.direct.poweredAtMs >= kWarmupMs);
+
+  // A caller that already spent the warm-up elsewhere must not wait again.
+  const uint32_t before = bus.nowMs;
+  nau.awaitWarmup(poweredAt, kWarmupMs);
+  CHECK(bus.nowMs == before);
+}
+
+static void testNauWarmupAmortizedAcrossChips() {
+  // scale_bus::begin() configures EVERY chip before calibrating any of them, so
+  // a full mux costs about one warm-up rather than one per chip. Mirror that
+  // ordering here: each chip must still be calibrated warm, but the wall clock
+  // must not add up warm-up per chip.
+  const uint32_t kWarmupMs = 1000;
+
+  MockBus bus;
+  bus.haveMuxed[0] = true;
+  bus.haveMuxed[1] = true;
+  nauchk::TcaMux mux(bus, 0x70);
+  nauchk::Nau7802Checked nau(bus, 0x2A);
+
+  const uint32_t start = bus.nowMs;
+  uint32_t poweredAt[2] = {0, 0};
+  for (uint8_t c = 0; c < 2; c++) {                 // phase 1: configure all
+    CHECK(mux.select(c));
+    CHECK(nau.configure(/*ch2Used=*/false));
+    poweredAt[c] = bus.nowMs;
+  }
+  for (uint8_t c = 0; c < 2; c++) {                 // phase 2: calibrate warm
+    CHECK(mux.select(c));
+    nau.awaitWarmup(poweredAt[c], kWarmupMs);
+    CHECK(nau.calibrateAfe());
+    CHECK(bus.muxed[c].calsAtMs - bus.muxed[c].poweredAtMs >= kWarmupMs);
+  }
+  CHECK(bus.nowMs - start < 2 * kWarmupMs);
+}
+
 static void testNauFailedChannelSwitch() {
   MockBus bus = healthyBusWithDirectNau();
   nauchk::Nau7802Checked nau(bus, 0x2A);
@@ -327,6 +385,8 @@ int main() {
   testMuxFailedReadback();
   testMuxPreviousChannelStaysActive();
   testNauConfigureAndCalibrate();
+  testNauWarmupBeforeCalibration();
+  testNauWarmupAmortizedAcrossChips();
   testNauFailedChannelSwitch();
   testNauExactByteCount();
   testNauPartialSampleSet();
