@@ -26,6 +26,7 @@ constexpr int CHIP_SLOTS = 9;  // mux 0..7, direct main-bus chip at 8
 enum class ChipState : uint8_t {
   Unknown,
   Absent,
+  Warming,   // configured and converting, AFE calibration not captured yet
   Ready,
   Faulted,
 };
@@ -34,6 +35,7 @@ ChipState gState[CHIP_SLOTS];
 bool gNeedsReinit[CHIP_SLOTS];
 bool gCh2Used[CHIP_SLOTS];
 bool gCalOk[CHIP_SLOTS][2];
+uint32_t gPoweredAtMs[CHIP_SLOTS];  // millis() when configure() returned
 
 int chipKey(const ScaleChannel& ch) {
   return (ch.muxChannel < 0) ? 8 : (int)ch.muxChannel;
@@ -49,11 +51,14 @@ nauchk::Nau7802Checked& nau() {
   return n;
 }
 
-bool routeTo(const ScaleChannel& ch) {
+// Route by chip key (0..7 = mux channel, 8 = the chip on the main bus), so the
+// two-phase bring-up in begin() can revisit a chip without carrying one of its
+// ScaleChannel entries around.
+bool routeToKey(int key) {
 #if ENABLE_I2C_MUX
-  if (ch.muxChannel >= 0) {
+  if (key < 8) {
     if (!gMuxPresent) return false;
-    if (!mux().select((uint8_t)ch.muxChannel)) {
+    if (!mux().select((uint8_t)key)) {
       gDiag.muxSelectFailures++;
       return false;
     }
@@ -66,9 +71,11 @@ bool routeTo(const ScaleChannel& ch) {
   }
   return true;
 #else
-  return ch.muxChannel < 0;
+  return key == 8;
 #endif
 }
+
+bool routeTo(const ScaleChannel& ch) { return routeToKey(chipKey(ch)); }
 
 void unroute() {
 #if ENABLE_I2C_MUX
@@ -87,7 +94,12 @@ const char* chipName(int key) {
 }
 
 #if ENABLE_NAU7802
-bool initChip(int key, bool allowAbsentProbe) {
+// Phase 1 of bring-up: probe, reset, power up and start conversions. Leaves the
+// chip Warming — converting with bridge excitation applied, but with no AFE
+// offset captured yet, so it is NOT yet usable for a reading. The caller must
+// follow with calibrateChip() (directly, or after configuring further chips so
+// they share one warm-up).
+bool configureChip(int key, bool allowAbsentProbe) {
   gCalOk[key][0] = gCalOk[key][1] = false;
 
   // ESP32-C6 Arduino-ESP32 3.x I2C-NG can enter ESP_ERR_INVALID_STATE after
@@ -105,12 +117,27 @@ bool initChip(int key, bool allowAbsentProbe) {
   }
 
   gState[key] = ChipState::Faulted;
+  gNeedsReinit[key] = true;
   if (!nau().configure(gCh2Used[key])) {
     Serial.printf("[SCALEBUS] NAU7802 (%s): configuration FAILED\n", chipName(key));
-    gNeedsReinit[key] = true;
     gDiag.nauInitFailures++;
     return false;
   }
+
+  // The internal LDO is now up: this is the instant bridge excitation reaches
+  // the load cell, and the clock the AFE warm-up is measured from.
+  gPoweredAtMs[key] = millis();
+  gState[key] = ChipState::Warming;
+  return true;
+}
+
+// Phase 2 of bring-up: wait out the remaining analog warm-up, then capture the
+// AFE offset calibration for every ADC channel this chip actually uses. Only a
+// chip that clears this becomes Ready.
+bool calibrateChip(int key) {
+  if (gState[key] != ChipState::Warming) return false;
+
+  nau().awaitWarmup(gPoweredAtMs[key], NAU7802_WARMUP_MS);
 
   bool ok = true;
   if (!nau().selectChannel(1) || !nau().calibrateAfe()) {
@@ -138,11 +165,18 @@ bool initChip(int key, bool allowAbsentProbe) {
   gState[key] = ok ? ChipState::Ready : ChipState::Faulted;
   gNeedsReinit[key] = !ok;
   if (ok) {
-    Serial.printf("[SCALEBUS] NAU7802 (%s): initialized (CH2 %s)\n",
+    Serial.printf("[SCALEBUS] NAU7802 (%s): initialized (CH2 %s, AFE calibrated %lu ms after power-up)\n",
                   chipName(key), gCh2Used[key] ? "in use, input cap off"
-                                               : "unused, input cap on");
+                                               : "unused, input cap on",
+                  (unsigned long)(millis() - gPoweredAtMs[key]));
   }
   return ok;
+}
+
+// Full single-chip bring-up (recovery path): configure, warm up, calibrate.
+bool initChip(int key, bool allowAbsentProbe) {
+  if (!configureChip(key, allowAbsentProbe)) return false;
+  return calibrateChip(key);
 }
 
 bool attemptRead(const ScaleChannel& ch, ReadResult& r) {
@@ -220,6 +254,7 @@ void begin() {
     gNeedsReinit[i] = false;
     gCh2Used[i] = false;
     gCalOk[i][0] = gCalOk[i][1] = false;
+    gPoweredAtMs[i] = 0;
   }
   gMuxPresent = false;
 
@@ -244,6 +279,13 @@ void begin() {
     }
   }
 
+  // Two phases on purpose. Powering a NAU7802 up and immediately calibrating it
+  // captures the AFE offset mid-transient, which after a deep sleep shows up as
+  // a large low bias on the cycle's first (and, with deep sleep, only) reading.
+  // So: configure EVERY chip first, then come back and calibrate them once the
+  // warm-up has elapsed. Configuring the later chips spends part of that
+  // warm-up, so a full mux costs roughly one NAU7802_WARMUP_MS in total rather
+  // than one per chip.
   for (uint8_t h = 0; h < hivecfg::gHiveCount; h++) {
     const hivecfg::Hive& hive = hivecfg::gHives[h];
     for (uint8_t s = 0; s < hive.scaleCount; s++) {
@@ -257,8 +299,20 @@ void begin() {
         gState[key] = ChipState::Faulted;
         continue;
       }
-      initChip(key, true);
+      configureChip(key, true);
     }
+  }
+
+  for (int key = 0; key < CHIP_SLOTS; key++) {
+    if (gState[key] != ChipState::Warming) continue;
+    if (!routeToKey(key)) {
+      Serial.printf("[SCALEBUS] NAU7802 (%s): route FAILED before AFE calibration — chip unusable\n",
+                    chipName(key));
+      gState[key] = ChipState::Faulted;
+      gNeedsReinit[key] = true;
+      continue;
+    }
+    calibrateChip(key);
   }
   unroute();
 #endif

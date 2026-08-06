@@ -75,6 +75,46 @@ unsigned long activeIntervalMs = calibrationModeActive
 
 Command polling also accelerates to match the calibration interval so new commands (e.g. `stop_calibration_mode`) are picked up quickly.
 
+### Analog warm-up: why a warm calibration must still match a cold reading
+
+Blocking deep sleep has a side effect that used to distort calibration. While
+calibration mode (or the setup portal's `/calibrate` page) is running, the
+NAU7802 is never powered down: `scalebus::begin()` ran once at boot and the chip
+keeps converting with bridge excitation applied for as long as the operator is
+tareing and entering a known weight. Both calibration points are therefore
+captured on a fully warmed-up front end.
+
+Normal operation is the opposite. `powerDownScalesForSleep()` clears PUD/PUA
+before every deep sleep, and each wake re-runs `scalebus::begin()`. Before this
+was addressed, the AFE offset calibration was captured a few milliseconds after
+the internal LDO switched on — i.e. on the power-up transient — and that offset
+stayed baked into every conversion for the whole cycle. Measured against a
+tare offset captured warm, the result was a large low bias: at gain 128 a few
+tens of microvolts of settling drift is worth on the order of a **kilogram** on
+a load cell sized for a hive. Symptomatically, the first reading after a reboot
+read ~1 kg low while a device left awake recovered on later cycles.
+
+`NAU7802_WARMUP_MS` (`config.h`, default 1000 ms) closes that gap.
+`scalebus::begin()` now brings the bus up in two passes — configure every chip,
+then calibrate every chip once its warm-up has elapsed — so the AFE offset is
+always captured on a settled front end, whether the chip has been running for
+minutes in calibration mode or for a second after a deep-sleep wake. Configuring
+the later chips consumes part of the wait, so a full mux of eight costs roughly
+one warm-up rather than eight. The serial line
+
+```
+[SCALEBUS] NAU7802 (main-bus): initialized (CH2 unused, input cap on, AFE calibrated 1000 ms after power-up)
+```
+
+reports the elapsed warm-up per chip. Raise `NAU7802_WARMUP_MS` (a build flag or
+`secrets.h` override) if a device still reads low on its first cycle after a long
+power-off; the cost is awake time per wake, which is small beside the WiFi
+association that follows.
+
+Slow drift that develops over *hours* is a different effect — load-cell and
+frame temperature coefficient, not warm-up — and is corrected on the server
+side; see [temperature-compensation.md](temperature-compensation.md).
+
 ### Measurement JSON
 
 Every measurement includes a `calibration_mode` boolean field so the backend and frontend can distinguish calibration readings from normal ones:
