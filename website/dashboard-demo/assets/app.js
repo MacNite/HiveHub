@@ -309,6 +309,10 @@ function buildState() {
     deviceChannels: (id) => (id === activeId ? d.channels : null),
     // Static demo session — the real dashboard fills this from the auth API.
     authUser: DEMO_USER,
+    // Server feature flags: the real dashboard reads these from the auth
+    // handshake. The demo shows the "Publish data" panel so it can be explored,
+    // with publishing itself surfacing the usual read-only notice (api.js).
+    features: { publish: true },
     toast,
     reload: loadData,
     actions: {

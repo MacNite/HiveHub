@@ -320,6 +320,19 @@ def test_management_routes_need_a_login():
         check(f"{method} {path} is gated on the publishing switch", "require_publishing" in deps)
 
 
+def test_dashboard_advertises_the_feature():
+    """The dashboard hides its Publish panel unless the server says publishing is
+    on, so the flag has to ride along with the auth handshake."""
+    import local_dashboard
+
+    with mock.patch.object(local_dashboard, "ENABLE_PUBLIC_EMBEDS", True):
+        check("auth handshake reports publishing when it is on",
+              local_dashboard.dashboard_features() == {"publish": True})
+    with mock.patch.object(local_dashboard, "ENABLE_PUBLIC_EMBEDS", False):
+        check("auth handshake reports publishing when it is off",
+              local_dashboard.dashboard_features() == {"publish": False})
+
+
 def test_publishing_switch():
     with mock.patch.object(publish, "ENABLE_PUBLIC_EMBEDS", False):
         try:

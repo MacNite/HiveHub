@@ -29,8 +29,10 @@ ENABLE_PUBLIC_EMBEDS=true      # publishing (default: true)
 ```
 
 Set `ENABLE_PUBLIC_EMBEDS=false` to switch the whole feature off server-side:
-the **Publish data** view then says so, and every previously published link
-returns 404 — a single kill switch that does not require deleting anything.
+the **Publish data** panel disappears from the dashboard, and every previously
+published link returns 404 — a single kill switch that does not require deleting
+anything. (The flag is read at startup, so restart the container after changing
+it.)
 
 > Nothing becomes public by installing this. A publication exists only after
 > somebody explicitly creates one, and it can be taken offline or revoked at any
@@ -42,7 +44,8 @@ returns 404 — a single kill switch that does not require deleting anything.
 
 1. In the top bar's **Hives** menu, tick the hives you want to show. Publishing
    follows that selection, so what you are looking at is what you publish.
-2. Open **Publish data** in the sidebar (admin only) and fill in:
+2. Go to **Device & admin** and expand the **Publish data** panel (between
+   *Configuration* and *Admin*; the form itself is admin-only), then fill in:
 
    | Field | What it does |
    |---|---|

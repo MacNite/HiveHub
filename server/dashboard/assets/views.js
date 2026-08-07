@@ -2231,6 +2231,11 @@ function renderDevice(root, state) {
   node.append(
     topGrid,
     collapsible("Configuration", false, cfgForm, calCard),
+    // Publishing is optional server-side (ENABLE_PUBLIC_EMBEDS): when it is off,
+    // every /publish endpoint 404s, so the panel is not built at all rather than
+    // offered and then failing on open. state.features comes from the auth
+    // handshake (see app.js / local_dashboard.dashboard_features).
+    state.features?.publish ? publishPanel(state) : null,
     collapsible("Admin", false, el("div", { class: "admin-cols" }, ...adminCards)));
   root.append(node);
 }
@@ -3212,24 +3217,35 @@ function publishedChartCard(chart, state, repaint) {
     actions);
 }
 
-function renderPublish(root, state) {
-  const node = el("div", {});
-  root.append(node);
+// Whether the "Publish data" panel on the Device & admin page is expanded.
+// Module state, like publishDraft: renderDevice rebuilds the whole page on every
+// load (including the 60s auto-refresh), which would otherwise fold the panel
+// shut — and throw away the form — while it is being filled in.
+let publishPanelOpen = false;
+
+// The "Publish data" section of Device & admin. Only built when the server
+// reports the feature as enabled (see renderDevice / state.features.publish),
+// and only loaded once actually opened: a page view that leaves it collapsed
+// costs no requests.
+function publishPanel(state) {
+  const body = el("div", {});
+  const panel = collapsible("Publish data", publishPanelOpen, body);
 
   const paint = () => {
-    const kids = [viewHead("Publish data",
-      "Share a chart publicly and embed it in a website — everything else stays behind the login")];
+    const kids = [el("p", { class: "note" },
+      "Share one chart publicly and embed it in a website — everything else stays "
+      + "behind this login.")];
 
     if (publishState.error) {
       kids.push(el("div", { class: "card" },
         el("h2", {}, "Publishing unavailable"),
         el("p", { class: "note" }, publishState.error)));
-      node.replaceChildren(...kids);
+      body.replaceChildren(...kids);
       return;
     }
     if (!publishState.loaded) {
-      kids.push(el("div", { class: "empty-state" }, "Loading…"));
-      node.replaceChildren(...kids);
+      kids.push(el("p", { class: "muted-text" }, "Loading…"));
+      body.replaceChildren(...kids);
       return;
     }
 
@@ -3252,23 +3268,36 @@ function renderPublish(root, state) {
           : el("div", { class: "card" }, el("h2", {}, "Publish a chart"),
               el("p", { class: "note" }, "Publishing a chart requires the administrator role."))),
       el("div", { class: "admin-col publish-list" }, ...list)));
-    node.replaceChildren(...kids);
+    body.replaceChildren(...kids);
   };
 
   // The background refresh must not yank the caret out of a half-typed title, so
-  // it skips the repaint while a field in this view has focus; the next render
-  // (or any action in the view) paints the fresh list.
+  // it skips the repaint while a field in the panel has focus; the next render
+  // (or any action in the panel) paints the fresh list.
   const paintIfIdle = () => {
     const active = document.activeElement;
-    if (node.contains(active) && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName)) return;
+    if (body.contains(active) && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName)) return;
     paint();
   };
 
-  paint();
-  // Paint from what we have, then refresh in the background when it is stale (or
-  // belongs to a previous session). loadPublishData refreshes fetchedAt before
-  // this paint runs, so the repaint cannot start another load.
-  if (needsPublishLoad(state)) loadPublishData(state).then(paintIfIdle);
+  // Paint from what we have, then refresh in the background when the list is
+  // stale (or belongs to a previous session). loadPublishData refreshes
+  // fetchedAt before this paint runs, so the repaint cannot start another load.
+  const refresh = () => {
+    paint();
+    if (needsPublishLoad(state)) loadPublishData(state).then(paintIfIdle);
+  };
+
+  panel.addEventListener("toggle", () => {
+    publishPanelOpen = panel.open;
+    if (panel.open) refresh();
+  });
+
+  if (publishPanelOpen) refresh();
+  else body.replaceChildren(el("p", { class: "note" },
+    "Publish one chart — a metric, the hives you pick, a rolling period — as a "
+    + "public link you can embed in a website. Open to publish or manage them."));
+  return panel;
 }
 
 // ── registry ─────────────────────────────────────────────────────────────────
@@ -3285,6 +3314,8 @@ export const GROUPS = [
   { id: "connectivity", label: "Connectivity", icon: "📶", render: renderConnectivity },
   { id: "counter", label: "Counter", icon: "🐝", render: renderCounter },
   { id: "insights", label: "Insights", icon: "💡", render: renderInsights },
-  { id: "publish", label: "Publish data", icon: "🌐", render: renderPublish },
+  // "Publish data" is not a data group: it lives as a collapsible panel on the
+  // Device & admin page (see publishPanel), and only when the server has
+  // publishing enabled.
   { id: "device", label: "Device & admin", icon: "⚙️", render: renderDevice },
 ];
