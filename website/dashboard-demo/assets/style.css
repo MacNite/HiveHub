@@ -503,3 +503,28 @@ select:focus-visible, input:focus-visible, canvas:focus-visible {
   border: 1px solid var(--line); border-radius: 10px; background: var(--card); width: 100%;
 }
 .auth-error { color: var(--danger); font-size: .85rem; min-height: 1.1em; margin: .1rem 0 .4rem; }
+
+/* ── Publish data (public embeds) ───────────────────────────── */
+/* Two columns: the publish form on the left at a fixed, form-sized width, and
+   the live publications on the right — those carry the paste-ready embed code
+   and URLs, so they get all the remaining room. */
+.publish-cols { display: grid; grid-template-columns: minmax(0, 22rem) minmax(0, 1fr); gap: 1rem; align-items: start; }
+@media (max-width: 900px) { .publish-cols { grid-template-columns: 1fr; } }
+.publish-list .card h2 { font-size: .98rem; }
+.publish-series-row .k { display: inline-flex; align-items: center; gap: .5rem; min-width: 0; }
+.publish-series-row input[type="checkbox"] { accent-color: var(--honey); width: 1rem; height: 1rem; cursor: pointer; }
+.publish-series-row .series-source { font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The published (public) name for a series — editable, so a chart on a website
+   need not carry the hive's internal name. */
+.publish-series-row .series-label {
+  font: inherit; font-size: .85rem; padding: .3rem .5rem; min-width: 9rem; max-width: 12rem;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink);
+}
+
+/* Copy-me rows: the embed snippet and the public URLs. */
+.copy-row { display: flex; align-items: center; gap: .5rem; margin: .4rem 0; flex-wrap: wrap; }
+.copy-row .copy-label { font-size: .74rem; font-weight: 700; color: var(--ink-faint); flex: 0 0 5.5rem; }
+.copy-row .copy-field {
+  flex: 1 1 12rem; min-width: 0; font: 500 .74rem var(--mono); color: var(--ink-soft);
+  padding: .4rem .55rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+}

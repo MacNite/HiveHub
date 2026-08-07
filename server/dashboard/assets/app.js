@@ -343,6 +343,13 @@ function buildState() {
       updateConfig: (p) => api.updateConfig(activeId, p),
       updateChannels: (p) => api.updateChannels(activeId, p),
       insightsHistory: (opts) => api.insightsHistory(activeId, opts),
+      // Publish data: the server-side metric registry plus the publication list
+      // and its lifecycle (see views.js renderPublish).
+      publishMetrics: () => api.publishMetrics(),
+      publishedCharts: () => api.publishedCharts(),
+      publishChart: (payload) => api.publishChart(payload),
+      updatePublishedChart: (id, patch) => api.updatePublishedChart(id, patch),
+      deletePublishedChart: (id) => api.deletePublishedChart(id),
       // Device visibility (admin): retire/restore a device in the hive picker.
       setDeviceVisibility: (deviceId, hidden) => setDeviceVisibility(deviceId, hidden),
       // Delete a device's readings in a time range, authed by its claim code.

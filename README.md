@@ -74,6 +74,7 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Optional off-grid mode** — solar/LiPo charging (CN3791 MPPT + TPS63020) with MAX17048 LiPo telemetry.
 - **Optional entrance bee counters** — wireless [HiveTraffic](docs/hivetraffic-bee-counter.md) counters over **BLE/GATT only** (wired I2C BeeCounters are no longer supported).
 - **Built-in web dashboard (optional)** — a dependency-free dashboard served from the backend at `/dashboard` for single-owner self-hosts, protected by **username + password login** (first visit runs a setup wizard; admin/viewer roles): cross-device hive comparison, charts for every data group, plus device-config editing, hive renaming, firmware/OTA and calibration controls, SD-backup import, and user management. Off by default (`ENABLE_LOCAL_DASHBOARD`); see [server/dashboard/README.md](server/dashboard/README.md) and the [live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
+- **Publish data for your website** — publish one chart (a metric, the hives you pick, a rolling period) from the dashboard and embed it in a club page, blog or shop with a one-line `<iframe>` — or fetch the same slice as JSON/CSV and draw it yourself. Everything else stays behind the login: a published link exposes only the labels you typed, no device IDs or other readings, and can be revoked at any time. See [Publish data](docs/publish-embed.md).
 - **[HivePal](https://github.com/martinhrvn/hive-pal) integration** — dedicated `/api/v1/app/...` endpoints using a HivePal service key, per-user JWTs, and per-user access roles.
 - **Optional MQTT bridge** — mirror every reading to an MQTT broker (Home Assistant, Node-RED, openHAB…) with Home Assistant auto-discovery, alongside the built-in PostgreSQL store. Off by default; see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration).
 - **PCB designs (tested and working)** — KiCad ESP32-C6 Scale Module (recommended) and NAU7802 breakout board with fabrication outputs, plus the Power Module and legacy 30-pin Scale Module.
@@ -87,7 +88,8 @@ Every sensor is optional and compiled in per device — start with weight and ad
 HiveHub/
 ├── firmware/                   # ESP32 PlatformIO project (src/, include/)
 ├── server/                     # Python FastAPI backend, insights, migrations
-│   └── dashboard/              # Built-in login-protected web dashboard (served at /dashboard)
+│   ├── dashboard/              # Built-in login-protected web dashboard (served at /dashboard)
+│   └── embed/                  # Public "Publish data" chart pages (served at /embed/chart/<token>)
 ├── docker/                     # Docker Compose deployment
 ├── website/                    # Static site + secrets.h configurator (GitHub Pages)
 │   └── dashboard-demo/         # Backend-free dashboard demo (sample data)
@@ -361,6 +363,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `MAX_BODY_BYTES` / `MAX_FIRMWARE_BYTES` | Optional | Request-body and firmware-upload size caps (default 256 KiB / 16 MiB) |
 | `ENABLE_LOCAL_DASHBOARD` | Optional | Serve the built-in **login-protected** dashboard at `/dashboard` and its `/api/v1/local/*` API (default off). It serves every device on the server behind one login, so keep it off on multi-tenant deployments. |
 | `DASHBOARD_SESSION_SECRET` / `DASHBOARD_SESSION_TTL_HOURS` / `DASHBOARD_COOKIE_SECURE` | Optional | Dashboard login-session settings: signing secret (auto-generated and persisted when blank), session lifetime (default `168` h), HTTPS-only cookie flag |
+| `ENABLE_PUBLIC_EMBEDS` | Optional | Allow the dashboard's **Publish data** view to serve individual published charts without a login, for embedding in a website (default on; nothing is public until an admin publishes it). See [Publish data](docs/publish-embed.md). |
 | `TRUST_PROXY_HEADERS` | Optional | Trust `CF-Connecting-IP` / `X-Forwarded-For` for rate-limit client IPs (default `false`; set `true` only behind a reverse proxy that overwrites these headers, otherwise a direct client can spoof them to dodge the limiter) |
 | `INSIGHTS_RECONCILE_*` | Optional | Background insight-history reconciliation (see `server/.env.example`) |
 | `SMTP_*` / `NOTIFY_MIN_SEVERITY` | Optional | E-mail channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
@@ -498,12 +501,29 @@ endpoints power the built-in `/dashboard` UI; see
 | `GET`/`PATCH` | `/api/v1/local/devices/{id}/channels` | Read / rename the hive display names |
 | `GET` | `/api/v1/local/devices/{id}/insights/summary` · `/history` | Highest-severity insight summary / persisted alert history |
 | `GET`/`POST` | `/api/v1/local/devices/{id}/firmware/status` · (upload) · `/approve` | OTA status / upload binary / approve (admin) |
+| `GET` | `/api/v1/local/publish/metrics` | Metrics that can be published as a public chart |
+| `GET`/`POST`/`PATCH`/`DELETE` | `/api/v1/local/publish/charts[/{id}]` | List / publish / edit / revoke public chart embeds (writes: admin) |
 | `POST` | `/api/v1/local/devices/{id}/hiveinside/update` | Queue a HiveInside BLE OTA relay to the node on `?slot=` (hive index; `?force=`, admin) |
 | `POST` | `/api/v1/local/devices/{id}/calibration/start` · `/stop` | Start / stop calibration mode (admin) |
 | `POST` | `/api/v1/local/devices/{id}/temp-compensation/fit` | Fit a load-cell temperature coefficient (admin) |
 | `GET` | `/api/v1/local/notifications/config` | Which alert channels are enabled + VAPID public key |
 | `POST` | `/api/v1/local/notifications/subscribe` · `/unsubscribe` | Register / forget this browser's Web Push subscription |
 | `POST` | `/api/v1/local/notifications/test` | Send a test alert over every enabled channel |
+
+### Public embed endpoints (no login)
+
+The only routes on the server that need no credentials. Each serves exactly one
+chart an admin published through **Publish data** above, addressed by an
+unguessable token, and nothing else — no device IDs, no other readings, no
+access to any other endpoint. They 404 when `ENABLE_PUBLIC_EMBEDS=false`, when
+the publication is taken offline, and when it is revoked. See
+[docs/publish-embed.md](docs/publish-embed.md).
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/embed/chart/{token}` | Self-contained page for `<iframe>` embedding in a website |
+| `GET` | `/api/v1/public/charts/{token}` | The published chart as JSON (`Access-Control-Allow-Origin: *`) |
+| `GET` | `/api/v1/public/charts/{token}.csv` | The same points as CSV |
 
 ---
 
@@ -585,6 +605,7 @@ A full index is in [docs/README.md](docs/README.md). Highlights:
 - [docs/wiring.md](docs/wiring.md) — full wiring reference.
 - [docs/api.md](docs/api.md) — complete API reference.
 - [server/dashboard/README.md](server/dashboard/README.md) — the built-in web dashboard ([live demo](https://macnite.github.io/HiveHub/dashboard-demo/)).
+- [docs/publish-embed.md](docs/publish-embed.md) — publish a chart publicly and embed it in a website.
 - [docs/insights.md](docs/insights.md) — rule-based colony insights and detector catalogue.
 - [docs/notifications.md](docs/notifications.md) — insight alert notifications by e-mail and Web Push.
 - [docs/holyiot-ble-sensor.md](docs/holyiot-ble-sensor.md) · [docs/ruuvitag-ble-sensor.md](docs/ruuvitag-ble-sensor.md) · [docs/beehivemonitoring-gatt.md](docs/beehivemonitoring-gatt.md) — in-hive BLE sensors.

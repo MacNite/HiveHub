@@ -109,7 +109,7 @@ jobs:
           python3 test-data/test_sd_import.py
           python3 test-data/test_data_export.py
           python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py \
-                            test-data/test_relay_ota_gate.py
+                            test-data/test_relay_ota_gate.py test-data/test_publish.py
       # --require-db turns an unreachable database into a failure rather than a
       # skip, so a broken service container can never leave this job green while
       # silently testing nothing.

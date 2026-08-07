@@ -1,0 +1,99 @@
+/* HiveHub public embed — the styling for /embed/chart/{token}.
+
+   Shares the dashboard's design tokens so a published chart looks like the one
+   it was published from, but only the handful the embed actually uses: this page
+   is a fragment inside somebody else's site, so it stays small and paints its
+   own background rather than inheriting the host's.
+
+   Theme: "auto" follows the viewer's OS setting; a publication pinned to
+   light/dark sets data-theme on <html> (see embed.js), which wins over the
+   media query. */
+
+:root {
+  color-scheme: light;
+  --honey: #f2a900;
+  --ink: #1f2421;
+  --ink-soft: #4b524d;
+  --ink-faint: #8a9088;
+  --line: #e7ddc4;
+  --card: #ffffff;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --chart-axis: #8a9088;
+  --chart-grid: rgba(31, 36, 33, .08);
+  --chart-cursor: rgba(31, 36, 33, .35);
+  --chart-cursor-strong: rgba(31, 36, 33, .5);
+  --chart-latest: #111111;
+  --chart-marker-ring: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --honey: #f5b421;
+    --ink: #f3eee1;
+    --ink-soft: #c2bcac;
+    --ink-faint: #8c8676;
+    --line: #38342a;
+    --card: #211f18;
+    --chart-axis: #8c8676;
+    --chart-grid: rgba(243, 238, 225, .09);
+    --chart-cursor: rgba(243, 238, 225, .38);
+    --chart-cursor-strong: rgba(243, 238, 225, .55);
+    --chart-latest: #f3eee1;
+    --chart-marker-ring: #211f18;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --honey: #f5b421;
+  --ink: #f3eee1;
+  --ink-soft: #c2bcac;
+  --ink-faint: #8c8676;
+  --line: #38342a;
+  --card: #211f18;
+  --chart-axis: #8c8676;
+  --chart-grid: rgba(243, 238, 225, .09);
+  --chart-cursor: rgba(243, 238, 225, .38);
+  --chart-cursor-strong: rgba(243, 238, 225, .55);
+  --chart-latest: #f3eee1;
+  --chart-marker-ring: #211f18;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--sans);
+  /* An iframe has no page margin of its own to lean on. */
+  padding: .75rem .9rem 1rem;
+}
+
+.embed-title { margin: 0; font-size: 1.05rem; font-weight: 800; }
+.embed-sub { margin: .15rem 0 .6rem; font-size: .82rem; color: var(--ink-faint); }
+.embed-state { margin: 0; padding: 1.5rem 0; text-align: center; color: var(--ink-faint); font-size: .9rem; }
+
+/* charts.js sizes its canvas from the wrapper, so the wrapper owns the height
+   (set inline from the publication's `height` option). */
+.chart-wrap { position: relative; width: 100%; height: 320px; }
+.chart-wrap canvas { width: 100%; height: 100%; display: block; }
+.chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-faint); font-size: .9rem; }
+
+.embed-legend { display: flex; flex-wrap: wrap; gap: .85rem; margin: .1rem 0 .5rem; font-size: .8rem; color: var(--ink-soft); }
+.embed-legend .lg { display: inline-flex; align-items: center; gap: .35rem; }
+.embed-legend .swatch { width: .8rem; height: .8rem; border-radius: 3px; display: inline-block; }
+.embed-legend .lg-value { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+/* "value" publications: one tile per series instead of a diagram. */
+.embed-values { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.embed-value { border: 1px solid var(--line); border-radius: 12px; padding: .7rem .8rem; }
+.embed-value .label { display: flex; align-items: center; gap: .35rem; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 700; }
+.embed-value .value { font-size: 1.7rem; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.embed-value .unit { font-size: .95rem; font-weight: 600; color: var(--ink-soft); }
+.embed-value .change { font-size: .78rem; color: var(--ink-soft); }
+
+.embed-foot { margin: .55rem 0 0; font-size: .72rem; color: var(--ink-faint); display: flex; flex-wrap: wrap; gap: .4rem; }
+.embed-foot a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--ink-faint); }
+.embed-foot a:hover { color: var(--ink); }

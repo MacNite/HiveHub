@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <!-- An embed is a fragment of somebody else's page, not a destination of its
+       own; the host page is what search engines should find. -->
+  <meta name="robots" content="noindex" />
+  <title>{{TITLE}}</title>
+  <link rel="stylesheet" href="/embed/assets/embed.css" />
+</head>
+<body>
+  <!-- The shell carries only the token: everything drawn here comes from
+       GET /api/v1/public/charts/{token}, the same public JSON a site owner can
+       fetch directly. -->
+  <main class="embed" id="embed" data-token="{{TOKEN}}">
+    <p class="embed-state">Loading…</p>
+  </main>
+  <script type="module" src="/embed/assets/embed.js"></script>
+</body>
+</html>

@@ -263,4 +263,28 @@ export const api = {
   exportSummary: () =>
     Promise.reject(new Error("This is a read-only demo — the data download is disabled.")),
   exportUrl: () => "#",
+
+  // ── Publish data ──────────────────────────────────────────────────────────
+  // The metric registry is served so the Publish form is fully explorable, and
+  // the list starts empty. Publishing itself needs a server to mint the public
+  // token, so it surfaces the same read-only notice as the other write actions.
+  publishMetrics: () => wrap([
+    { id: "weight", label: "Weight", unit: "kg", digits: 2, scope: "hive" },
+    { id: "hive_temp", label: "Hive temperature", unit: "°C", digits: 1, scope: "hive" },
+    { id: "hive_humidity", label: "In-hive humidity", unit: "%", digits: 0, scope: "hive" },
+    { id: "sound_rms", label: "Sound level (RMS)", unit: "dBFS", digits: 1, scope: "hive" },
+    { id: "bees_in", label: "Bees in (per interval)", unit: "", digits: 0, scope: "hive" },
+    { id: "bees_out", label: "Bees out (per interval)", unit: "", digits: 0, scope: "hive" },
+    { id: "ambient_temp", label: "Ambient temperature", unit: "°C", digits: 1, scope: "device" },
+    { id: "ambient_humidity", label: "Ambient humidity", unit: "%", digits: 0, scope: "device" },
+    { id: "battery_soc", label: "Collector battery", unit: "%", digits: 0, scope: "device" },
+    { id: "battery_voltage", label: "Collector battery voltage", unit: "V", digits: 2, scope: "device" },
+    { id: "solar_power", label: "Solar power", unit: "mW", digits: 0, scope: "device" },
+    { id: "rssi", label: "Signal strength", unit: "dBm", digits: 0, scope: "device" },
+  ]),
+  publishedCharts: () => wrap([]),
+  publishChart: () =>
+    Promise.reject(new Error("This is a read-only demo — publishing needs a HiveHub server.")),
+  updatePublishedChart: demoErr,
+  deletePublishedChart: demoErr,
 };

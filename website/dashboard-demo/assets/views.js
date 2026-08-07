@@ -2224,7 +2224,8 @@ function renderDevice(root, state) {
   const adminCards = [accountCard(state), notificationsCard(state)];
   if (isAdmin) {
     adminCards.push(usersCard(state), visibleDevicesCard(state),
-                    downloadBackupCard(state), deleteMeasurementsCard(state));
+                    downloadBackupCard(state), deleteMeasurementsCard(state),
+                    deleteDeviceCard(state));
   }
 
   node.append(
@@ -2481,8 +2482,71 @@ function visibleDevicesCard(state) {
   return el("div", { class: "card" }, el("h2", {}, "Visible devices"),
     el("p", { class: "note" },
       "Uncheck a retired device to remove it from the hive picker at the top of the page. " +
-      "Its readings are kept and it can be shown again at any time."),
+      "Its readings are kept and it can be shown again at any time. " +
+      "To erase a device for good, use “Delete device” below."),
     listEl);
+}
+
+// "Delete device" (admin only): erase a device and everything belonging to it.
+// Hiding only retires a device from the picker; a decommissioned device, or one
+// created by a typo'd device_id, otherwise stays in the database forever and
+// keeps ingesting uploads. Irreversible, so the server requires both the claim
+// code and the device_id typed back (see local_delete_device).
+function deleteDeviceCard(state) {
+  const devices = state.devices || [];
+  const select = el("select", {});
+  for (const d of devices) {
+    select.append(el("option", { value: d.device_id },
+      d.display_name ? `${d.display_name} · ${d.device_id}` : d.device_id));
+  }
+  const idInput = el("input", { type: "text", autocomplete: "off", placeholder: "Type the device ID to confirm" });
+  const codeInput = el("input", { type: "text", autocomplete: "off", placeholder: "e.g. ABCD-1234" });
+  const out = el("p", { class: "note", hidden: true });
+  const btn = el("button", { class: "btn danger", type: "submit" }, "Delete device");
+  const form = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Device"), select),
+    el("div", { class: "form-row" }, el("label", {}, "Confirm device ID"), idInput),
+    el("div", { class: "form-row" }, el("label", {}, "Device claim code"), codeInput),
+    el("div", { class: "form-actions" }, btn),
+    out);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const deviceId = select.value;
+    if (!deviceId) { state.toast("No device selected", "error"); return; }
+    if (idInput.value.trim() !== deviceId) { state.toast("Confirm the device ID exactly as shown", "error"); return; }
+    if (!codeInput.value.trim()) { state.toast("Enter the device's claim code to confirm", "error"); return; }
+    if (!window.confirm(
+      `Permanently delete “${deviceId}” and every reading, command and config row\n` +
+      "belonging to it?\n\nThis cannot be undone.")) return;
+    btn.disabled = true;
+    try {
+      const res = await state.actions.deleteDevice(deviceId, {
+        claim_code: codeInput.value.trim(),
+        confirm_device_id: deviceId,
+      });
+      const n = res?.measurements_deleted ?? 0;
+      out.hidden = false;
+      out.textContent = `Deleted “${deviceId}” and ${n} reading${n === 1 ? "" : "s"}.`;
+      state.toast(`Deleted ${deviceId}`, "success");
+      idInput.value = codeInput.value = "";
+      state.reload();
+    } catch (err) { state.toast(err.message, "error"); }
+    finally { btn.disabled = false; }
+  });
+  if (!devices.length) {
+    return el("div", { class: "card" }, el("h2", {}, "Delete device"),
+      el("p", { class: "note" }, "No devices on this server."));
+  }
+  return el("div", { class: "card" }, el("h2", {}, "Delete device"),
+    el("p", { class: "note" },
+      "Erase a device and all of its readings, commands and configuration. " +
+      "Use this for a device that is gone for good — to keep the history but " +
+      "tidy the picker, hide it instead. Type the device ID and its claim code " +
+      "to authorise the deletion."),
+    el("p", { class: "note" },
+      "Power the device down first if it is still running: a device that uploads " +
+      "again simply re-registers itself."),
+    form);
 }
 
 // "Delete readings" (admin only): remove a time range of measurements for the
@@ -2756,6 +2820,457 @@ function usersCard(state) {
     addForm);
 }
 
+// ── PUBLISH DATA ─────────────────────────────────────────────────────────────
+// Turn part of this (login-protected) dashboard into something a website can
+// show: pick a metric and hives, publish, and paste the returned <iframe> into a
+// club page, blog or shop. The server then serves exactly that slice under an
+// unguessable token — see server/publish.py — and nothing else becomes public.
+//
+// The view is rebuilt by every render (view switch, the 60s auto-refresh), so
+// the fetched data and the half-filled form live in module state rather than in
+// the DOM: an auto-refresh mid-edit must not throw away what was typed.
+const publishState = {
+  metrics: null, charts: null, error: null, loading: false, loaded: false,
+  fetchedAt: 0,   // for the periodic re-fetch: view counts and titles age
+  user: null,     // whose session the list was loaded for (see needsPublishLoad)
+};
+// How long the fetched list stays fresh. The view repaints on every render, so
+// this decides how often reopening it (or the 60s auto-refresh) re-reads the
+// list rather than repainting the cached one.
+const PUBLISH_TTL_MS = 30000;
+
+function needsPublishLoad(state) {
+  if (publishState.loading) return false;
+  // A different account signed in on this tab: drop the previous session's list
+  // instead of showing it until the next reload.
+  if (publishState.user !== (state.authUser?.username || null)) return true;
+  return !publishState.loaded || Date.now() - publishState.fetchedAt > PUBLISH_TTL_MS;
+}
+
+const PUBLISH_RANGES = [
+  [7, "7 days"], [14, "14 days"], [30, "30 days"], [90, "90 days"],
+  [180, "6 months"], [365, "1 year"],
+];
+const PUBLISH_AGGREGATES = [
+  ["none", "Every reading"], ["daily_max", "Daily maximum"],
+  ["daily_min", "Daily minimum"], ["daily_avg", "Daily average"],
+];
+
+function newPublishDraft() {
+  return {
+    metric: "weight",
+    title: "",
+    titleTouched: false,   // stop auto-filling the title once it was edited
+    subtitle: "",
+    range_days: 30,
+    chart_type: "line",
+    aggregate: "none",
+    theme: "auto",
+    height: 320,
+    show_legend: true,
+    show_updated: true,
+    labels: {},            // "<deviceId>::<hive>" -> renamed public label
+    excluded: new Set(),   // candidate keys the publisher unticked
+  };
+}
+let publishDraft = newPublishDraft();
+
+async function loadPublishData(state) {
+  if (publishState.loading) return;
+  publishState.loading = true;
+  publishState.user = state.authUser?.username || null;
+  try {
+    const [metrics, charts] = await Promise.all([
+      state.actions.publishMetrics(),
+      state.actions.publishedCharts(),
+    ]);
+    publishState.metrics = metrics;
+    publishState.charts = charts;
+    publishState.error = null;
+  } catch (err) {
+    // 404 is the server saying publishing is switched off, which is a setting
+    // rather than a failure — say so instead of showing a raw error.
+    publishState.error = err.status === 404
+      ? "Publishing is switched off on this server. Set ENABLE_PUBLIC_EMBEDS=true (and ENABLE_LOCAL_DASHBOARD=true) to enable it."
+      : err.message || "Could not load published charts";
+  } finally {
+    publishState.loading = false;
+    publishState.loaded = true;
+    publishState.fetchedAt = Date.now();
+  }
+}
+
+function metricSpec(id) {
+  return (publishState.metrics || []).find((m) => m.id === id) || null;
+}
+
+// The hives (or, for device-level metrics, the devices) that can go into a new
+// publication: whatever is ticked in the top-bar hive picker. Publishing follows
+// the selection so "what I am looking at" is what gets published.
+function publishCandidates(state, scope) {
+  if (scope === "device") {
+    const ids = [...new Set((state.selection || []).map((s) => s.deviceId))];
+    if (!ids.length && state.activeDeviceId) ids.push(state.activeDeviceId);
+    return ids.map((id) => ({ key: `${id}::`, device_id: id, hive: null, label: state.deviceName(id) }));
+  }
+  return selectedRefs(state).map((ref) => ({
+    key: `${ref.deviceId}::${ref.hive}`,
+    device_id: ref.deviceId,
+    hive: ref.hive,
+    label: refLabel(state, ref),
+  }));
+}
+
+function chosenPublishSeries(state, scope) {
+  return publishCandidates(state, scope)
+    .filter((c) => !publishDraft.excluded.has(c.key))
+    .map((c) => ({
+      device_id: c.device_id,
+      hive: c.hive,
+      label: (publishDraft.labels[c.key] || c.label || "").trim(),
+    }))
+    .filter((s) => s.label);
+}
+
+function defaultPublishTitle(state) {
+  const spec = metricSpec(publishDraft.metric);
+  const names = chosenPublishSeries(state, spec?.scope || "hive").map((s) => s.label);
+  if (!spec) return "";
+  if (!names.length) return spec.label;
+  return `${spec.label} — ${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""}`;
+}
+
+// Copy to the clipboard, falling back to a hidden textarea where the async
+// Clipboard API is unavailable (older browsers, and any page served over plain
+// HTTP — which a self-hosted dashboard on a LAN often is).
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) { /* fall through to the legacy path */ }
+  const ta = el("textarea", { style: "position:fixed;opacity:0;pointer-events:none" });
+  ta.value = text;
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+// The snippet a site owner pastes. The iframe is a hair taller than the chart so
+// the title, legend and "updated" line have room; loading="lazy" keeps an embed
+// far down a page off the critical path.
+function embedSnippet(chart) {
+  const height = Number(chart.options?.height || 320) + (chart.chart_type === "value" ? 40 : 120);
+  const title = String(chart.title || "HiveHub chart").replace(/"/g, "&quot;");
+  return `<iframe src="${chart.embed_url}" title="${title}" width="100%" height="${height}" `
+       + `style="border:0" loading="lazy"></iframe>`;
+}
+
+function copyRow(label, value, state) {
+  const box = el("input", { type: "text", readonly: true, class: "copy-field", value });
+  box.addEventListener("focus", () => box.select());
+  const btn = el("button", { class: "btn ghost small", type: "button" }, "Copy");
+  btn.addEventListener("click", async () => {
+    const ok = await copyToClipboard(value);
+    state.toast(ok ? `${label} copied` : "Could not copy — select the text and copy manually",
+      ok ? "success" : "error");
+  });
+  return el("div", { class: "copy-row" },
+    el("span", { class: "copy-label" }, label), box, btn);
+}
+
+// The "Publish a chart" form (admin only). Every control writes straight into
+// publishDraft, so the next re-render — including the one 60 s from now — paints
+// the same half-filled form back.
+function publishFormCard(state, repaint) {
+  const spec = metricSpec(publishDraft.metric) || (publishState.metrics || [])[0];
+  if (!spec) return null;
+  publishDraft.metric = spec.id;
+  const candidates = publishCandidates(state, spec.scope);
+
+  const metricSelect = el("select", { class: "full" },
+    ...(publishState.metrics || []).map((m) =>
+      el("option", { value: m.id, selected: m.id === publishDraft.metric ? true : null },
+        m.scope === "device" ? `${m.label} (device)` : m.label)));
+  metricSelect.addEventListener("change", () => {
+    publishDraft.metric = metricSelect.value;
+    repaint();   // the candidate list changes with the metric's scope
+  });
+
+  const titleInput = el("input", { type: "text", maxlength: "120" });
+  titleInput.value = publishDraft.titleTouched ? publishDraft.title : defaultPublishTitle(state);
+  titleInput.addEventListener("input", () => {
+    publishDraft.titleTouched = true;
+    publishDraft.title = titleInput.value;
+  });
+
+  const subtitleInput = el("input", { type: "text", maxlength: "200", placeholder: "Optional line under the title" });
+  subtitleInput.value = publishDraft.subtitle;
+  subtitleInput.addEventListener("input", () => { publishDraft.subtitle = subtitleInput.value; });
+
+  // One row per selectable hive: tick to include, and rename it for the public
+  // chart (the published label is all a visitor ever sees — no device ids, no
+  // hive numbers travel with the data).
+  const seriesRows = candidates.map((c) => {
+    const cb = el("input", { type: "checkbox" });
+    cb.checked = !publishDraft.excluded.has(c.key);
+    cb.addEventListener("change", () => {
+      if (cb.checked) publishDraft.excluded.delete(c.key);
+      else publishDraft.excluded.add(c.key);
+      if (!publishDraft.titleTouched) titleInput.value = defaultPublishTitle(state);
+    });
+    const nameInput = el("input", { type: "text", maxlength: "64", class: "series-label" });
+    nameInput.value = publishDraft.labels[c.key] ?? c.label;
+    nameInput.addEventListener("input", () => {
+      publishDraft.labels[c.key] = nameInput.value;
+      if (!publishDraft.titleTouched) titleInput.value = defaultPublishTitle(state);
+    });
+    return el("label", { class: "row publish-series-row" },
+      el("span", { class: "k" }, cb, el("span", { class: "series-source" }, c.label)),
+      el("span", { class: "v" }, nameInput));
+  });
+
+  const rangeSelect = el("select", { class: "full" },
+    ...PUBLISH_RANGES.map(([d, label]) =>
+      el("option", { value: String(d), selected: d === publishDraft.range_days ? true : null }, label)));
+  rangeSelect.addEventListener("change", () => { publishDraft.range_days = Number(rangeSelect.value); });
+
+  const typeSelect = el("select", { class: "full" },
+    el("option", { value: "line", selected: publishDraft.chart_type === "line" ? true : null }, "Line chart"),
+    el("option", { value: "value", selected: publishDraft.chart_type === "value" ? true : null }, "Current value only"));
+  typeSelect.addEventListener("change", () => { publishDraft.chart_type = typeSelect.value; });
+
+  const aggSelect = el("select", { class: "full" },
+    ...PUBLISH_AGGREGATES.map(([v, label]) =>
+      el("option", { value: v, selected: v === publishDraft.aggregate ? true : null }, label)));
+  aggSelect.addEventListener("change", () => { publishDraft.aggregate = aggSelect.value; });
+
+  const themeSelect = el("select", { class: "full" },
+    ...[["auto", "Follow the visitor's system"], ["light", "Always light"], ["dark", "Always dark"]].map(([v, label]) =>
+      el("option", { value: v, selected: v === publishDraft.theme ? true : null }, label)));
+  themeSelect.addEventListener("change", () => { publishDraft.theme = themeSelect.value; });
+
+  const heightInput = el("input", { type: "number", min: "140", max: "1200", step: "10" });
+  heightInput.value = String(publishDraft.height);
+  heightInput.addEventListener("input", () => { publishDraft.height = Number(heightInput.value) || 320; });
+
+  const legendCb = el("input", { type: "checkbox" });
+  legendCb.checked = publishDraft.show_legend;
+  legendCb.addEventListener("change", () => { publishDraft.show_legend = legendCb.checked; });
+
+  const updatedCb = el("input", { type: "checkbox" });
+  updatedCb.checked = publishDraft.show_updated;
+  updatedCb.addEventListener("change", () => { publishDraft.show_updated = updatedCb.checked; });
+
+  const btn = el("button", { class: "btn", type: "submit" }, "Publish chart");
+  const form = el("form", {},
+    el("div", { class: "form-row" }, el("label", {}, "Data"), metricSelect),
+    el("h3", { class: "fw-upload-head" }, spec.scope === "device" ? "Devices" : "Hives"),
+    candidates.length
+      ? el("div", { class: "rows" }, ...seriesRows)
+      : el("p", { class: "muted-text" },
+          spec.scope === "device"
+            ? "No device selected — pick one in the Hives menu at the top of the page."
+            : "No hives selected — pick them in the Hives menu at the top of the page."),
+    el("p", { class: "note" },
+      "Only the names on the right are published. Visitors never see device IDs, "
+      + "hive numbers or any reading other than the one chosen above."),
+    el("div", { class: "form-row" }, el("label", {}, "Title"), titleInput),
+    el("div", { class: "form-row" }, el("label", {}, "Subtitle"), subtitleInput),
+    el("div", { class: "form-row" }, el("label", {}, "Period shown"), rangeSelect),
+    el("div", { class: "form-row" }, el("label", {}, "Display"), typeSelect),
+    el("div", { class: "form-row" }, el("label", {}, "Resolution"), aggSelect),
+    el("p", { class: "note" },
+      "“Every reading” draws the raw series; the daily options collapse each day "
+      + "to one point, which reads far better over a month or a year."),
+    el("div", { class: "form-row" }, el("label", {}, "Colour scheme"), themeSelect),
+    el("div", { class: "form-row" }, el("label", {}, "Chart height (px)"), heightInput),
+    el("div", { class: "rows" },
+      el("label", { class: "row" }, el("span", { class: "k" }, "Show the legend"), el("span", { class: "v" }, legendCb)),
+      el("label", { class: "row" }, el("span", { class: "k" }, "Show “updated …”"), el("span", { class: "v" }, updatedCb))),
+    el("div", { class: "form-actions" }, btn));
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const series = chosenPublishSeries(state, spec.scope);
+    if (!series.length) { state.toast("Select at least one hive to publish", "error"); return; }
+    const title = (publishDraft.titleTouched ? publishDraft.title : defaultPublishTitle(state)).trim();
+    if (!title) { state.toast("Give the chart a title", "error"); return; }
+    btn.disabled = true;
+    try {
+      const created = await state.actions.publishChart({
+        title,
+        subtitle: publishDraft.subtitle.trim() || null,
+        metric: publishDraft.metric,
+        chart_type: publishDraft.chart_type,
+        aggregate: publishDraft.aggregate,
+        series,
+        range_days: publishDraft.range_days,
+        options: {
+          theme: publishDraft.theme,
+          height: publishDraft.height,
+          show_legend: publishDraft.show_legend,
+          show_updated: publishDraft.show_updated,
+        },
+      });
+      publishState.charts = [created, ...(publishState.charts || [])];
+      publishDraft = newPublishDraft();
+      state.toast("Chart published — copy the embed code below", "success");
+      repaint();
+    } catch (err) {
+      state.toast(err.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  return el("div", { class: "card" }, el("h2", {}, "Publish a chart"),
+    el("p", { class: "note" },
+      "Publishes the hives ticked below as a public chart with its own secret "
+      + "link. Anyone holding the link can see that chart — and only that chart. "
+      + "Revoke it at any time from the list on the right."),
+    form);
+}
+
+// One published chart in the list: what it shows, the paste-ready snippet and
+// the two ways to revoke it (take offline, or delete outright).
+function publishedChartCard(chart, state, repaint) {
+  const isAdmin = state.authUser?.role === "admin";
+  const spec = metricSpec(chart.metric);
+  const names = (chart.series || []).map((s) => s.label).join(", ");
+  const rangeLabel = (PUBLISH_RANGES.find(([d]) => d === chart.range_days) || [])[1]
+    || `${chart.range_days} days`;
+  const aggLabel = (PUBLISH_AGGREGATES.find(([v]) => v === chart.aggregate) || [])[1] || chart.aggregate;
+
+  const head = el("div", { class: "spread" },
+    el("h2", {}, chart.title),
+    el("span", { class: `badge ${chart.enabled ? "good" : "muted"}` }, chart.enabled ? "Live" : "Offline"));
+
+  const meta = rowsCard(null, [
+    ["Shows", `${spec ? spec.label : chart.metric}${spec && spec.unit ? ` (${spec.unit})` : ""}`],
+    [chart.series?.length === 1 ? "Hive" : "Hives", names || DASH],
+    ["Period", `${rangeLabel} · ${aggLabel}`],
+    ["Published", fmtDateTime(chart.created_at)],
+    ["Views", `${fmtInt(chart.view_count)}${chart.last_viewed_at ? ` · last ${relAge(chart.last_viewed_at)}` : ""}`],
+  ]);
+
+  const actions = el("div", { class: "form-actions" },
+    el("a", { class: "btn ghost small", href: chart.embed_url, target: "_blank", rel: "noopener noreferrer" }, "Preview"));
+
+  if (isAdmin) {
+    const toggle = el("button", { class: "btn ghost small", type: "button" },
+      chart.enabled ? "Take offline" : "Put back online");
+    toggle.addEventListener("click", async () => {
+      toggle.disabled = true;
+      try {
+        const updated = await state.actions.updatePublishedChart(chart.id, { enabled: !chart.enabled });
+        publishState.charts = (publishState.charts || []).map((c) => (c.id === chart.id ? updated : c));
+        state.toast(updated.enabled ? "Chart is live again" : "Chart taken offline", "success");
+        repaint();
+      } catch (err) {
+        state.toast(err.message, "error");
+        toggle.disabled = false;
+      }
+    });
+
+    const del = el("button", { class: "btn danger small", type: "button" }, "Revoke");
+    del.addEventListener("click", async () => {
+      if (!window.confirm(
+        `Revoke “${chart.title}”?\n\n`
+        + "The link stops working immediately, and any website that embeds it "
+        + "will show nothing. This cannot be undone — publishing again creates a "
+        + "new link.")) return;
+      del.disabled = true;
+      try {
+        await state.actions.deletePublishedChart(chart.id);
+        publishState.charts = (publishState.charts || []).filter((c) => c.id !== chart.id);
+        state.toast("Publication revoked", "success");
+        repaint();
+      } catch (err) {
+        state.toast(err.message, "error");
+        del.disabled = false;
+      }
+    });
+    actions.append(toggle, del);
+  }
+
+  return el("div", { class: "card" },
+    head,
+    meta,
+    el("h3", { class: "fw-upload-head" }, "Embed in a website"),
+    copyRow("Embed code", embedSnippet(chart), state),
+    copyRow("Direct link", chart.embed_url, state),
+    copyRow("JSON data", chart.data_url, state),
+    copyRow("CSV data", chart.csv_url, state),
+    el("p", { class: "note" },
+      "Paste the embed code into any page. The JSON and CSV links serve the same "
+      + "numbers for a site that would rather draw its own chart."),
+    actions);
+}
+
+function renderPublish(root, state) {
+  const node = el("div", {});
+  root.append(node);
+
+  const paint = () => {
+    const kids = [viewHead("Publish data",
+      "Share a chart publicly and embed it in a website — everything else stays behind the login")];
+
+    if (publishState.error) {
+      kids.push(el("div", { class: "card" },
+        el("h2", {}, "Publishing unavailable"),
+        el("p", { class: "note" }, publishState.error)));
+      node.replaceChildren(...kids);
+      return;
+    }
+    if (!publishState.loaded) {
+      kids.push(el("div", { class: "empty-state" }, "Loading…"));
+      node.replaceChildren(...kids);
+      return;
+    }
+
+    const isAdmin = state.authUser?.role === "admin";
+    const charts = publishState.charts || [];
+    const list = charts.length
+      ? charts.map((c) => publishedChartCard(c, state, paint))
+      : [el("div", { class: "card" }, el("h2", {}, "Nothing published yet"),
+          el("p", { class: "note" },
+            isAdmin
+              ? "Pick the hives you want to show in the Hives menu at the top of the page, then publish them on the left."
+              : "An administrator can publish charts here for embedding in a website."))];
+
+    // Two columns rather than the admin page's three: the form on the left, the
+    // live publications (whose copy-me URLs need the room) on the right.
+    kids.push(el("div", { class: "publish-cols" },
+      el("div", { class: "admin-col" },
+        isAdmin
+          ? publishFormCard(state, paint)
+          : el("div", { class: "card" }, el("h2", {}, "Publish a chart"),
+              el("p", { class: "note" }, "Publishing a chart requires the administrator role."))),
+      el("div", { class: "admin-col publish-list" }, ...list)));
+    node.replaceChildren(...kids);
+  };
+
+  // The background refresh must not yank the caret out of a half-typed title, so
+  // it skips the repaint while a field in this view has focus; the next render
+  // (or any action in the view) paints the fresh list.
+  const paintIfIdle = () => {
+    const active = document.activeElement;
+    if (node.contains(active) && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName)) return;
+    paint();
+  };
+
+  paint();
+  // Paint from what we have, then refresh in the background when it is stale (or
+  // belongs to a previous session). loadPublishData refreshes fetchedAt before
+  // this paint runs, so the repaint cannot start another load.
+  if (needsPublishLoad(state)) loadPublishData(state).then(paintIfIdle);
+}
+
 // ── registry ─────────────────────────────────────────────────────────────────
 // render(root, state): some replace `root`, some append — app.js passes a fresh
 // container and reads back content.innerHTML via the returned/!replaced node.
@@ -2770,5 +3285,6 @@ export const GROUPS = [
   { id: "connectivity", label: "Connectivity", icon: "📶", render: renderConnectivity },
   { id: "counter", label: "Counter", icon: "🐝", render: renderCounter },
   { id: "insights", label: "Insights", icon: "💡", render: renderInsights },
+  { id: "publish", label: "Publish data", icon: "🌐", render: renderPublish },
   { id: "device", label: "Device & admin", icon: "⚙️", render: renderDevice },
 ];
