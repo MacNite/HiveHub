@@ -598,6 +598,31 @@ def init_db():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     last_used_at TIMESTAMPTZ
                 );
+
+                -- Published charts: the slices of hive data an admin has chosen
+                -- to serve publicly (see server/publish.py). `token` is the
+                -- capability the embed URL carries, so it is random and unique;
+                -- `series` holds the resolved {device_id, hive, label} list, and
+                -- the public payload ships only the labels. Deleting a row (or
+                -- clearing `enabled`) revokes the embed immediately.
+                CREATE TABLE IF NOT EXISTS published_charts (
+                    id BIGSERIAL PRIMARY KEY,
+                    token TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL,
+                    subtitle TEXT,
+                    metric TEXT NOT NULL,
+                    chart_type TEXT NOT NULL DEFAULT 'line',
+                    aggregate TEXT NOT NULL DEFAULT 'none',
+                    series JSONB NOT NULL,
+                    range_days INTEGER NOT NULL DEFAULT 30,
+                    options JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_by BIGINT REFERENCES dashboard_users(id) ON DELETE SET NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    view_count BIGINT NOT NULL DEFAULT 0,
+                    last_viewed_at TIMESTAMPTZ
+                );
                 """
             )
             conn.commit()

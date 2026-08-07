@@ -56,6 +56,7 @@ Related settings (all optional, see `server/.env.example`):
 | `DASHBOARD_SESSION_SECRET` | Pin the session-signing secret (auto-generated + persisted if blank) |
 | `DASHBOARD_SESSION_TTL_HOURS` | Login lifetime in hours (default `168`) |
 | `DASHBOARD_COOKIE_SECURE` | `true` to send the session cookie over HTTPS only |
+| `ENABLE_PUBLIC_EMBEDS` | `false` to switch off **Publish data** (public chart embeds) server-side |
 
 ## What it can do
 
@@ -89,6 +90,15 @@ Related settings (all optional, see `server/.env.example`):
   broadcasts one; the others report none and show an em-dash.
 - **Calibration:** start/stop calibration mode and fit a load-cell temperature
   coefficient.
+- **Publish data (admin):** **Device & admin → Publish data** turns a chosen slice —
+  one metric, the hives you tick, a rolling period — into a public chart with its
+  own secret link, served without a login at `/embed/chart/{token}` for
+  `<iframe>` embedding in a club website or blog (plus JSON and CSV of the same
+  numbers). Only the labels you type are published: no device IDs, hive numbers
+  or any other reading travel with it, and a publication can be taken offline or
+  revoked at any time. The panel is only shown when the server has publishing
+  enabled (`ENABLE_PUBLIC_EMBEDS`). See
+  [../../docs/publish-embed.md](../../docs/publish-embed.md).
 - **Backup & restore (admin):** **Admin → Download / backup data** saves the
   selected readings (any devices, hives and period — everything by default) as an
   `.ndjson` file in the same format the scale writes to its SD card, and **Import
@@ -111,6 +121,11 @@ Plain HTML/CSS/ES-modules — **no build step**, matching `website/`:
 | `assets/charts.js` | Canvas line chart (multi-series, auto-scale, time axis) |
 | `assets/views.js` | One renderer per sidebar data group |
 | `assets/app.js` | Controller: selectors, sidebar, loading, polling |
+
+The public embed pages served by **Publish data** live next door in
+`server/embed/` (their own shell, stylesheet and loader) and reuse
+`assets/charts.js` verbatim, so a published chart is drawn by exactly the same
+code as the dashboard chart it came from.
 
 The files are served by FastAPI via a `StaticFiles` mount and are included in the
 Docker image automatically (`Dockerfile` does `COPY . .`).

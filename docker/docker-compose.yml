@@ -34,6 +34,12 @@ services:
       # it to false only for plain-HTTP local testing, where a secure cookie
       # would otherwise never be sent and login would appear to fail.
       DASHBOARD_COOKIE_SECURE: '${DASHBOARD_COOKIE_SECURE:-true}'
+      # "Publish data": lets a dashboard admin publish ONE chart at a time under
+      # an unguessable link that is served without a login, for embedding in a
+      # website (see docs/publish-embed.md). Nothing is public until somebody
+      # publishes it; set this to false to switch the feature off entirely, at
+      # which point every already-published link returns 404.
+      ENABLE_PUBLIC_EMBEDS: '${ENABLE_PUBLIC_EMBEDS:-true}'
       # Rate limiter: trust CF-Connecting-IP / X-Forwarded-For for the client
       # IP. Off by default because it is only safe when a trusted proxy in front
       # of the API overwrites these headers — otherwise a client that can reach

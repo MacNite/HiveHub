@@ -698,3 +698,64 @@ class TempCoefficientFitIn(BaseModel):
     # Persist the fitted coefficient (and ref temp / source) to the device config
     # and enable compensation. When False, only the fit result is returned.
     apply: bool = False
+
+
+# ── Published charts ("Publish data") ────────────────────────────────────────
+# One publication = one metric, over an ordered list of hives (or devices, for
+# device-level metrics), over a rolling period, plus presentation options. The
+# resolved display label travels with each series so the public payload never
+# has to carry a device_id. See server/publish.py for the metric registry.
+
+
+class PublishedSeriesIn(BaseModel):
+    """One line of a published chart: which hive it reads, and what to call it."""
+    device_id: str = Field(..., min_length=1, max_length=128)
+    # None for device-level metrics (ambient temperature, battery, signal …),
+    # which belong to the collector rather than to a single hive.
+    hive: Optional[int] = Field(default=None, ge=1, le=MAX_HIVES)
+    # Public label. Defaults to the hive's dashboard name on the client side;
+    # publishers can rename it so a public chart need not leak internal names.
+    label: str = Field(..., min_length=1, max_length=64)
+
+
+class PublishedChartOptionsIn(BaseModel):
+    """Presentation-only settings for the embedded page."""
+    theme: Literal["auto", "light", "dark"] = "auto"
+    height: int = Field(default=320, ge=140, le=1200)
+    show_legend: bool = True
+    # Footer line with the timestamp of the newest reading in the payload.
+    show_updated: bool = True
+
+
+class PublishedChartIn(BaseModel):
+    """Create a publication."""
+    title: str = Field(..., min_length=1, max_length=120)
+    subtitle: Optional[str] = Field(default=None, max_length=200)
+    metric: str = Field(..., min_length=1, max_length=64)
+    # "line" draws the time series; "value" shows one big current-value tile per
+    # series (the "publish a number, not a diagram" case).
+    chart_type: Literal["line", "value"] = "line"
+    # Server-side down-sampling into daily buckets, for long periods where the
+    # raw cadence is noise (a month of weight reads far better as a daily max).
+    aggregate: Literal["none", "daily_min", "daily_max", "daily_avg"] = "none"
+    series: list[PublishedSeriesIn] = Field(..., min_length=1, max_length=MAX_HIVES)
+    range_days: int = Field(default=30, ge=1, le=1825)
+    options: PublishedChartOptionsIn = Field(default_factory=PublishedChartOptionsIn)
+
+
+class PublishedChartUpdateIn(BaseModel):
+    """Edit a publication. Only the supplied fields change.
+
+    The token is never re-issued here: an embed already pasted into a website
+    keeps working, which is the point of editing rather than re-publishing.
+    """
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    subtitle: Optional[str] = Field(default=None, max_length=200)
+    chart_type: Optional[Literal["line", "value"]] = None
+    aggregate: Optional[Literal["none", "daily_min", "daily_max", "daily_avg"]] = None
+    series: Optional[list[PublishedSeriesIn]] = Field(default=None, min_length=1, max_length=MAX_HIVES)
+    range_days: Optional[int] = Field(default=None, ge=1, le=1825)
+    options: Optional[PublishedChartOptionsIn] = None
+    # Take a publication offline without deleting it (the embed then renders a
+    # "not available" notice instead of data).
+    enabled: Optional[bool] = None

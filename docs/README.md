@@ -46,6 +46,7 @@ hardware list, firmware/server setup, and API summary, start with the
 
 - [../server/dashboard/README.md](../server/dashboard/README.md) — the optional **built-in web dashboard** (login-protected `/api/v1/local/*` API served at `/dashboard`) for single-owner self-hosts; [try the live demo](https://macnite.github.io/HiveHub/dashboard-demo/).
 - [api.md](api.md) — complete REST API reference (device + HivePal app endpoints, payload, schema).
+- [publish-embed.md](publish-embed.md) — **publish a chart publicly** and embed it in a website (`<iframe>`, JSON or CSV), while everything else stays behind the dashboard login.
 - [mqtt.md](mqtt.md) — optional **MQTT bridge** to Home Assistant / Node-RED / openHAB: topics, config, and per-hive / per-module Home Assistant auto-discovery.
 - [temperature-compensation.md](temperature-compensation.md) — backend load-cell temperature-drift correction and the fit endpoint.
 - [insights.md](insights.md) — rule-based colony insight detector catalogue.

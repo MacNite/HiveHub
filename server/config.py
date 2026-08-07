@@ -41,6 +41,21 @@ DASHBOARD_COOKIE_SECURE = os.environ.get("DASHBOARD_COOKIE_SECURE", "false").str
     "yes",
     "on",
 )
+# Public data embeds ("Publish data", see server/publish.py). An admin can
+# publish a chart of selected hives from the dashboard; the server then serves
+# exactly that slice — and nothing else — without a login, under
+# /embed/chart/{token} and /api/v1/public/charts/{token}, for embedding in a
+# website. Nothing is public until someone explicitly publishes it, and every
+# publication can be revoked from the same panel. Set ENABLE_PUBLIC_EMBEDS=false
+# to switch the whole feature off server-side (existing embeds then 404 and the
+# dashboard panel says so). Requires ENABLE_LOCAL_DASHBOARD, which is where the
+# publishing UI and its admin API live.
+ENABLE_PUBLIC_EMBEDS = os.environ.get("ENABLE_PUBLIC_EMBEDS", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 FIRMWARE_DIR = Path(os.environ.get("FIRMWARE_DIR", "/app/firmware"))
 DB_POOL_MIN_SIZE = int(os.environ.get("DB_POOL_MIN_SIZE", "1"))
 DB_POOL_MAX_SIZE = int(os.environ.get("DB_POOL_MAX_SIZE", "10"))

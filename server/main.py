@@ -14,6 +14,7 @@ The domain logic lives in the sibling modules:
 - app_api.py            HivePal app API (/api/v1/app/*)
 - insights_api.py       insight alert persistence, reconciler and endpoints
 - local_dashboard.py    self-host dashboard API (/api/v1/local/*)
+- publish.py            published charts: admin API + public embeds (/embed/*)
 """
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,7 @@ import firmware
 import insights_api
 import local_dashboard
 import measurements
+import publish
 from auth import require_api_key
 from config import (
     ENABLE_LOCAL_DASHBOARD,
@@ -127,6 +129,7 @@ app.include_router(commands.router)
 app.include_router(app_api.router)
 app.include_router(insights_api.router)
 app.include_router(local_dashboard.router)
+app.include_router(publish.router)
 
 # Serve the static dashboard at /dashboard only when local mode is enabled. The
 # files live in server/dashboard/ and ship in the Docker image (Dockerfile does

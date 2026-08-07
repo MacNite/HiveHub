@@ -106,6 +106,37 @@ export const api = {
   // other dashboard request.
   exportUrl: (opts) => `${BASE}/export/measurements?${api.exportQuery(opts)}`,
 
+  // ── Publish data (public embeds) ──────────────────────────────────────────
+  // Charts an admin has published for embedding in a website. Reading the list
+  // needs a session; creating, editing and revoking need the admin role. All of
+  // these 404 when the server has publishing switched off
+  // (ENABLE_PUBLIC_EMBEDS=false), which the Publish view reports as such.
+
+  // The publishable metrics (id, label, unit, digits, hive/device scope), so the
+  // dashboard never carries its own copy of the server-side registry.
+  publishMetrics: () => req("/publish/metrics"),
+
+  publishedCharts: () => req("/publish/charts"),
+
+  publishChart: (payload) =>
+    req("/publish/charts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    }),
+
+  // Edit in place — the public token is kept, so an embed already pasted into a
+  // website keeps working while its title, period or series change under it.
+  updatePublishedChart: (id, patch) =>
+    req(`/publish/charts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch || {}),
+    }),
+
+  deletePublishedChart: (id) =>
+    req(`/publish/charts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
   config: (deviceId) => req(`/devices/${encodeURIComponent(deviceId)}/config`),
 
   updateConfig: (deviceId, patch) =>

@@ -309,6 +309,10 @@ function buildState() {
     deviceChannels: (id) => (id === activeId ? d.channels : null),
     // Static demo session — the real dashboard fills this from the auth API.
     authUser: DEMO_USER,
+    // Server feature flags: the real dashboard reads these from the auth
+    // handshake. The demo shows the "Publish data" panel so it can be explored,
+    // with publishing itself surfacing the usual read-only notice (api.js).
+    features: { publish: true },
     toast,
     reload: loadData,
     actions: {
@@ -340,6 +344,13 @@ function buildState() {
       // card + a test-send that surfaces the read-only demo notice.
       notificationsConfig: () => api.notificationsConfig(),
       testNotification: () => api.testNotification(),
+      // Publish data: the metric registry is real so the form can be explored;
+      // minting a public token needs a server, so publishing is read-only here.
+      publishMetrics: () => api.publishMetrics(),
+      publishedCharts: () => api.publishedCharts(),
+      publishChart: (payload) => api.publishChart(payload),
+      updatePublishedChart: (id, patch) => api.updatePublishedChart(id, patch),
+      deletePublishedChart: (id) => api.deletePublishedChart(id),
     },
   };
 }

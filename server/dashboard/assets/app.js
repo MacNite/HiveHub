@@ -62,6 +62,10 @@ const state = {
   data: null,
   loading: false,
   authUser: null,   // { username, role } once logged in
+  // Optional server features, from the auth handshake (status / login / setup):
+  // { publish: bool } — whether ENABLE_PUBLIC_EMBEDS is on, which decides
+  // whether the Device & admin page offers the "Publish data" panel at all.
+  features: {},
 };
 
 // ── selection helpers ─────────────────────────────────────────────────────────
@@ -325,6 +329,7 @@ function buildState() {
     deviceMeasurements: (id) => (d.measurements && d.measurements[id]) || [],
     deviceChannels: (id) => (id === activeId ? d.channels : null),
     authUser: state.authUser,
+    features: state.features,
     toast,
     reload: loadData,
     actions: {
@@ -343,6 +348,13 @@ function buildState() {
       updateConfig: (p) => api.updateConfig(activeId, p),
       updateChannels: (p) => api.updateChannels(activeId, p),
       insightsHistory: (opts) => api.insightsHistory(activeId, opts),
+      // Publish data: the server-side metric registry plus the publication list
+      // and its lifecycle (see views.js renderPublish).
+      publishMetrics: () => api.publishMetrics(),
+      publishedCharts: () => api.publishedCharts(),
+      publishChart: (payload) => api.publishChart(payload),
+      updatePublishedChart: (id, patch) => api.updatePublishedChart(id, patch),
+      deletePublishedChart: (id) => api.deletePublishedChart(id),
       // Device visibility (admin): retire/restore a device in the hive picker.
       setDeviceVisibility: (deviceId, hidden) => setDeviceVisibility(deviceId, hidden),
       // Delete a device's readings in a time range, authed by its claim code.
@@ -583,6 +595,7 @@ function wireEvents() {
     ui.logoutBtn.addEventListener("click", async () => {
       try { await auth.logout(); } catch (_) { /* ignore — clear locally anyway */ }
       state.authUser = null;
+      state.features = {};
       state.data = null;
       state.devices = [];
       state.deviceLatest = {};
@@ -644,6 +657,7 @@ function renderLogin(opts = {}) {
     try {
       const r = await auth.login(u.value, p.value);
       state.authUser = r.user;
+      state.features = r.features || {};
       await startApp();
     } catch (err) {
       errLine.textContent = err.message || "Sign in failed";
@@ -679,6 +693,7 @@ function renderSetup() {
     try {
       const r = await auth.setup(u.value, p.value, em.value);
       state.authUser = r.user;
+      state.features = r.features || {};
       await startApp();
     } catch (err) {
       errLine.textContent = err.message || "Setup failed";
@@ -738,6 +753,7 @@ async function init() {
   if (status.setup_required) { renderSetup(); return; }
   if (!status.authenticated) { renderLogin(); return; }
   state.authUser = status.user;
+  state.features = status.features || {};
   await startApp(status.devices);
 }
 

@@ -42,7 +42,12 @@ from commands import (
     latest_hiveinside_relays,
     queue_relay_firmware_update,
 )
-from config import DASHBOARD_SESSION_COOKIE, NOTIFY_MIN_SEVERITY, VAPID_PUBLIC_KEY
+from config import (
+    DASHBOARD_SESSION_COOKIE,
+    ENABLE_PUBLIC_EMBEDS,
+    NOTIFY_MIN_SEVERITY,
+    VAPID_PUBLIC_KEY,
+)
 from data_export import (
     EXPORT_PAGE_ROWS,
     FALLBACK_COLUMNS,
@@ -142,6 +147,17 @@ LOCAL_DASHBOARD_DEP = [Depends(require_dashboard_session)]
 LOCAL_DASHBOARD_ADMIN_DEP = [Depends(require_dashboard_admin)]
 
 
+def dashboard_features() -> dict:
+    """Optional features the dashboard must know about before it renders.
+
+    Their endpoints 404 when the feature is off, so the frontend needs to be told
+    up front — otherwise it would offer a panel that errors the moment it is
+    opened. Shipped with the auth handshake (status / login / setup) because
+    these flags come from the environment and only change on a restart.
+    """
+    return {"publish": bool(ENABLE_PUBLIC_EMBEDS)}
+
+
 @router.get("/api/v1/local/auth/status", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
 def local_auth_status(request: Request):
     """Tell the dashboard whether to show the setup wizard, login, or the app."""
@@ -164,6 +180,7 @@ def local_auth_status(request: Request):
         # Ship the device list with the auth check so an already-signed-in
         # dashboard saves one serial round-trip before it can request data.
         result["devices"] = _list_devices_payload()
+        result["features"] = dashboard_features()
     return result
 
 
@@ -175,7 +192,7 @@ def local_auth_setup(body: DashboardSetupIn, response: Response):
     user = create_dashboard_user(body.username, body.password, "admin", body.email)
     touch_dashboard_user_login(user["id"])
     set_dashboard_session_cookie(response, create_dashboard_session_token(user))
-    return {"user": _public_dashboard_user(user)}
+    return {"user": _public_dashboard_user(user), "features": dashboard_features()}
 
 
 @router.post("/api/v1/local/auth/login", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
@@ -185,7 +202,7 @@ def local_auth_login(body: DashboardLoginIn, response: Response):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     touch_dashboard_user_login(user["id"])
     set_dashboard_session_cookie(response, create_dashboard_session_token(user))
-    return {"user": _public_dashboard_user(user)}
+    return {"user": _public_dashboard_user(user), "features": dashboard_features()}
 
 
 @router.post("/api/v1/local/auth/logout", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
