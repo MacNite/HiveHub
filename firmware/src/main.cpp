@@ -13,6 +13,7 @@
 #include "scale_bus.h"
 #include "i2c_bus.h"
 #include "status_led.h"
+#include "heap_diag.h"
 
 #if ENABLE_INMP441_MICS
 #include "mics.h"
@@ -22,16 +23,30 @@ void runUploadCycle() {
   debugLine();
   Serial.println("[CYCLE] Starting measurement/upload cycle");
 
+  // Heap probes bracket the stages that bring a whole subsystem up and tear it
+  // down again — WiFi/TLS, the BLE scan, SPI/SD. A hub panicked in the
+  // allocator on a corrupted free block during a firmware relay, and the block
+  // that faulted was damaged well before the relay touched it; whichever stage
+  // reports the first failure below is the one that did it. See heap_diag.h.
+  heapdiag::probe("cycle-start");
+
   // WiFi is required for upload and must be associated before JSON assembly so
   // rssi_dbm reflects the live connection.
   connectNetwork();
+  heapdiag::probe("after-network");
 
   JsonDocument doc;
+  // Assembly runs the BLE scan, which inits and deinits the NimBLE stack. That
+  // teardown is deliberately incomplete (deinit(false) — deinit(true) panics on
+  // the C6 once a scan has run this boot, see ble_sensor.cpp), so it is the
+  // stage most worth watching.
   buildMeasurementDoc(doc);
+  heapdiag::probe("after-measure");
 
   // SD.begin() is the reproducible boundary after which ESP32-C6 I2C-NG may
   // reject later transfers. Capture the timestamp before bringing SPI/SD up.
   initSdCard();
+  heapdiag::probe("after-sd");
 
   // Stamp sd_ok only now. sdOk is a plain global that starts false on every boot
   // and prepareSdForSleep() clears it before each deep sleep, so it is always
@@ -68,7 +83,12 @@ void runUploadCycle() {
 
   if (scaleCalibrationReportPending()) reportScaleCalibration();
 
+  heapdiag::probe("after-upload");
+
   fetchRemoteConfig();
+  // checkCommands() is where a firmware relay runs, so this is the last clean
+  // reading before the stage that crashed in the field.
+  heapdiag::probe("before-commands");
   checkCommands();
 
   if (shouldCheckOtaThisCycle()) {
@@ -81,6 +101,7 @@ void runUploadCycle() {
 
   i2cbus::logDiag();
   scalebus::logDiag();
+  heapdiag::probe("cycle-end");
 
   Serial.println("[CYCLE] Done");
   debugLine();
@@ -116,6 +137,11 @@ void setup() {
                 ENABLE_DS18B20_HIVE_TEMP, ENABLE_BLE_SCAN);
   Serial.printf("Wake reason: %s; RTC boot count: %u\n",
                 wakeReasonName(wakeReason).c_str(), rtcBootCount);
+  // The wake reason above answers "which sleep did we come out of"; this answers
+  // "did the last boot end cleanly". They are different questions, and a boot
+  // that follows a panic looks identical to a normal one without this line.
+  Serial.printf("Reset reason: %s\n", resetReasonName());
+  heapdiag::logDiag("boot");
   debugLine();
 
   seedPrefsFromSecretsIfNeeded();

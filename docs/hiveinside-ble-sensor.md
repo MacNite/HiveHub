@@ -121,6 +121,15 @@ device N time(s) without reporting a result`. Only relays are retried this way;
 destructive commands such as `factory_reset` fail on the first timeout rather
 than being silently repeated.
 
+A hub that *resets* mid-relay no longer has to wait that out. It records the
+command id in RTC memory before starting, and the next boot reports the attempt
+explicitly — `hub reset during relay (panic/exception) — firmware transfer did
+not complete` — against the still-open row. That closes the command on the first
+cycle after the reset instead of an hour and three attempts later, and it names
+the reset reason, so a crashing hub is distinguishable from one that is merely
+out of range. The command is then genuinely failed rather than retried: re-queue
+it yourself once the hub is healthy.
+
 Two guards apply before the command is queued:
 
 | Condition | Result |
@@ -156,5 +165,54 @@ advertised version and board (e.g. `v0.4.0 · nrf54lm20a`). The section only app
 node has actually reported, and it keeps the last known identity when a node
 misses a scan window, so it reads as "what this node is running", not "what was
 in the last packet".
+
+### Diagnosing a failed relay
+
+Watch the HiveHub's serial console at 115200 across an attempt. A healthy relay
+prints, in order:
+
+```
+[CMD] Received command 20: update_hiveinside
+[HI-OTA] Downloading HiveInside firmware: https://…/hiveinside-….signed.bin
+[HEAP] relay-start: free=… largest=… min_ever=…
+[HI-OTA] Download open: 1093632 bytes; bringing up BLE
+[HEAP] relay-download-open: free=… largest=… min_ever=…
+[HI-OTA] connecting to … 
+[HI-OTA] connected: MTU=247 chunk=244 image=1093632 bytes crc=0x…
+[HI-OTA] relayed 32768/1093632 bytes            ← every 32 KB
+[HI-OTA] device reports DONE — it will reboot into the new image
+[HI-OTA] result: OK
+```
+
+Where it stops, and what it says, maps to a cause:
+
+* **`MTU=23 chunk=20`** — MTU negotiation did not take. The transfer still works
+  but runs roughly ten times longer, which makes every other timeout tighter.
+* **`DATA write failed …`** — the relay now asks the node *why* instead of
+  guessing. `STATUS unreadable — link is down` is a genuine radio/link loss;
+  `device rejected the stream: state=0x… (…)` means the node refused the bytes
+  (CRC, size, flash write, wrong state) and the transfer never had a chance. The
+  same distinction reaches the dashboard, so the row's reason is now the node's
+  own verdict rather than "BLE link lost?" for all of them.
+* **`[HEAP] *** CORRUPTION DETECTED at stage: … ***`** — the allocator's own
+  structures are damaged. The named stage is the one that did it; everything
+  after that point in the boot is unreliable, including any crash that follows.
+* **A boot banner instead of a result line** — the hub reset mid-relay. Read
+  `Reset reason:` on the line after the wake reason: `panic/exception` means a
+  crash, with the Guru Meditation dump immediately above it.
+
+A panic dump decodes in place when the console is `pio device monitor` (both
+environments set `monitor_filters = esp32_exception_decoder`). For a dump
+captured elsewhere, feed the addresses to `addr2line` against the exact image
+that is flashed — `rename_firmware.py` names it `hivehub_<board>_<version>.elf`,
+and `firmware/ci/package_build.sh` copies it into `firmware/dist/`:
+
+```bash
+riscv32-esp-elf-addr2line -pfiaC \
+  -e firmware/dist/hivehub_esp32-c6_<version>.elf 0x… 0x… 0x…
+```
+
+The dump's trailing `ELF file SHA256:` must match that file, or the decoded
+names are fiction.
 
 See [api.md](api.md) for the `update-hiveinside` command and payload.

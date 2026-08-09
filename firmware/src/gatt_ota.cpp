@@ -72,8 +72,39 @@ NimBLERemoteCharacteristic* s_status = nullptr;
 size_t                      s_chunk  = 20;  // negotiated DATA payload size
 String                      s_lastError;
 
+size_t                      s_sentTotal = 0;  // bytes accepted this session
+
 const char* tag() { return s_target ? s_target->logTag : "GATT-OTA"; }
 const char* label() { return s_target ? s_target->deviceLabel : "device"; }
+
+// Plain-English name for a STATUS error byte. Both devices share the code
+// space (see gatt_ota.h), so one table serves both.
+const char* stateText(uint8_t state) {
+  switch (state) {
+    case 0x10: return "BEGIN rejected (image too big for its slot, or flash init failed)";
+    case 0x11: return "out of sequence (session not armed, or already ended)";
+    case 0x12: return "flash write failed";
+    case 0x13: return "CRC mismatch";
+    case 0x14: return "size mismatch";
+    case 0x15: return "END/verify failed";
+    default:   return "unknown error";
+  }
+}
+
+// Ask the device what it thinks happened. Returns false when STATUS could not
+// be read at all — which is itself the answer, because it means the link is
+// gone rather than the device having rejected anything.
+bool readStatus(uint8_t& state, uint8_t& err, uint32_t& received) {
+  if (!s_status || !s_status->canRead()) return false;
+  if (!s_client || !s_client->isConnected()) return false;
+  std::string s = s_status->readValue();
+  if (s.size() < 6) return false;
+  state = (uint8_t)s[0];
+  err = (uint8_t)s[5];
+  received = ((uint32_t)(uint8_t)s[1]) | ((uint32_t)(uint8_t)s[2] << 8) |
+             ((uint32_t)(uint8_t)s[3] << 16) | ((uint32_t)(uint8_t)s[4] << 24);
+  return true;
+}
 }  // namespace
 
 const String& lastError() { return s_lastError; }
@@ -141,6 +172,7 @@ static bool connectTo(const String& mac) {
 bool begin(const Target& target, const String& mac, uint32_t totalLen,
            uint32_t crc32) {
   s_lastError = "";
+  s_sentTotal = 0;
   s_target = &target;
 #if ENABLE_BLE_SCAN
   String m = blesensor::normalizeMac(mac);
@@ -205,13 +237,43 @@ bool write(const uint8_t* data, size_t len) {
     size_t n = len - sent;
     if (n > s_chunk) n = s_chunk;
     if (!s_data->writeValue(data + sent, n, /*response=*/true)) {
-      Serial.printf("[%s] DATA write failed after %u bytes\n",
-                    tag(), (unsigned)sent);
-      s_lastError = "OTA DATA write failed (BLE link lost?)";
+      // writeValue() returns false for two very different situations: the link
+      // is gone, or the device answered with an ATT error because it rejected
+      // the stream (wrong state, size overflow, flash write failure — see
+      // stateText). Reporting "BLE link lost?" for both sent every one of them
+      // to the dashboard as a radio problem. Ask the device before guessing.
+      s_sentTotal += sent;
+      Serial.printf("[%s] DATA write failed after %u bytes this buffer "
+                    "(%u total)\n", tag(), (unsigned)sent,
+                    (unsigned)s_sentTotal);
+
+      uint8_t state = 0, err = 0;
+      uint32_t received = 0;
+      if (!readStatus(state, err, received)) {
+        Serial.printf("[%s] STATUS unreadable — link is down\n", tag());
+        s_lastError = String("OTA DATA write failed after ") + s_sentTotal +
+                      " bytes (BLE link lost)";
+      } else if (state >= STATE_ERR_FIRST) {
+        Serial.printf("[%s] device rejected the stream: state=0x%02X err=0x%02X "
+                      "received=%u (%s)\n", tag(), state, err,
+                      (unsigned)received, stateText(state));
+        s_lastError = String(label()) + " rejected the stream after " +
+                      received + " bytes: " + stateText(state) + " (state=0x" +
+                      String(state, HEX) + ")";
+      } else {
+        // Link up, device not in an error state, write still refused. Nothing
+        // is being guessed here — say exactly that.
+        Serial.printf("[%s] write refused but device reports state=0x%02X "
+                      "received=%u\n", tag(), state, (unsigned)received);
+        s_lastError = String("OTA DATA write failed after ") + received +
+                      " bytes; " + label() + " reports no error (state=0x" +
+                      String(state, HEX) + ")";
+      }
       return false;
     }
     sent += n;
   }
+  s_sentTotal += sent;
   return true;
 }
 
@@ -240,11 +302,13 @@ bool finish() {
         return true;
       }
       if (state >= STATE_ERR_FIRST) {
-        Serial.printf("[%s] device reported error state=0x%02X err=0x%02X\n",
-                      tag(), state, err);
-        s_lastError = String(label()) + " rejected image (state=0x" +
-                      String(state, HEX) + " err=0x" + String(err, HEX) +
-                      ", CRC/size mismatch?)";
+        Serial.printf("[%s] device reported error state=0x%02X err=0x%02X (%s)\n",
+                      tag(), state, err, stateText(state));
+        // Name the actual code rather than offering "CRC/size mismatch?" as a
+        // guess — the device already told us which of the six it was.
+        s_lastError = String(label()) + " rejected image: " + stateText(state) +
+                      " (state=0x" + String(state, HEX) + " err=0x" +
+                      String(err, HEX) + ")";
         return false;
       }
     }

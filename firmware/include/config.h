@@ -816,6 +816,15 @@ static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 15000;
 // Bound each HTTP(S) exchange so a stalled peer cannot keep a battery-powered
 // device awake indefinitely. Retry policy remains in the cache/replay layer.
 static const unsigned long HTTP_REQUEST_TIMEOUT_MS = 15000;
+
+// Heap health probes (src/heap_diag.cpp). On by default: a hub that panics in
+// the allocator mid-relay is worth far more than the handful of milliseconds a
+// per-stage integrity walk costs once per wake cycle. Set to 0 in secrets.h to
+// compile the probes out entirely.
+#ifndef ENABLE_HEAP_DIAG
+#define ENABLE_HEAP_DIAG 1
+#endif
+
 static const unsigned long PROVISIONING_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 static const unsigned long OTA_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;
 static const unsigned long CALIBRATION_MODE_DEFAULT_INTERVAL_MS = 5UL * 1000UL;

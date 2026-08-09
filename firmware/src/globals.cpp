@@ -1,6 +1,8 @@
 // globals.cpp — single definition point for everything declared in globals.h.
 #include "globals.h"
 
+#include <esp_system.h>
+
 const char* const FIRMWARE_VERSION = "0.24.10";
 
 #if ENABLE_HX711
@@ -84,8 +86,35 @@ bool longPressHandled = false;
 RTC_DATA_ATTR uint32_t rtcCyclesUntilOta = 0;
 RTC_DATA_ATTR uint32_t rtcBootCount = 0;
 
+// A relay in flight, so a reset that kills it can still be reported. RTC memory
+// is the right store: it survives a panic reboot (it is only cleared on a
+// power-on reset), and unlike NVS it costs no flash write on the happy path,
+// which matters because this is set and cleared around every single relay.
+// The magic guards against reading whatever a power-on reset left behind.
+RTC_DATA_ATTR uint32_t rtcRelayCommandId = 0;
+RTC_DATA_ATTR uint32_t rtcRelayMagic = 0;
+
 void debugLine() {
   Serial.println("----------------------------------------");
+}
+
+const char* resetReasonName() {
+  // Distinguishing a panic from a clean deep-sleep wake or a brownout is the
+  // whole point: an unexplained command failure reads very differently when the
+  // preceding boot ended in ESP_RST_PANIC.
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return "power-on";
+    case ESP_RST_EXT:      return "external reset";
+    case ESP_RST_SW:       return "software restart";
+    case ESP_RST_PANIC:    return "panic/exception";
+    case ESP_RST_INT_WDT:  return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT:      return "other watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep-sleep wake";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO:     return "SDIO";
+    default:               return "unknown";
+  }
 }
 
 bool isBlank(const String& s) {
