@@ -7,6 +7,7 @@
 #include "portal.h"
 #include "ca_cert.h"
 #include "hive_config.h"
+#include "heap_diag.h"
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -14,6 +15,7 @@
 #include <Update.h>
 #include <esp_heap_caps.h>
 #include <esp_app_format.h>   // esp_image_header_t / ESP_CHIP_ID_* for the OTA arch guard
+#include <esp_system.h>       // esp_reset_reason() for the interrupted-relay report
 #include <time.h>
 
 #if ENABLE_BLE_SCAN
@@ -868,9 +870,21 @@ static bool relayFirmwareOverGatt(const gattota::Target& target,
   Serial.printf("[%s] Downloading %s firmware: %s\n", tag, target.deviceLabel,
                 url.c_str());
 
+  // The relay is the longest-lived allocation burst in the firmware — a TLS
+  // session and the BLE stack are both up at once — and a hub panicked here in
+  // the field, inside the allocator, on a corrupted free block. Probe on the
+  // way in so the log says whether the heap was already damaged before this
+  // path touched anything.
+  heapdiag::probe("relay-start");
+
   WiFiClientSecure secureClient;
   WiFiClient plainClient;
   HTTPClient http;
+  // Bound the exchange exactly as every other HTTP path here does. This one was
+  // the only request left running on the library defaults, which is a poor fit
+  // for the request that stays open longest.
+  http.setConnectTimeout(HTTP_REQUEST_TIMEOUT_MS);
+  http.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   if (!beginHttpRequest(http, url, secureClient, plainClient)) {
     Serial.printf("[%s] http.begin failed\n", tag);
@@ -893,6 +907,15 @@ static bool relayFirmwareOverGatt(const gattota::Target& target,
     setMsg(String("invalid firmware content length ") + contentLength);
     return false;
   }
+
+  // Everything from the download line above to gattota::begin's first log line
+  // used to be silent — TLS handshake, header parse and NimBLE bring-up all in
+  // one unlit stretch — so a panic in there could not be placed any more
+  // precisely than "somewhere before the transfer". Name the boundary, and
+  // probe the heap on both sides of it.
+  Serial.printf("[%s] Download open: %d bytes; bringing up BLE\n", tag,
+                contentLength);
+  heapdiag::probe("relay-download-open");
 
   // Open the BLE OTA session (locates/connects the device, sends BEGIN). Do
   // this AFTER we have the Content-Length so the device sizes its OTA slot.
@@ -960,6 +983,9 @@ static bool relayFirmwareOverGatt(const gattota::Target& target,
     }
   }
   gattota::cleanup();
+  // After the BLE stack has been torn down again: what the whole session cost,
+  // and whether it left the heap intact.
+  heapdiag::probe("relay-end");
 
   if (ok) setMsg(String(target.deviceLabel) + " OTA completed");
   Serial.printf("[%s] result: %s\n", tag, ok ? "OK" : "FAIL");
@@ -1027,6 +1053,54 @@ void checkForOtaUpdate() {
   performFirmwareUpdate(fwUrl, fwSize, fwCrc);
 }
 
+// ---- Crash-safe relay reporting -------------------------------------------
+//
+// A firmware relay runs synchronously for minutes and only reports its outcome
+// once it returns, so any reset in between loses the result entirely. The
+// backend cannot tell that apart from a hub that never picked the command up:
+// it waits STALE_CLAIM_MINUTES, re-queues, and after MAX_COMMAND_ATTEMPTS
+// closes the row with "timed out: claimed by the device N time(s) without
+// reporting a result" — an hour later, and saying nothing about what happened.
+//
+// So leave a note in RTC memory before starting and clear it on the way out.
+// A boot that finds the note still set knows a relay died mid-flight, and can
+// say so against the right command id while the row is still open.
+static const uint32_t RELAY_MARKER_MAGIC = 0x48524C59UL;  // "HRLY"
+
+static void markRelayInFlight(int commandId) {
+  rtcRelayCommandId = (uint32_t)commandId;
+  rtcRelayMagic = RELAY_MARKER_MAGIC;
+}
+
+// Cleared as soon as the relay returns, deliberately BEFORE the result is
+// posted. Covering the POST too would mean a reset in the microseconds between
+// a successful POST and the clear would overwrite a true "OTA completed" with a
+// fabricated failure. The relay is the multi-minute risky part; the POST is the
+// same short path three earlier requests in this cycle already took. Better to
+// leave that sliver uncovered than to invent a failure that did not happen.
+static void clearRelayInFlight() {
+  rtcRelayCommandId = 0;
+  rtcRelayMagic = 0;
+}
+
+// Report a relay that a reset interrupted. Called once per cycle, before the
+// next command is fetched, so the stale row is corrected before anything else
+// is claimed.
+static void reportInterruptedRelay() {
+  if (rtcRelayMagic != RELAY_MARKER_MAGIC || rtcRelayCommandId == 0) return;
+
+  const int commandId = (int)rtcRelayCommandId;
+  // Clear FIRST. If the report itself is what kills us, the next boot must not
+  // find the same marker and try again forever; one lost report beats a loop.
+  clearRelayInFlight();
+
+  String msg = String("hub reset during relay (") + resetReasonName() +
+               ") — firmware transfer did not complete";
+  Serial.printf("[CMD] Reporting interrupted relay for command %d: %s\n",
+                commandId, msg.c_str());
+  postCommandResult(commandId, false, msg);
+}
+
 void postCommandResult(int commandId, bool success, const String& message) {
   JsonDocument result;
   result["success"] = success;
@@ -1040,6 +1114,9 @@ void postCommandResult(int commandId, bool success, const String& message) {
 
 void checkCommands() {
   if (!connectNetwork()) return;
+
+  // Close out a relay that a reset interrupted before claiming anything new.
+  reportInterruptedRelay();
 
   JsonDocument doc;
   String url = apiUrl(String("/api/v1/devices/") + deviceId + "/commands/next");
@@ -1116,7 +1193,11 @@ void checkCommands() {
       // know the real outcome once updateHiveInside returns. Reporting "started"
       // eagerly was the main reason a failed OTA still looked successful.
       String resultMsg;
+      // Note the attempt before starting: a reset during the transfer otherwise
+      // leaves the row to time out silently an hour later.
+      markRelayInFlight(commandId);
       bool ok = updateHiveInside(mac, fwUrl, crc, &resultMsg);
+      clearRelayInFlight();
       Serial.printf("[HI-OTA] update result: %s (%s)\n",
                     ok ? "OK" : "FAIL", resultMsg.c_str());
       postCommandResult(commandId, ok,
@@ -1150,7 +1231,10 @@ void checkCommands() {
       // the counter stops counting throughout, so the outcome matters and is
       // only known once updateBeeCounter returns.
       String resultMsg;
+      // Same crash-safe marker as the HiveInside relay above.
+      markRelayInFlight(commandId);
       bool ok = updateBeeCounter(mac, fwUrl, crc, &resultMsg);
+      clearRelayInFlight();
       Serial.printf("[BC-OTA] update result: %s (%s)\n",
                     ok ? "OK" : "FAIL", resultMsg.c_str());
       postCommandResult(commandId, ok,

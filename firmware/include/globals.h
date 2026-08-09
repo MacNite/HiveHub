@@ -151,8 +151,17 @@ extern bool longPressHandled;
 // discards with a -Wattributes warning. Plain extern declarations are enough.
 extern uint32_t rtcCyclesUntilOta;
 extern uint32_t rtcBootCount;
+// Set while a firmware relay to a BLE sub-device is running, so the command can
+// be failed explicitly after a reset instead of silently timing out server-side.
+// See markRelayInFlight()/reportInterruptedRelay() in hivehub_network.cpp.
+extern uint32_t rtcRelayCommandId;
+extern uint32_t rtcRelayMagic;
 
 // ---- Small shared utilities ----------------------------------------------
 void debugLine();
+// Why this boot happened, as a short phrase ("panic/exception", "deep-sleep
+// wake", "brownout", …). Printed at boot and quoted when reporting a command
+// that a reset interrupted.
+const char* resetReasonName();
 bool isBlank(const String& s);
 String trimTrailingSlash(String value);
