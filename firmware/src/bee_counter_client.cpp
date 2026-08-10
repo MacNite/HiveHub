@@ -6,6 +6,7 @@
 #if ENABLE_WIRELESS_BEECOUNTER
 #include <string.h>       // strlcpy for the counter's reported version
 #include <NimBLEDevice.h>
+#include "ble_stack.h"
 #include "hive_config.h"
 #endif
 
@@ -141,7 +142,7 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
     }
     if (!anyPaired) return;
 
-    NimBLEDevice::init("");
+    blestack::acquire();
     uint8_t readAttempts = 0;
     for (uint8_t h = 0; h < hivecfg::gHiveCount && h < cap; h++) {
         const hivecfg::Hive& hive = hivecfg::gHives[h];
@@ -159,11 +160,9 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
             break;  // at most one HiveTraffic counter per hive
         }
     }
-    // deinit(false), not (true): on the ESP32-C6 deinit(true) panics in
-    // ~NimBLEScan() once a scan has run this boot, because the scan singleton is
-    // deleted after nimble_port_deinit() zeroes npl_funcs. See the detailed note
-    // in ble_sensor.cpp (scanPairedSensorsMulti). Controller is still freed.
-    NimBLEDevice::deinit(false);
+    // Counter reads only ever connect, so they are safe in any port lifetime.
+    // See ble_stack.h for the teardown rule. Controller is still freed.
+    blestack::release();
 }
 
 #endif  // ENABLE_WIRELESS_BEECOUNTER
