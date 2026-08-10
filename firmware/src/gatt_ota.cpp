@@ -13,6 +13,8 @@
 
 #include <NimBLEDevice.h>
 
+#include "ble_stack.h"
+
 #if ENABLE_BLE_SCAN
 #include "ble_sensor.h"   // normalizeMac + the locate-scan helper
 #endif
@@ -117,11 +119,9 @@ void cleanup() {
   }
   s_ctrl = s_data = s_status = nullptr;
   s_target = nullptr;
-  // deinit(false), not (true): on the ESP32-C6 deinit(true) panics in
-  // ~NimBLEScan() once a scan has run this boot, because the scan singleton is
-  // deleted after nimble_port_deinit() zeroes npl_funcs. See the detailed note
-  // in ble_sensor.cpp (scanPairedSensorsMulti). The controller is still freed.
-  NimBLEDevice::deinit(false);
+  // See ble_stack.h for why this is never deinit(true). The controller is
+  // fully freed either way.
+  blestack::release();
 }
 
 // Open the link. Two strategies, per Target::locateByScan — see gatt_ota.h.
@@ -187,7 +187,10 @@ bool begin(const Target& target, const String& mac, uint32_t totalLen,
     return false;
   }
 
-  NimBLEDevice::init("");
+  // A relay only ever connects — it never scans — so it is safe in any port
+  // lifetime. Locating the peer may still need a scan; blesensor::locateByScan
+  // answers from this cycle's measurement scan instead wherever it can.
+  blestack::acquire();
   NimBLEDevice::setMTU(247);  // ask for a larger ATT MTU; the device may grant less
 
   if (!connectTo(m)) {

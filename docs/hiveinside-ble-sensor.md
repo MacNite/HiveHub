@@ -197,6 +197,12 @@ Where it stops, and what it says, maps to a cause:
 * **`[HEAP] *** CORRUPTION DETECTED at stage: … ***`** — the allocator's own
   structures are damaged. The named stage is the one that did it; everything
   after that point in the boot is unreliable, including any crash that follows.
+* **`[BLE] … address type … known from this boot's scan`** — the normal path
+  since 0.24.12. The relay reuses what the measurement scan already learned
+  instead of running a second scan of its own; see the note below.
+* **`[BLE] refusing to scan: the scan singleton belongs to port lifetime …`** —
+  the safety net described below fired. Not a fault; the relay reports a clean
+  failure rather than crashing.
 * **A boot banner instead of a result line** — the hub reset mid-relay. Read
   `Reset reason:` on the line after the wake reason: `panic/exception` means a
   crash, with the Guru Meditation dump immediately above it.
@@ -214,5 +220,27 @@ riscv32-esp-elf-addr2line -pfiaC \
 
 The dump's trailing `ELF file SHA256:` must match that file, or the decoded
 names are fiction.
+
+> **Why the relay no longer scans (0.24.12+).** `NimBLEScan` initialises its
+> scan-response timer once, in its constructor, against whichever porting layer
+> is up at that moment. `NimBLEDevice::deinit()` tears the porting layer down
+> *before* it would delete that singleton, so `deinit(true)` faults inside
+> `~NimBLEScan()` — and `deinit(false)`, the workaround, leaves the singleton
+> holding a callout belonging to a porting layer that no longer exists. Scan
+> again later in the same boot and the first `ble_npl_callout_stop()` hands a
+> freed handle to `esp_timer_stop()`: `Load access fault`, `MEPC` in
+> `esp_timer.c:257`. That is exactly what killed a relay in the field — the
+> measurement scan ran, the stack was cycled for the WiFi upload, and the
+> relay's own 4-second locate scan ran in the second port lifetime.
+>
+> The relay now takes the address type from the measurement scan that already
+> ran this cycle, so it never scans at all. `src/ble_stack.h` owns the stack's
+> lifetime for every caller and refuses a scan that would land in the wrong port
+> lifetime, so the remaining callers fail loudly instead of faulting.
+>
+> One consequence worth knowing: the setup portal's **discovery scan** is the
+> one caller that legitimately wants to scan late in a boot. It now declines
+> with a log line instead of crashing. Reboot the hub and open the portal before
+> the first measurement cycle to pair a new sensor.
 
 See [api.md](api.md) for the `update-hiveinside` command and payload.

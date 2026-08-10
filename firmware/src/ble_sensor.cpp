@@ -6,6 +6,7 @@
 #include <NimBLEDevice.h>
 #include <math.h>
 
+#include "ble_stack.h"
 #include "ruuvi_decode.h"
 
 // Declared at global scope so the blesensor namespace sees ::sendIntervalMs,
@@ -322,6 +323,36 @@ String normalizeMac(const String& raw) {
   return out;
 }
 
+#if HIVEINSIDE_GATT_CLIENT
+// ── address types learned from any scan this boot ──────────────────────────
+// The OTA relay needs a node's address type before it can connect, and used to
+// run a scan of its own to learn it. That scan is unsafe after the stack has
+// been torn down and re-initialised (see ble_stack.h), and it was also pure
+// duplication: the measurement scan earlier in the same cycle already saw the
+// node and captured exactly this. Keep it instead of throwing it away with the
+// per-slot accumulators. Plain RAM, so deep sleep clears it — which is correct,
+// since a re-pairing between cycles must not be answered from a stale entry.
+struct AddrTypeEntry {
+  String  mac;
+  uint8_t type;
+};
+std::vector<AddrTypeEntry> g_addrTypes;
+
+void rememberAddrType(const String& mac, uint8_t type) {
+  for (AddrTypeEntry& e : g_addrTypes) {
+    if (e.mac == mac) { e.type = type; return; }
+  }
+  g_addrTypes.push_back(AddrTypeEntry{mac, type});
+}
+
+bool recallAddrType(const String& mac, uint8_t& typeOut) {
+  for (const AddrTypeEntry& e : g_addrTypes) {
+    if (e.mac == mac) { typeOut = e.type; return true; }
+  }
+  return false;
+}
+#endif  // HIVEINSIDE_GATT_CLIENT
+
 // ── per-slot accumulator shared with the scan callback ─────────────────────
 struct Accumulator {
   String  mac;                 // normalized target MAC ("" = slot unused)
@@ -415,6 +446,9 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       if (g_slot[s].mac.length() > 0 && g_slot[s].mac == mac) {
         g_slot[s].found_by_mac = true;
         g_slot[s].ble_addr_type = (uint8_t)dev->getAddress().getType();
+        // Outlives the accumulators, so a later relay in this same boot does
+        // not have to scan again to learn what this scan already knows.
+        rememberAddrType(mac, g_slot[s].ble_addr_type);
       }
     }
 #endif
@@ -561,8 +595,21 @@ const char* sensorTypeName(SensorType t) {
   }
 }
 
+// Returns nullptr when a scan cannot safely run in this port lifetime — see
+// ble_stack.h. Every caller must handle that; it is not an error condition that
+// can be papered over, because the alternative is a load access fault inside
+// esp_timer_stop() on the scan singleton's stale callout.
 static NimBLEScan* startScan(ScanCallbacks& cb, uint32_t seconds) {
-  NimBLEDevice::init("");
+  blestack::acquire();
+  if (!blestack::scanAllowed()) {
+    Serial.printf("[BLE] refusing to scan: the scan singleton belongs to port "
+                  "lifetime %u and this is %u; a scan here would fault in "
+                  "esp_timer_stop()\n",
+                  (unsigned)blestack::scanGeneration(),
+                  (unsigned)blestack::generation());
+    return nullptr;
+  }
+  blestack::noteScanStarted();
   NimBLEScan* scan = NimBLEDevice::getScan();
   // NimBLE 2.x: setAdvertisedDeviceCallbacks() -> setScanCallbacks(); the second
   // arg (wantDuplicates=true) reports every advertisement to onResult, which is
@@ -608,6 +655,15 @@ void scanPairedSensorsMulti(const std::vector<String>& macs,
 
   ScanCallbacks cb;
   NimBLEScan* scan = startScan(cb, HOLYIOT_BLE_SCAN_SECONDS);
+  if (!scan) {
+    // First scan of the boot, so this is unreachable in practice; handled
+    // rather than asserted because "unreachable" is what the previous
+    // teardown assumption claimed too.
+    Serial.println("[BLE] measurement scan unavailable this boot");
+    blestack::release();
+    g_slot.clear();
+    return;
+  }
   scan->clearResults();
 
   // Every in-hive sensor on this bridge (HolyIot, RuuviTag, nRF54 HiveInside) is
@@ -618,19 +674,12 @@ void scanPairedSensorsMulti(const std::vector<String>& macs,
   // the only sensor that required one; its measurement-read path is gone).
   for (size_t s = 0; s < g_slot.size(); s++) copyToSnapshot(g_slot[s], out[s]);
 
-  // deinit(false), NOT deinit(true), on the ESP32-C6. deinit() stops and frees
-  // the BT controller (so the WiFi upload can have the radio) regardless of the
-  // argument; the flag only controls whether the C++ singletons are also
-  // deleted. On the C6/C5/C2/H2, nimble_port_deinit() zeroes the porting-layer
-  // dispatch table (npl_funcs) — and NimBLE-Arduino 2.3.x's ~NimBLEScan() then
-  // deinits its new scan-response timer through npl_funcs->p_ble_npl_callout_deinit,
-  // dereferencing the now-null table (Load access fault, MTVAL 0x6c). deinit()
-  // deletes the scan singleton AFTER tearing the port down, so deinit(true)
-  // panics on this chip the moment a scan has run. deinit(false) skips that
-  // delete: the singleton is reused by the next getScan() (NimBLE's intended
-  // pattern; its callout survives a port re-init) and is reclaimed at deep
-  // sleep anyway. The controller is still fully freed for WiFi.
-  NimBLEDevice::deinit(false);
+  // Teardown rule and its consequences now live in one place: ble_stack.h.
+  // Briefly: deinit(true) faults in ~NimBLEScan(), and deinit(false) leaves the
+  // singleton holding a callout from this port lifetime — so nothing may scan
+  // again until the next boot. The controller is fully freed for WiFi either
+  // way, which is the reason this call is here at all.
+  blestack::release();
   g_slot.clear();
 }
 
@@ -654,8 +703,22 @@ std::vector<Discovered> discover(uint32_t seconds) {
 
   ScanCallbacks cb;
   NimBLEScan* scan = startScan(cb, seconds);
+  if (!scan) {
+    // The one caller that can legitimately want to scan late in a boot. It is
+    // reachable only on a hub that already has a sensor paired — an unpaired
+    // one never runs the measurement scan, so discovery still gets port
+    // lifetime 1 and the usual first-pairing flow is unaffected. Adding a
+    // second sensor to a paired hub now needs a reboot into the portal. By the
+    // same mechanism that killed the relay, the alternative here is a fault
+    // rather than an empty list.
+    Serial.println("[BLE] discovery scan unavailable — reboot and retry before "
+                   "the first measurement cycle");
+    blestack::release();
+    g_discover = nullptr;
+    return found;
+  }
   scan->clearResults();
-  NimBLEDevice::deinit(false);  // see scanPairedSensorsMulti: deinit(true) panics on the C6 after a scan
+  blestack::release();
 
   g_discover = nullptr;
   return found;
@@ -781,6 +844,26 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
 bool locateByScan(const String& mac, uint8_t& addrTypeOut) {
   String m = normalizeMac(mac);
   if (m.length() == 0) return false;
+
+  // Fast path, and on a healthy cycle the only path: the measurement scan ran
+  // minutes ago in this same wake cycle and already recorded this node's
+  // address type. Reusing it skips a redundant 4 s scan AND avoids scanning in
+  // a later port lifetime, which is what faulted in esp_timer_stop() when the
+  // relay tried to locate a node it had just finished measuring.
+  if (recallAddrType(m, addrTypeOut)) {
+    Serial.printf("[BLE] %s address type %u known from this boot's scan; "
+                  "no locate scan needed\n", m.c_str(), (unsigned)addrTypeOut);
+    return true;
+  }
+
+  // Not heard this boot. A scan is the only way to learn the type — but only if
+  // this port lifetime owns the scan singleton.
+  if (!blestack::scanAllowed()) {
+    Serial.printf("[BLE] %s was not seen by this cycle's measurement scan and a "
+                  "locate scan cannot run safely now\n", m.c_str());
+    return false;
+  }
+
   // Reuse the measurement path's scan callback and slot accumulator: a hit sets
   // found_by_mac and captures the address type off the advertisement.
   g_slot.assign(1, Accumulator{});
@@ -789,10 +872,12 @@ bool locateByScan(const String& mac, uint8_t& addrTypeOut) {
   {
     ScanCallbacks cb;
     NimBLEScan* scan = startScan(cb, 4);  // 4 s is plenty for a connectable peer
+    if (!scan) { g_slot.clear(); return false; }
     scan->clearResults();
   }
-  if (!g_slot[0].found_by_mac) return false;
+  if (!g_slot[0].found_by_mac) { g_slot.clear(); return false; }
   addrTypeOut = g_slot[0].ble_addr_type;
+  g_slot.clear();
   return true;
 }
 

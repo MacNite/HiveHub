@@ -5,6 +5,7 @@
 
 #include "hive_config.h"
 #include <NimBLEDevice.h>
+#include "ble_stack.h"
 #include <cctype>
 
 namespace bhgatt {
@@ -177,7 +178,7 @@ void runCycle(CycleResult& out) {
     return;
   }
 
-  NimBLEDevice::init("");
+  blestack::acquire();
   uint8_t buf[64];
   size_t len = 0;
   int rssi = 0;
@@ -225,12 +226,9 @@ void runCycle(CycleResult& out) {
     }
   }
 
-  // deinit(false), not (true): on the ESP32-C6 deinit(true) panics in
-  // ~NimBLEScan() once a scan has run this boot (the measurement path always
-  // scans first), because it deletes the scan singleton after nimble_port_deinit()
-  // has already zeroed npl_funcs. See the detailed note in ble_sensor.cpp
-  // (scanPairedSensorsMulti). The controller is still fully freed either way.
-  NimBLEDevice::deinit(false);
+  // These reads only ever connect, so they are safe in any port lifetime.
+  // See ble_stack.h for the teardown rule; the controller is fully freed.
+  blestack::release();
 }
 
 void writeToJson(JsonDocument& doc, const CycleResult& r) {
