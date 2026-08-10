@@ -1085,6 +1085,141 @@ function renderFrequency(root, state) {
   root.append(tsView("Frequency bands", "FFT energy by acoustic band", state, { charts }));
 }
 
+// ── VIBRATION / ACCELERATION ─────────────────────────────────────────────────
+// In-hive vibration from the paired BLE sensor, all values in milli-g and all AC
+// (gravity removed). A HiveInside node computes the three bands plus broadband
+// RMS/peak on-device; a passive HolyIot/RuuviTag beacon can only send a
+// single-shot magnitude, so it fills rms/peak and leaves the bands null (see
+// docs/accelerometer.md). Everything here is per hive, so the charts follow the
+// whole comparison selection with one series per hive.
+const ACCEL_BANDS = [
+  {
+    key: "band_swarm_mg",
+    title: "Pre-swarm band (8–30 Hz)",
+    sub: "The ~20 Hz comb vibration that rises days before a swarm — the strongest known swarm predictor, and below what the microphones can hear",
+  },
+  {
+    key: "band_fanning_mg",
+    title: "Fanning band (30–100 Hz)",
+    sub: "Fanning / ventilation and low worker activity",
+  },
+  {
+    key: "band_activity_mg",
+    title: "Activity band (100–200 Hz)",
+    sub: "General in-comb worker activity",
+  },
+];
+
+// Raw per-axis values a HolyIot / RuuviTag beacon reports next to its magnitude.
+// Unlike the accel_* bands these are absolute (gravity included), so they read
+// as orientation rather than vibration.
+const ACCEL_AXES = [["x", "X"], ["y", "Y"], ["z", "Z"]];
+
+// Latest reported accel_{hive}_{suffix} for a ref: the standalone latest reading
+// first, then the loaded history newest→oldest, so a hive whose sensor was not
+// heard during the last cycle still shows its last known value.
+function accelLatest(ref, suffix) {
+  const key = `accel_${ref.hive}_${suffix}`;
+  if (ref.latest && ref.latest[key] != null) return ref.latest[key];
+  return latestOf(ref.measurements, key);
+}
+
+// Per-hive sensor health and capture settings, for the hives that report them.
+// Returns null when no selected hive has any diagnostics, so the card is simply
+// left out instead of rendering an empty shell.
+function accelDiagnosticsCard(state, refs) {
+  const rows = [];
+  for (const ref of refs) {
+    const ok = accelLatest(ref, "ok");
+    const rate = accelLatest(ref, "sample_rate_hz");
+    const count = accelLatest(ref, "sample_count");
+    const range = accelLatest(ref, "range_g");
+    if (ok == null && rate == null && count == null && range == null) continue;
+    const bits = [];
+    if (isNum(rate)) bits.push(`${fmtInt(rate)} Hz`);
+    if (isNum(count)) bits.push(`${fmtInt(count)} samples`);
+    if (isNum(range)) bits.push(`±${fmtInt(range)} g`);
+    rows.push([refLabel(state, ref), el("span", {},
+      ok == null ? null : el("span", { class: `badge ${ok ? "good" : "danger"}` }, ok ? "OK" : "Fault"),
+      bits.length ? ` ${bits.join(" · ")}` : null)]);
+  }
+  return rows.length ? rowsCard("Vibration sensor", rows) : null;
+}
+
+function renderVibration(root, state) {
+  const refs = selectedRefs(state);
+  const bandSeries = ACCEL_BANDS.map((b) => refs.map((ref, i) =>
+    seriesFrom(ref.measurements, `accel_${ref.hive}_${b.key}`, refLabel(state, ref), paletteColor(i))));
+  const rmsSeries = refs.map((ref, i) =>
+    seriesFrom(ref.measurements, `accel_${ref.hive}_rms_mg`, refLabel(state, ref), paletteColor(i)));
+  const peakSeries = refs.map((ref, i) =>
+    seriesFrom(ref.measurements, `accel_${ref.hive}_peak_mg`, refLabel(state, ref), paletteColor(i)));
+  const hasBands = bandSeries.some((group) => group.some((s) => s.points.length));
+  const hasBroadband = [...rmsSeries, ...peakSeries].some((s) => s.points.length);
+
+  const cards = [];
+  for (const ref of refs) {
+    const swarm = accelLatest(ref, "band_swarm_mg");
+    const rms = accelLatest(ref, "rms_mg");
+    const peak = accelLatest(ref, "peak_mg");
+    if (!isNum(swarm) && !isNum(rms) && !isNum(peak)) continue;
+    // Headline the pre-swarm band where the sensor reports bands at all; a
+    // passive beacon sends only a magnitude, so there the broadband RMS is the
+    // most meaningful number to lead with.
+    cards.push(isNum(swarm)
+      ? metricCard(`${refLabel(state, ref)} swarm band`, fmt(swarm, 1), "mg",
+          isNum(rms) ? `Broadband ${fmt(rms, 1)} mg` : "8–30 Hz")
+      : metricCard(`${refLabel(state, ref)} vibration`, fmt(rms, 1), "mg",
+          isNum(peak) ? `Peak ${fmt(peak, 1)} mg` : "Broadband RMS"));
+  }
+  const diagnostics = accelDiagnosticsCard(state, refs);
+  if (diagnostics) cards.push(diagnostics);
+
+  const charts = [];
+  if (hasBands) {
+    ACCEL_BANDS.forEach((b, i) =>
+      charts.push(chartCard(b.title, b.sub, bandSeries[i], { unit: "mg", yDigits: 1 })));
+  }
+  if (hasBroadband) {
+    charts.push(chartCard("Broadband vibration (RMS)",
+      "Overall vibration level with gravity removed", rmsSeries, { unit: "mg", yDigits: 1 }));
+    charts.push(chartCard("Peak vibration",
+      "Largest single-sample deviation per reading", peakSeries, { unit: "mg", yDigits: 1 }));
+  }
+  // Raw axes, per hive — only for the beacons that send them, and on their own
+  // chart because they are absolute values on a different scale to the AC bands.
+  for (const ref of refs) {
+    const axes = ACCEL_AXES.map(([axis, label], i) =>
+      seriesFrom(ref.measurements, `ble_${ref.hive}_accel_${axis}_mg`, `${label} axis`, paletteColor(i)));
+    if (axes.some((s) => s.points.length)) {
+      charts.push(chartCard(`Raw acceleration axes — ${refLabel(state, ref)}`,
+        "Absolute per-axis reading from the BLE sensor, gravity included — a lasting shift means the hive or the sensor moved",
+        axes, { unit: "mg", yDigits: 0 }));
+    }
+  }
+
+  if (!charts.length) {
+    charts.push(el("div", { class: "card" },
+      el("p", { class: "muted-text" },
+        "No vibration data for the selected hives. In-hive vibration comes from a paired BLE sensor: "
+        + "a HiveInside node reports the three frequency bands, a HolyIot/RuuviTag beacon only the broadband level."),
+      el("p", { class: "note" },
+        el("a", {
+          class: "doc-link",
+          href: "https://github.com/MacNite/HiveHub/blob/main/docs/accelerometer.md",
+          target: "_blank", rel: "noopener noreferrer",
+        }, "Vibration monitoring docs"))));
+  } else if (!hasBands) {
+    charts.unshift(el("div", { class: "card" },
+      el("p", { class: "muted-text" },
+        "No frequency bands reported — a passive HolyIot/RuuviTag beacon sends a single broadband magnitude only. "
+        + "Pair a HiveInside node to get the 8–30 Hz pre-swarm band.")));
+  }
+
+  root.append(tsView("Vibration", "In-hive acceleration in milli-g, from the paired BLE sensor", state,
+    { cards, charts }));
+}
+
 // Wireless (BLE) in-hive sensors that report their own battery, separate from
 // the ESP32 collector pack. Voltage-based sensors (HiveScale/HiveHeart) and the
 // percent-based BLE sensor (HolyIot/Ruuvi/HiveInside) are charted on separate
@@ -3310,6 +3445,7 @@ export const GROUPS = [
   { id: "environment", label: "Environment", icon: "💧", render: renderEnvironment },
   { id: "audio", label: "Audio", icon: "🔊", render: renderAudio },
   { id: "frequency", label: "Frequency bands", icon: "📊", render: renderFrequency },
+  { id: "vibration", label: "Vibration", icon: "📳", render: renderVibration },
   { id: "battery", label: "Battery & power", icon: "🔋", render: renderBattery },
   { id: "connectivity", label: "Connectivity", icon: "📶", render: renderConnectivity },
   { id: "counter", label: "Counter", icon: "🐝", render: renderCounter },
