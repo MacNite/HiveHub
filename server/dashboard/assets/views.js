@@ -3445,7 +3445,7 @@ export const GROUPS = [
   { id: "environment", label: "Environment", icon: "💧", render: renderEnvironment },
   { id: "audio", label: "Audio", icon: "🔊", render: renderAudio },
   { id: "frequency", label: "Frequency bands", icon: "📊", render: renderFrequency },
-  { id: "vibration", label: "Vibration", icon: "📳", render: renderVibration },
+  { id: "vibration", label: "Vibration", icon: "〰️", render: renderVibration },
   { id: "battery", label: "Battery & power", icon: "🔋", render: renderBattery },
   { id: "connectivity", label: "Connectivity", icon: "📶", render: renderConnectivity },
   { id: "counter", label: "Counter", icon: "🐝", render: renderCounter },
