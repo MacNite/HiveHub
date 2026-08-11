@@ -25,7 +25,47 @@
 // time mapping on canvas._xScale so callers can turn a pointer x back into a
 // timestamp (see attachChartCursor in views.js).
 
-export const PALETTE = ["#f2a900", "#2563a8", "#2e7d32", "#b00020", "#7b3fb0", "#0f8a8a"];
+// Categorical palette — identity, i.e. "which hive". Assigned in order and
+// cycled by position, so the ADJACENT pairs are the ones that must stay
+// distinguishable. The order is the colour-blind safety mechanism, not a
+// preference: green and red used to sit next to each other (slots 3 and 4),
+// which separate by only ΔE 3.8 in OKLab under deuteranopia — the two hives
+// looked identical to a deuteranopic reader. Re-ordering the same six hues
+// takes the worst adjacent pair to ΔE 21.3 in both themes. Keep purple and blue
+// between green and red if these are ever re-stepped.
+export const PALETTE = ["#2e7d32", "#7b3fb0", "#b00020", "#2563a8", "#f2a900", "#0f8a8a"];
+
+// Ordinal ramp — position in an ordered sequence, i.e. "which frequency band".
+// One hue in monotone lightness steps, so the colour itself carries the low→high
+// order and the categorical palette above stays free to mean "which hive". The
+// steps live in style.css as --band-1..--band-5 because the two themes need
+// different ones: light mode runs light→dark, dark mode re-steps dim→bright so
+// the pale end still clears the card. Both directions are validated for monotone
+// lightness, a ≥0.06 gap per step and ≥2:1 contrast at the low-contrast end.
+const BAND_STEPS = 5;
+
+// The ramp step for series `i` of `n`, spread across the five steps with both
+// ends included: 3 bands take steps 1/3/5, five bands take 1..5. A lone series
+// takes the middle step rather than the palest one.
+export function bandColor(i, n) {
+  if (n <= 1) return "var(--band-3)";
+  const step = 1 + Math.round((i / (n - 1)) * (BAND_STEPS - 1));
+  return `var(--band-${Math.min(BAND_STEPS, Math.max(1, step))})`;
+}
+
+// A recessive grey for a series that is context rather than subject — the
+// broadband total drawn behind the bands it sums up.
+export const CONTEXT_COLOR = "var(--chart-context)";
+
+// Series colours may be a CSS custom property ("var(--band-3)") so that the
+// legend swatch and the canvas stay in step through a theme flip: the swatch
+// follows the cascade on its own, and the canvas resolves the value here at
+// draw time. Plain hex passes straight through.
+function resolveColor(c) {
+  if (typeof c !== "string" || !c.startsWith("var(")) return c;
+  const name = c.slice(4, -1).trim();
+  return themeColor(name, "#888888");
+}
 
 // "#rrggbb" -> "rgba(r,g,b,alpha)", for fading a series colour by age.
 export function withAlpha(hex, alpha) {
@@ -117,7 +157,7 @@ export function drawLineChart(canvas, series, opts = {}) {
   // auto-fits and is not click-to-edit; only the primary (left) axis is pinnable.
   const rightSeries = series.filter((s) => s.axis === "right" && s.points && s.points.length);
   const hasRight = rightSeries.length > 0;
-  const rightColor = hasRight ? rightSeries[0].color : null;
+  const rightColor = hasRight ? resolveColor(rightSeries[0].color) : null;
 
   const padL = 48, padR = hasRight ? 48 : 14, padT = 12, padB = 26;
   const plotW = cssW - padL - padR;
@@ -238,7 +278,7 @@ export function drawLineChart(canvas, series, opts = {}) {
     if (!s.points.length) continue;
     const gapMs = gapThreshold(s.points, opts.sendIntervalMs, gapFactor);
     const yOf = yOfFor(s);
-    ctx.strokeStyle = s.color;
+    ctx.strokeStyle = resolveColor(s.color);
     let runDashed = null; // dash style of the run currently being accumulated
     for (let i = 1; i < s.points.length; i++) {
       const p0 = s.points[i - 1], p1 = s.points[i];
@@ -273,7 +313,7 @@ export function drawLineChart(canvas, series, opts = {}) {
       const py = yOfFor(s)(p.y);
       ctx.beginPath();
       ctx.arc(cx, py, 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = s.color;
+      ctx.fillStyle = resolveColor(s.color);
       ctx.fill();
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = markerRing;
