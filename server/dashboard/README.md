@@ -122,6 +122,34 @@ Plain HTML/CSS/ES-modules — **no build step**, matching `website/`:
 | `assets/views.js` | One renderer per sidebar data group |
 | `assets/app.js` | Controller: selectors, sidebar, loading, polling |
 
+### Chart conventions
+
+Two colour roles, and which one a series gets is decided by one question — *does
+the order of these series mean anything?*
+
+- **Colour = identity** (`PALETTE` in `charts.js`): which **hive**. Six hues in a
+  fixed order, cycled by position. The order is a colour-blind safety property,
+  not taste — adjacent slots are the ones a reader has to tell apart, so green
+  and red must never end up next to each other. A hive keeps the same colour in
+  the top-bar chip, the selection strip and every chart.
+- **Colour = order** (`--band-1`…`--band-5` in `style.css`, via `bandColor()`):
+  which **frequency band**. One hue in monotone lightness steps, low → high, so
+  the colour itself carries the order. Light mode steps light → dark; dark mode
+  re-steps dim → bright so the weak end still clears the card.
+
+That split decides the layout of the two acoustic pages. Bands share a unit and
+are read against each other at a moment, so all of a hive's bands go on **one**
+chart; hives are compared across a whole range, so each hive gets **its own**
+chart, tagged with its palette colour in the heading. Frequency bands and
+Vibration are laid out identically for that reason — they are read one after the
+other, and the vibration bands simply continue below 50 Hz where the microphones
+stop. The spectrum/waterfall view (which encodes age as fadedness, and so cannot
+show a trend) stays available, folded under the time charts.
+
+A series colour may be a CSS custom property such as `var(--band-3)`: the legend
+swatch follows the cascade and the canvas resolves it at draw time, so both
+survive a theme switch without a re-render.
+
 The public embed pages served by **Publish data** live next door in
 `server/embed/` (their own shell, stylesheet and loader) and reuse
 `assets/charts.js` verbatim, so a published chart is drawn by exactly the same

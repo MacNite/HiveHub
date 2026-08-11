@@ -3,7 +3,7 @@
 // the admin action callbacks (see app.js buildState()).
 
 import { el, fmt, fmtInt, isNum, relAge, latestOf, sevClass, fmtDateTime, DASH } from "./format.js";
-import { drawLineChart, drawSpectrumChart, seriesFrom, dailyMaxSeries, valueAt, PALETTE, withAlpha } from "./charts.js";
+import { drawLineChart, drawSpectrumChart, seriesFrom, dailyMaxSeries, valueAt, PALETTE, bandColor, CONTEXT_COLOR, withAlpha } from "./charts.js";
 import { isSupported as pushSupported, isSubscribed as pushIsSubscribed, subscribe as pushSubscribe, unsubscribe as pushUnsubscribe } from "./push.js";
 
 // Pull the firmware version out of a build artifact's filename so the upload
@@ -424,8 +424,13 @@ function chartCard(title, sub, series, opts = {}) {
     series.length ? chartTools(chart, title, hint) : null);
   activeCharts.push(chart);
   if (series.length) attachChartCursor(chart);
+  // opts.hiveColor: a chart whose series are measures rather than hives (the
+  // band charts) carries the hive's identity in its heading instead, with the
+  // same swatch colour its chip has in the top bar.
   return el("div", { class: "card chart-card" },
-    el("h2", {}, title),
+    el("h2", {},
+      opts.hiveColor ? el("span", { class: "hive-swatch", style: `background:${opts.hiveColor}` }) : null,
+      title),
     sub ? el("p", { class: "card-sub" }, sub) : null,
     series.length ? legend : null,
     wrap);
@@ -759,6 +764,15 @@ function tsView(title, desc, state, { cards = [], charts = [] }) {
   return root;
 }
 
+// A folded-away block of charts (progressive disclosure: the expert view sits
+// under the everyday one). A canvas inside a closed <details> has no layout, so
+// it would draw at the fallback width and keep it — redraw once it opens.
+function foldedCharts(title, ...cards) {
+  const panel = collapsible(title, false, el("div", { class: "grid wide" }, ...cards));
+  panel.addEventListener("toggle", () => { if (panel.open) requestAnimationFrame(drawCharts); });
+  return panel;
+}
+
 function renderTemperature(root, state) {
   const refs = selectedRefs(state);
   const m = state.latest || {};   // active device (for the ambient reference)
@@ -865,10 +879,23 @@ function renderAudio(root, state) {
   root.append(tsView("Audio", "Hive sound levels", state, { cards, charts }));
 }
 
+// The five microphone FFT bands, low → high. This is an ORDERED scale, not a set
+// of independent categories: swapping two entries would change what the chart
+// says. So the bands are drawn in the ordinal ramp (bandColor) and the hive keeps
+// the categorical palette — see the note above renderFrequency. The Hz ranges
+// mirror firmware/include/mics.h and server/insights.py; keep them in sync. They
+// are carried in the series label because "Piping" alone means nothing to a
+// beekeeper who has not read the docs, while "Piping · 300–550 Hz" teaches the
+// band every time the legend is read. The short label is used on its own for the
+// spectrum chart's x-axis, where there is no room for the range.
 const BANDS = [
-  ["sub_bass", "Sub-bass"], ["hum", "Hum"], ["piping", "Piping"],
-  ["stress", "Stress"], ["high", "High"],
+  ["sub_bass", "Sub-bass", "50–150 Hz"],
+  ["hum", "Hum", "150–300 Hz"],
+  ["piping", "Piping", "300–550 Hz"],
+  ["stress", "Stress", "550–1500 Hz"],
+  ["high", "High", "1.5–3 kHz"],
 ];
+const bandLabel = ([, label, hz]) => `${label} · ${hz}`;
 
 // Max spectrum lines drawn per chart. Measurements can arrive every few
 // seconds, so plotting one line per row over a multi-day range would be an
@@ -1032,25 +1059,55 @@ function hiveheartBandMinMax(measurements, key) {
   return stats.map((s) => (s.min === Infinity ? null : s));
 }
 
+// Which dimension gets a colour and which gets its own chart is the same
+// decision on this page and on Vibration, and both answer it the same way: the
+// bands share a unit and are read against each other at a moment ("is piping
+// high relative to hum right now?"), which one shared chart does best, while
+// hives are compared across a whole range, which separate charts do best. So
+// every band of one hive goes on one chart, and each hive gets its own — the
+// hive's identity riding on the chart title and its palette dot rather than on
+// the series colours. The spectrum profile answers a different question (the
+// shape of the sound, rather than its history) and is kept below, folded away.
+function bandTimeChart(state, ref, hiveColor) {
+  const series = BANDS.map((band, i) =>
+    seriesCoalesce(ref.measurements, micKeys(ref.hive, `band_${band[0]}_dbfs`),
+      bandLabel(band), bandColor(i, BANDS.length)));
+  if (!series.some((s) => s.points.length)) return null;
+  return chartCard(`Frequency bands — ${refLabel(state, ref)}`,
+    "Loudness in each band over the selected range. Higher is louder; bands run low to high in one colour. Click a band in the legend to hide it.",
+    series, { unit: "dBFS", yDigits: 0, hiveColor });
+}
+
 function renderFrequency(root, state) {
   const refs = selectedRefs(state);
   const categories = BANDS.map(([, label]) => label);
   const charts = [];
   let micCharts = 0;
+  // Time first: the question a beekeeper actually arrives with is "has anything
+  // changed this week", and only a time axis answers it.
   refs.forEach((ref, i) => {
-    const keysList = BANDS.map(([k]) => micKeys(ref.hive, `band_${k}_dbfs`));
-    const snapshots = spectrumSnapshots(ref.measurements, keysList);
-    if (snapshots.length) {
-      micCharts++;
-      const bandStats = bandMinMax(ref.measurements, keysList);
-      charts.push(spectrumChartCard(`Frequency bands — ${refLabel(state, ref)}`,
-        "FFT energy by band, like a spectrum analyzer — the bold line is the latest reading, fainter lines are earlier ones",
-        categories, snapshots, bandStats, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
-    }
+    const chart = bandTimeChart(state, ref, paletteColor(i));
+    if (chart) { micCharts++; charts.push(chart); }
   });
   if (!micCharts) {
     charts.push(el("div", { class: "card" }, el("p", { class: "muted-text" }, "No frequency-band data reported by this device.")));
   }
+
+  // The spectrum profile answers the other question — the shape of the sound
+  // right now, rather than how it got there — so it stays on the page, folded
+  // below the time charts. It encodes age as fadedness, which carries no scale a
+  // reader can decode, and that is exactly why it is the second view: a rising
+  // band or a one-day spike is invisible in it.
+  const profile = [];
+  refs.forEach((ref, i) => {
+    const keysList = BANDS.map(([key]) => micKeys(ref.hive, `band_${key}_dbfs`));
+    const snapshots = spectrumSnapshots(ref.measurements, keysList);
+    if (!snapshots.length) return;
+    const bandStats = bandMinMax(ref.measurements, keysList);
+    profile.push(spectrumChartCard(`Spectrum profile — ${refLabel(state, ref)}`,
+      "FFT energy by band, like a spectrum analyzer — the bold line is the latest reading, fainter lines are earlier ones",
+      categories, snapshots, bandStats, paletteColor(i), { unit: "dBFS", yDigits: 0 }));
+  });
 
   // HiveHeart in-hive spectrum. Rendered as a separate 16-range diagram on its
   // own 0–15 relative-level axis (HiveHeart levels are not dBFS). Only shown when
@@ -1071,18 +1128,21 @@ function renderFrequency(root, state) {
         const freqHz = latestHiveheartFreq(ref);
         const markerIndex = hiveheartFreqToIndex(freqHz);
         if (markerIndex != null) opts.marker = { index: markerIndex, label: `${Math.round(freqHz)} Hz` };
-        charts.push(spectrumChartCard(`HiveHeart spectrum — ${refLabel(state, ref)}`,
+        profile.push(spectrumChartCard(`HiveHeart spectrum — ${refLabel(state, ref)}`,
           "HiveHeart in-hive FFT — 16 frequency ranges (Hz), relative level 0–15 (not dBFS); bold line is the latest reading, fainter lines are earlier ones. The dashed pink marker is HiveHeart's reported peak frequency; the Sub-bass/Hum/Piping/Stress headings are approximate and span several ranges",
           HIVEHEART_FFT_LABELS, snaps, bandStats, paletteColor(i), opts));
       } else {
-        charts.push(el("div", { class: "card" },
+        profile.push(el("div", { class: "card" },
           el("h2", {}, `HiveHeart spectrum — ${refLabel(state, ref)}`),
           el("p", { class: "muted-text" }, "No HiveHeart FFT data for this hive.")));
       }
     });
   }
 
-  root.append(tsView("Frequency bands", "FFT energy by acoustic band", state, { charts }));
+  const node = tsView("Frequency bands",
+    "Microphone FFT energy per band, in dBFS — louder is higher up the axis", state, { charts });
+  if (profile.length) node.append(foldedCharts("Spectrum profile", ...profile));
+  root.append(node);
 }
 
 // ── VIBRATION / ACCELERATION ─────────────────────────────────────────────────
@@ -1090,24 +1150,21 @@ function renderFrequency(root, state) {
 // (gravity removed). A HiveInside node computes the three bands plus broadband
 // RMS/peak on-device; a passive HolyIot/RuuviTag beacon can only send a
 // single-shot magnitude, so it fills rms/peak and leaves the bands null (see
-// docs/accelerometer.md). Everything here is per hive, so the charts follow the
-// whole comparison selection with one series per hive.
+// docs/accelerometer.md).
+//
+// Laid out exactly like the Frequency bands page, and for the same reason: the
+// bands share a unit and are read against each other, so they share a chart in
+// the ordinal ramp, and each hive gets its own chart tagged with its palette
+// colour. The two acoustic pages are read one after the other — the vibration
+// bands pick up below 50 Hz where the microphones stop — so they should not need
+// two different reading habits.
+//
+// Ordered low → high, like the microphone bands. Ranges mirror
+// server/insights.py and docs/accelerometer.md.
 const ACCEL_BANDS = [
-  {
-    key: "band_swarm_mg",
-    title: "Pre-swarm band (8–30 Hz)",
-    sub: "The ~20 Hz comb vibration that rises days before a swarm — the strongest known swarm predictor, and below what the microphones can hear",
-  },
-  {
-    key: "band_fanning_mg",
-    title: "Fanning band (30–100 Hz)",
-    sub: "Fanning / ventilation and low worker activity",
-  },
-  {
-    key: "band_activity_mg",
-    title: "Activity band (100–200 Hz)",
-    sub: "General in-comb worker activity",
-  },
+  { key: "band_swarm_mg", label: "Pre-swarm", hz: "8–30 Hz" },
+  { key: "band_fanning_mg", label: "Fanning", hz: "30–100 Hz" },
+  { key: "band_activity_mg", label: "Activity", hz: "100–200 Hz" },
 ];
 
 // Raw per-axis values a HolyIot / RuuviTag beacon reports next to its magnitude.
@@ -1146,16 +1203,31 @@ function accelDiagnosticsCard(state, refs) {
   return rows.length ? rowsCard("Vibration sensor", rows) : null;
 }
 
+// One hive's vibration chart: the three bands in the ordinal ramp plus the
+// broadband RMS behind them in grey, because RMS is the total those bands are
+// part of — context, not a fourth band. A hive on a passive beacon has no bands
+// at all, so there RMS becomes the subject and takes a ramp colour instead of
+// the grey. Returns null when the hive has reported nothing.
+function vibrationChart(state, ref, hiveColor) {
+  const bands = ACCEL_BANDS.map((band, i) =>
+    seriesFrom(ref.measurements, `accel_${ref.hive}_${band.key}`,
+      `${band.label} · ${band.hz}`, bandColor(i, ACCEL_BANDS.length)));
+  const hasBands = bands.some((s) => s.points.length);
+  const rms = seriesFrom(ref.measurements, `accel_${ref.hive}_rms_mg`,
+    "Broadband RMS", hasBands ? CONTEXT_COLOR : bandColor(0, 1));
+  const series = hasBands ? [...bands, rms] : [rms];
+  if (!series.some((s) => s.points.length)) return null;
+  return chartCard(`Vibration — ${refLabel(state, ref)}`,
+    hasBands
+      ? "Vibration strength in each band over the selected range. Bands run low to high in one colour; the grey line is the broadband total. Click a band in the legend to hide it."
+      : "Broadband vibration strength over the selected range. This sensor reports no frequency bands — see the note above.",
+    series, { unit: "mg", yDigits: 1, hiveColor });
+}
+
 function renderVibration(root, state) {
   const refs = selectedRefs(state);
-  const bandSeries = ACCEL_BANDS.map((b) => refs.map((ref, i) =>
-    seriesFrom(ref.measurements, `accel_${ref.hive}_${b.key}`, refLabel(state, ref), paletteColor(i))));
-  const rmsSeries = refs.map((ref, i) =>
-    seriesFrom(ref.measurements, `accel_${ref.hive}_rms_mg`, refLabel(state, ref), paletteColor(i)));
-  const peakSeries = refs.map((ref, i) =>
-    seriesFrom(ref.measurements, `accel_${ref.hive}_peak_mg`, refLabel(state, ref), paletteColor(i)));
-  const hasBands = bandSeries.some((group) => group.some((s) => s.points.length));
-  const hasBroadband = [...rmsSeries, ...peakSeries].some((s) => s.points.length);
+  const hasBands = refs.some((ref) =>
+    ACCEL_BANDS.some((band) => latestOf(ref.measurements, `accel_${ref.hive}_${band.key}`) != null));
 
   const cards = [];
   for (const ref of refs) {
@@ -1176,29 +1248,26 @@ function renderVibration(root, state) {
   if (diagnostics) cards.push(diagnostics);
 
   const charts = [];
-  if (hasBands) {
-    ACCEL_BANDS.forEach((b, i) =>
-      charts.push(chartCard(b.title, b.sub, bandSeries[i], { unit: "mg", yDigits: 1 })));
-  }
-  if (hasBroadband) {
-    charts.push(chartCard("Broadband vibration (RMS)",
-      "Overall vibration level with gravity removed", rmsSeries, { unit: "mg", yDigits: 1 }));
-    charts.push(chartCard("Peak vibration",
-      "Largest single-sample deviation per reading", peakSeries, { unit: "mg", yDigits: 1 }));
-  }
-  // Raw axes, per hive — only for the beacons that send them, and on their own
-  // chart because they are absolute values on a different scale to the AC bands.
+  refs.forEach((ref, i) => {
+    const chart = vibrationChart(state, ref, paletteColor(i));
+    if (chart) charts.push(chart);
+  });
+  // Raw axes, per hive — only for the beacons that send them, and folded away
+  // below: they are absolute values including gravity, on a different scale to
+  // the AC bands, and they answer a different question (has the hive moved).
+  // X/Y/Z is a nominal set, not an ordered one, so it keeps categorical colours.
+  const axisCharts = [];
   for (const ref of refs) {
     const axes = ACCEL_AXES.map(([axis, label], i) =>
       seriesFrom(ref.measurements, `ble_${ref.hive}_accel_${axis}_mg`, `${label} axis`, paletteColor(i)));
     if (axes.some((s) => s.points.length)) {
-      charts.push(chartCard(`Raw acceleration axes — ${refLabel(state, ref)}`,
+      axisCharts.push(chartCard(`Raw acceleration axes — ${refLabel(state, ref)}`,
         "Absolute per-axis reading from the BLE sensor, gravity included — a lasting shift means the hive or the sensor moved",
         axes, { unit: "mg", yDigits: 0 }));
     }
   }
 
-  if (!charts.length) {
+  if (!charts.length && !axisCharts.length) {
     charts.push(el("div", { class: "card" },
       el("p", { class: "muted-text" },
         "No vibration data for the selected hives. In-hive vibration comes from a paired BLE sensor: "
@@ -1216,8 +1285,11 @@ function renderVibration(root, state) {
         + "Pair a HiveInside node to get the 8–30 Hz pre-swarm band.")));
   }
 
-  root.append(tsView("Vibration", "In-hive acceleration in milli-g, from the paired BLE sensor", state,
-    { cards, charts }));
+  const node = tsView("Vibration",
+    "In-hive vibration in milli-g, from the paired BLE sensor — stronger vibration is higher up the axis",
+    state, { cards, charts });
+  if (axisCharts.length) node.append(foldedCharts("Raw acceleration axes", ...axisCharts));
+  root.append(node);
 }
 
 // Wireless (BLE) in-hive sensors that report their own battery, separate from

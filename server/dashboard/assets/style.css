@@ -39,6 +39,23 @@
   --chart-cursor-strong: rgba(31, 36, 33, .5);
   --chart-latest: #111111;
   --chart-marker-ring: #ffffff;
+
+  /* Ordinal ramp for ordered series — the microphone and vibration frequency
+     bands, drawn low → high. One hue in monotone lightness steps so the colour
+     carries the order, which leaves the categorical PALETTE in charts.js free to
+     keep meaning "which hive" on every page. Light mode steps light → dark; the
+     dark block re-steps dim → bright so the low-contrast end still clears the
+     card. Both directions are checked for monotone lightness, a ≥0.06 lightness
+     gap per step and ≥2:1 contrast at the weak end — re-validate if you change
+     them. charts.js reads these at draw time (see bandColor/resolveColor), so a
+     series colour of "var(--band-3)" follows the theme without a re-render. */
+  --band-1: #8fbce4;
+  --band-2: #5f97d2;
+  --band-3: #3a72b8;
+  --band-4: #22528e;
+  --band-5: #123561;
+  /* A series that is context, not subject: the broadband total behind the bands. */
+  --chart-context: #8a9088;
 }
 
 /* ── Dark theme ──────────────────────────────────────────────────
@@ -72,6 +89,14 @@
   --chart-cursor-strong: rgba(243, 238, 225, .55);
   --chart-latest: #f3eee1;
   --chart-marker-ring: #211f18;   /* == --card, so markers punch out on lines */
+  /* Re-stepped, not inverted: still low → high, but dim → bright so the weak
+     end clears the dark card instead of disappearing into it. */
+  --band-1: #33598a;
+  --band-2: #4a7cb5;
+  --band-3: #6b9dd6;
+  --band-4: #95c0e8;
+  --band-5: #c4dcf4;
+  --chart-context: #8c8676;
 }
 
 * { box-sizing: border-box; }
@@ -303,6 +328,10 @@ select:disabled { opacity: .7; cursor: not-allowed; }
   box-shadow: var(--shadow); padding: 1rem 1.1rem;
 }
 .card h2 { margin: 0 0 .15rem; font-size: 1rem; }
+/* Hive identity on a chart whose series are measures rather than hives (the
+   frequency- and vibration-band charts): the same swatch colour the hive's chip
+   carries in the top bar, so a hive stays recognisable across every page. */
+.card h2 .hive-swatch { display: inline-block; width: .6rem; height: .6rem; border-radius: 3px; margin-right: .45rem; }
 .card .card-sub { margin: 0 0 .75rem; font-size: .82rem; color: var(--ink-faint); }
 
 .metric { display: flex; flex-direction: column; gap: .15rem; }
