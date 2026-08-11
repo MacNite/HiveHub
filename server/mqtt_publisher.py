@@ -111,18 +111,70 @@ _HIVE_SUBDEVICES: list[tuple[str, str, str, str, list]] = [
         ("battery_v",        "battery",         "V",   "voltage",         "measurement", None),
         ("rssi_dbm",         "signal",          "dBm", "signal_strength", "measurement", None),
     ]),
-    # In-hive BLE beacon (HolyIot / RuuviTag / HiveInside). None of them has a
-    # temperature entity here — their temperature is promoted to the hive-level
-    # reading (hive_<n>_temp_c on the hub device), so only humidity/pressure/
-    # battery/signal are attributable to this device. The manufacturer/model/label
-    # below are only the fallback for a beacon that reports no type; the real ones
-    # are resolved per hive from the reported sensor type (see _BLE_IDENTITIES).
+    # In-hive BLE beacon (HolyIot / RuuviTag / HiveInside). One catalogue entry
+    # covers all three — a hive carries at most one — so this list is the UNION of
+    # what any of them reports, not what a single one does: the HolyIot and the
+    # RuuviTag send pressure and a hub-derived vibration RMS/peak from their raw
+    # axes, while the HiveInside runs its FFTs on board and sends finished
+    # vibration bands, acoustic bands, a cell voltage and its firmware version but
+    # no pressure. Entities are announced per field, only once that field actually
+    # arrives (see publish_measurement), so each beacon ends up with exactly the
+    # entities it can populate instead of a stack of permanently-Unknown ones.
+    #
+    # None of them gets a temperature entity here: their temperature is promoted
+    # to the hive-level reading (hive_<n>_temp_c on the hub device).
+    #
+    # The manufacturer/model/label below are only the fallback for a beacon that
+    # reports no type; the real ones are resolved per hive from the reported
+    # sensor type (see _BLE_IDENTITIES).
     ("ble", "HiveHub", "In-hive BLE sensor", "BLE sensor", [
-        ("humidity_percent", "humidity",        "%",   "humidity",        "measurement", None),
-        ("pressure_hpa",     "pressure",        "hPa", "pressure",        "measurement", None),
-        ("battery_percent",  "battery",         "%",   "battery",         "measurement", None),
-        ("rssi_dbm",         "signal",          "dBm", "signal_strength", "measurement", None),
+        ("humidity_percent",       "humidity",                "%",    "humidity",        "measurement", None),
+        ("pressure_hpa",           "pressure",                "hPa",  "pressure",        "measurement", None),
+        ("battery_percent",        "battery",                 "%",    "battery",         "measurement", None),
+        ("battery_mv",             "battery voltage",         "mV",   "voltage",         "measurement", None),
+        ("rssi_dbm",               "signal",                  "dBm",  "signal_strength", "measurement", None),
+        ("firmware_version",       "firmware version",        None,   None,              None,          "mdi:chip"),
+        ("accel_rms_mg",           "vibration",               "mg",   None,              "measurement", "mdi:vibrate"),
+        ("accel_peak_mg",          "vibration peak",          "mg",   None,              "measurement", "mdi:vibrate"),
+        ("accel_band_swarm_mg",    "vibration swarm band",    "mg",   None,              "measurement", "mdi:vibrate"),
+        ("accel_band_fanning_mg",  "vibration fanning band",  "mg",   None,              "measurement", "mdi:vibrate"),
+        ("accel_band_activity_mg", "vibration activity band", "mg",   None,              "measurement", "mdi:vibrate"),
+        ("mic_rms_dbfs",           "sound level",             "dBFS", None,              "measurement", "mdi:microphone"),
+        ("mic_band_sub_bass_dbfs", "sound sub-bass band",     "dBFS", None,              "measurement", "mdi:microphone"),
+        ("mic_band_hum_dbfs",      "sound hum band",          "dBFS", None,              "measurement", "mdi:microphone"),
+        ("mic_band_piping_dbfs",   "sound piping band",       "dBFS", None,              "measurement", "mdi:microphone"),
+        ("mic_band_stress_dbfs",   "sound stress band",       "dBFS", None,              "measurement", "mdi:microphone"),
+        ("mic_band_high_dbfs",     "sound high band",         "dBFS", None,              "measurement", "mdi:microphone"),
     ]),
+]
+
+# The beacon's vibration and acoustic values do not live in the hive's ``ble``
+# object: the firmware maps them onto the hive's ``accel`` / ``mic`` objects so
+# they reuse the wired-accelerometer and microphone schema all the way into the
+# hive_readings columns. In the nested hives[] payload only the BLE path writes
+# those two objects, so they are unambiguously this beacon's — the flattener
+# copies them onto ble_<n>_* keys (guarded on ble.present) to keep every entity
+# on this sub-device keyed the same way.
+#
+# Legacy flat payloads (hives 1–2) are deliberately NOT mapped here: there the
+# same accel_<n>_* / mic_left_* keys are shared with a wired accelerometer and
+# the stereo INMP441 build, so attributing them to the beacon could credit it
+# with another sensor's readings. Those devices keep the ble_<n>_* entities the
+# firmware sends directly.
+#
+# (flat suffix, nested object, key within it)
+_BLE_NESTED_FIELDS: list[tuple[str, str, str]] = [
+    ("accel_rms_mg",           "accel", "rms_mg"),
+    ("accel_peak_mg",          "accel", "peak_mg"),
+    ("accel_band_swarm_mg",    "accel", "band_swarm_mg"),
+    ("accel_band_fanning_mg",  "accel", "band_fanning_mg"),
+    ("accel_band_activity_mg", "accel", "band_activity_mg"),
+    ("mic_rms_dbfs",           "mic",   "rms_dbfs"),
+    ("mic_band_sub_bass_dbfs", "mic",   "band_sub_bass_dbfs"),
+    ("mic_band_hum_dbfs",      "mic",   "band_hum_dbfs"),
+    ("mic_band_piping_dbfs",   "mic",   "band_piping_dbfs"),
+    ("mic_band_stress_dbfs",   "mic",   "band_stress_dbfs"),
+    ("mic_band_high_dbfs",     "mic",   "band_high_dbfs"),
 ]
 
 # The "ble" sub-device above covers three physically different beacons, so its
@@ -257,9 +309,17 @@ def _flatten_hives(payload: dict) -> None:
         # Not an entity — the beacon's reported type, flattened onto the same key
         # the legacy flat firmware uses so discovery can resolve which BLE sensor
         # this hive carries from one place (see _ble_identity).
-        ble_type = (h.get("ble") or {}).get("sensor_type")
-        if ble_type:
-            payload[f"ble_{n}_sensor_type"] = ble_type
+        ble = h.get("ble") or {}
+        if ble.get("sensor_type"):
+            payload[f"ble_{n}_sensor_type"] = ble["sensor_type"]
+        # The beacon's vibration/acoustic values ride the hive's accel/mic objects
+        # (see _BLE_NESTED_FIELDS); copy them onto this sub-device's keys, but only
+        # for a hive that actually has a beacon reporting.
+        if ble.get("present"):
+            for flat, obj, field in _BLE_NESTED_FIELDS:
+                val = (h.get(obj) or {}).get(field)
+                if val is not None:
+                    payload[f"ble_{n}_{flat}"] = val
 
 
 def _present_hive_indices(payload: dict) -> set[int]:
@@ -329,10 +389,12 @@ class MqttPublisher:
         # Per-device set of hive indices we have published hive discovery for, so
         # a hive that appears later (e.g. added in the portal) still gets entities.
         self._discovered_hives: dict[str, set[int]] = {}
-        # Per-device set of "<hive>:<source>" tags for in-hive sub-devices already
-        # announced, so each module (scale / HiveHeart / HolyIOT) is discovered
-        # only once it actually reports.
-        self._discovered_subdevices: dict[str, set[str]] = {}
+        # Per-device, per in-hive sub-device ("<hive>:<source>") record of what has
+        # been announced: the identity it was announced under plus the flat keys
+        # that already have an entity. Discovery is per field and only fires once
+        # that field actually arrives, so a module is never given entities for
+        # readings it does not produce; a field that shows up later still gets one.
+        self._discovered_subdevices: dict[str, dict[str, tuple[str, set[str]]]] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -485,33 +547,42 @@ class MqttPublisher:
                     self._discovered.add(device_id)
                 # Publish per-hive discovery for any hive index not yet seen.
                 seen = self._discovered_hives.setdefault(device_id, set())
-                seen_sub = self._discovered_subdevices.setdefault(device_id, set())
+                seen_sub = self._discovered_subdevices.setdefault(device_id, {})
                 for n in sorted(_present_hive_indices(payload)):
                     if n not in seen:
                         self._publish_sensor_configs(client, device_id, display_name, _hive_sensors(n))
                         seen.add(n)
                     # Announce each in-hive module (scale / HiveHeart / BLE beacon)
-                    # as its own HA device, but only once it actually reports — so a
-                    # hive without a HiveHeart never sprouts empty sound entities.
+                    # as its own HA device, one entity per field and only once that
+                    # field actually reports — so a hive without a HiveHeart never
+                    # sprouts empty sound entities, and a beacon that has no
+                    # barometer (or no on-board FFT) never sprouts entities that
+                    # would sit at "Unknown" forever. A field seen for the first
+                    # time later just adds its entity then.
                     for source, manufacturer, model, label, sensors in _hive_subdevices(n, payload):
-                        # The model is part of the tag so a BLE beacon whose type
-                        # only becomes known later — or one swapped for a different
-                        # brand — is re-announced with the right identity instead of
-                        # keeping whatever it was first discovered as. The entity
-                        # unique_ids and the device identifiers do not depend on the
-                        # type, so HA updates the existing device in place.
-                        tag = f"{n}:{source}:{model}"
-                        if tag in seen_sub:
-                            continue
-                        if not any(payload.get(s[0]) is not None for s in sensors):
+                        key = f"{n}:{source}"
+                        announced_model, announced = seen_sub.get(key, (model, set()))
+                        if announced_model != model:
+                            # The BLE beacon's type became known, or it was swapped
+                            # for a different brand: re-announce everything it
+                            # already has under the new identity so the existing
+                            # entities move with it. The entity unique_ids and the
+                            # device identifiers do not depend on the type, so HA
+                            # updates the device in place rather than duplicating it.
+                            todo = [s for s in sensors
+                                    if s[0] in announced or payload.get(s[0]) is not None]
+                        else:
+                            todo = [s for s in sensors
+                                    if s[0] not in announced and payload.get(s[0]) is not None]
+                        if not todo:
                             continue
                         block = self._subdevice_block(
                             device_id, display_name, n, source, manufacturer, model, label
                         )
                         self._publish_sensor_configs(
-                            client, device_id, display_name, sensors, device_block=block
+                            client, device_id, display_name, todo, device_block=block
                         )
-                        seen_sub.add(tag)
+                        seen_sub[key] = (model, announced | {s[0] for s in todo})
 
             client.publish(
                 self._device_availability_topic(device_id),

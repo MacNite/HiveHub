@@ -86,17 +86,19 @@ one picked from the highest-priority source available for that hive.
 
 Any in-hive **wireless module** a hive carries is published as **its own Home
 Assistant device**, nested under the hub via `via_device`, so each physical
-device is listed separately with its own entities. A sub-device is only
-announced once it actually reports, so a hive without a given module never
-sprouts empty entities.
+device is listed separately with its own entities. Discovery is **per entity**
+and fires only once that field actually arrives, so a hive without a given
+module never sprouts empty entities, and a module never gets entities for
+readings it does not produce. A field seen for the first time later simply adds
+its entity then.
 
 | Sub-device | Manufacturer / model | Entities |
 |---|---|---|
 | **Hive N HiveHeart** | beehivemonitoring.com / HiveHeart | temperature, humidity, sound frequency, sound energy, sound peak, battery, signal |
 | **Hive N scale** | beehivemonitoring.com / HiveScale | weight, temperature, humidity, pressure, battery, signal |
-| **Hive N HolyIOT** | HolyIOT / In-hive BLE sensor | humidity, pressure, battery, signal |
-| **Hive N HiveInside** | HiveHub / HiveInside (nRF54LM20A) | humidity, pressure, battery, signal |
-| **Hive N RuuviTag** | Ruuvi / RuuviTag | humidity, pressure, battery, signal |
+| **Hive N HolyIOT** | HolyIOT / In-hive BLE sensor | humidity, pressure, battery, signal, vibration, vibration peak |
+| **Hive N RuuviTag** | Ruuvi / RuuviTag | humidity, pressure, battery, signal, vibration, vibration peak |
+| **Hive N HiveInside** | HiveHub / HiveInside (nRF54LM20A) | humidity, battery, battery voltage, signal, firmware version, vibration + swarm/fanning/activity bands, sound level + sub-bass/hum/piping/stress/high bands |
 
 Each module exposes its **own** temperature/humidity, even though the hive's
 resolved temperature/humidity also appears on the hub device. This is
@@ -113,10 +115,16 @@ the single value the hive resolves to.
 > the beacon is swapped for a different brand — discovery is re-published and
 > Home Assistant updates the device in place (the entity `unique_id`s do not
 > depend on the type).
+>
+> Their entity sets differ because the hardware does: the HolyIOT and the
+> RuuviTag have a barometer and send raw axes the hub turns into a vibration
+> RMS/peak, while the HiveInside has no barometer but runs its vibration and
+> acoustic FFTs on board and reports finished bands, a cell voltage and its
+> firmware version. Since entities are announced per field, each beacon gets
+> exactly what it can populate.
 
-> No in-hive BLE beacon has a dedicated temperature field — its temperature is
-> promoted to the hive-level reading (`hive_<n>_temp_c` on the hub device) — so
-> the sub-device exposes humidity/pressure/battery/signal only.
+> No in-hive BLE beacon has a dedicated temperature entity here — its temperature
+> is promoted to the hive-level reading (`hive_<n>_temp_c` on the hub device).
 
 > The HiveScale's **pressure** commonly reads a flat **1000 hPa**: on most units
 > the barometer is not activated by the manufacturer, so this is the sensor's
@@ -132,6 +140,16 @@ names the legacy flat firmware already emits for hives 1–2. For newer firmware
 that sends the nested `hives[]` array, the bridge flattens each hive's
 `hiveheart` / `hivescale` / `ble` sub-object onto the same keys, so both payload
 shapes produce identical entities.
+
+A BLE beacon's **vibration and acoustic** values are the exception: the firmware
+maps them onto the hive's `accel` / `mic` objects so they reuse the
+wired-accelerometer and microphone schema all the way into the `hive_readings`
+columns. In the nested `hives[]` payload only the BLE path writes those objects,
+so the bridge copies them onto `ble_<n>_accel_*` / `ble_<n>_mic_*` keys and
+attributes them to the beacon. Legacy flat payloads are deliberately left alone
+there — in that shape the same `accel_<n>_*` / `mic_left_*` keys are shared with
+a wired accelerometer and the stereo INMP441 build, so the beacon could
+otherwise be credited with another sensor's readings.
 
 Each entity's `value_template` renders nothing when its field is absent from a
 given reading, so Home Assistant keeps the last known value instead of flapping
