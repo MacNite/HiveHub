@@ -111,16 +111,52 @@ _HIVE_SUBDEVICES: list[tuple[str, str, str, str, list]] = [
         ("battery_v",        "battery",         "V",   "voltage",         "measurement", None),
         ("rssi_dbm",         "signal",          "dBm", "signal_strength", "measurement", None),
     ]),
-    # The HolyIOT beacon has no dedicated temperature field — its temperature is
-    # promoted to the hive-level reading (hive_<n>_temp_c on the hub device), so
-    # only its humidity/pressure/battery/signal are attributable to this device.
-    ("ble", "HolyIOT", "In-hive BLE sensor", "HolyIOT", [
+    # In-hive BLE beacon (HolyIot / RuuviTag / HiveInside). None of them has a
+    # temperature entity here — their temperature is promoted to the hive-level
+    # reading (hive_<n>_temp_c on the hub device), so only humidity/pressure/
+    # battery/signal are attributable to this device. The manufacturer/model/label
+    # below are only the fallback for a beacon that reports no type; the real ones
+    # are resolved per hive from the reported sensor type (see _BLE_IDENTITIES).
+    ("ble", "HiveHub", "In-hive BLE sensor", "BLE sensor", [
         ("humidity_percent", "humidity",        "%",   "humidity",        "measurement", None),
         ("pressure_hpa",     "pressure",        "hPa", "pressure",        "measurement", None),
         ("battery_percent",  "battery",         "%",   "battery",         "measurement", None),
         ("rssi_dbm",         "signal",          "dBm", "signal_strength", "measurement", None),
     ]),
 ]
+
+# The "ble" sub-device above covers three physically different beacons, so its
+# identity cannot be a constant: the firmware reports which one it heard in
+# ble.sensor_type ("HolyIot 25015" / "RuuviTag" / "HiveInside"), and that decides
+# the manufacturer, model and entity-name label the beacon is announced with.
+# Keyed on a normalised prefix of that string (lower-cased, non-alphanumerics
+# stripped) so type strings that carry a part number or board suffix — "HolyIot
+# 25015", "hiveinside_nrf54" — still match.
+#
+# prefix -> (manufacturer, model, label)
+_BLE_IDENTITIES: list[tuple[str, tuple[str, str, str]]] = [
+    ("holyiot",    ("HolyIOT", "In-hive BLE sensor",     "HolyIOT")),
+    ("hiveinside", ("HiveHub", "HiveInside (nRF54LM20A)", "HiveInside")),
+    ("ruuvitag",   ("Ruuvi",   "RuuviTag",                "RuuviTag")),
+]
+
+
+def _ble_identity(sensor_type: Optional[str],
+                  fallback: tuple[str, str, str]) -> tuple[str, str, str]:
+    """Resolve (manufacturer, model, label) for an in-hive BLE beacon.
+
+    Unknown or missing types fall back to the generic catalogue entry rather than
+    guessing, so a beacon added to the firmware before this table is updated is
+    announced as an unbranded "BLE sensor" instead of being mislabelled as one of
+    the beacons above.
+    """
+    if not sensor_type:
+        return fallback
+    norm = "".join(c for c in sensor_type.lower() if c.isalnum())
+    for prefix, identity in _BLE_IDENTITIES:
+        if norm.startswith(prefix):
+            return identity
+    return fallback
 
 # source -> flat field names, derived from the catalogue above (used by the
 # flattener and the present-hive detection).
@@ -129,11 +165,21 @@ _SUBDEVICE_FIELDS: dict[str, list[str]] = {
 }
 
 
-def _hive_subdevices(n: int):
+def _hive_subdevices(n: int, payload: Optional[dict] = None):
     """Yield (source, manufacturer, model, label, sensors) for hive ``n``'s
     in-hive devices, where ``sensors`` are (key, name, unit, device_class,
-    state_class, icon) tuples keyed on the flat ``<source>_<n>_<field>`` keys."""
+    state_class, icon) tuples keyed on the flat ``<source>_<n>_<field>`` keys.
+
+    ``payload`` (an already-flattened reading) is what makes the BLE beacon's
+    identity follow the sensor actually fitted to the hive — without it the
+    generic fallback identity is used.
+    """
     for source, manufacturer, model, label, fields in _HIVE_SUBDEVICES:
+        if source == "ble":
+            manufacturer, model, label = _ble_identity(
+                (payload or {}).get(f"ble_{n}_sensor_type"),
+                (manufacturer, model, label),
+            )
         sensors = [
             (f"{source}_{n}_{field}", f"Hive {n} {label} {metric}", unit, dclass, sclass, icon)
             for field, metric, unit, dclass, sclass, icon in fields
@@ -208,6 +254,12 @@ def _flatten_hives(payload: dict) -> None:
             for field in fields:
                 if sub_obj.get(field) is not None:
                     payload[f"{source}_{n}_{field}"] = sub_obj[field]
+        # Not an entity — the beacon's reported type, flattened onto the same key
+        # the legacy flat firmware uses so discovery can resolve which BLE sensor
+        # this hive carries from one place (see _ble_identity).
+        ble_type = (h.get("ble") or {}).get("sensor_type")
+        if ble_type:
+            payload[f"ble_{n}_sensor_type"] = ble_type
 
 
 def _present_hive_indices(payload: dict) -> set[int]:
@@ -438,11 +490,17 @@ class MqttPublisher:
                     if n not in seen:
                         self._publish_sensor_configs(client, device_id, display_name, _hive_sensors(n))
                         seen.add(n)
-                    # Announce each in-hive module (scale / HiveHeart / HolyIOT) as
-                    # its own HA device, but only once it actually reports — so a
+                    # Announce each in-hive module (scale / HiveHeart / BLE beacon)
+                    # as its own HA device, but only once it actually reports — so a
                     # hive without a HiveHeart never sprouts empty sound entities.
-                    for source, manufacturer, model, label, sensors in _hive_subdevices(n):
-                        tag = f"{n}:{source}"
+                    for source, manufacturer, model, label, sensors in _hive_subdevices(n, payload):
+                        # The model is part of the tag so a BLE beacon whose type
+                        # only becomes known later — or one swapped for a different
+                        # brand — is re-announced with the right identity instead of
+                        # keeping whatever it was first discovered as. The entity
+                        # unique_ids and the device identifiers do not depend on the
+                        # type, so HA updates the existing device in place.
+                        tag = f"{n}:{source}:{model}"
                         if tag in seen_sub:
                             continue
                         if not any(payload.get(s[0]) is not None for s in sensors):

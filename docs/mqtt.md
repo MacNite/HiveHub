@@ -95,6 +95,8 @@ sprouts empty entities.
 | **Hive N HiveHeart** | beehivemonitoring.com / HiveHeart | temperature, humidity, sound frequency, sound energy, sound peak, battery, signal |
 | **Hive N scale** | beehivemonitoring.com / HiveScale | weight, temperature, humidity, pressure, battery, signal |
 | **Hive N HolyIOT** | HolyIOT / In-hive BLE sensor | humidity, pressure, battery, signal |
+| **Hive N HiveInside** | HiveHub / HiveInside (nRF54LM20A) | humidity, pressure, battery, signal |
+| **Hive N RuuviTag** | Ruuvi / RuuviTag | humidity, pressure, battery, signal |
 
 Each module exposes its **own** temperature/humidity, even though the hive's
 resolved temperature/humidity also appears on the hub device. This is
@@ -102,9 +104,19 @@ deliberate: a hive fitted with **both** a HiveHeart and a HiveScale has two
 independent temperature/humidity probes, and this surfaces both instead of only
 the single value the hive resolves to.
 
-> The **HolyIOT** beacon has no dedicated temperature field — its temperature is
+> The three **in-hive BLE beacons** (HolyIOT, HiveInside, RuuviTag) share one
+> sub-device slot — a hive carries at most one of them — and its manufacturer,
+> model and entity names follow the beacon the firmware actually heard, reported
+> as `ble_<n>_sensor_type` (`ble.sensor_type` in the nested `hives[]` form). A
+> beacon that reports no type at all is announced generically as
+> *HiveHub / In-hive BLE sensor*, and if the type only becomes known later — or
+> the beacon is swapped for a different brand — discovery is re-published and
+> Home Assistant updates the device in place (the entity `unique_id`s do not
+> depend on the type).
+
+> No in-hive BLE beacon has a dedicated temperature field — its temperature is
 > promoted to the hive-level reading (`hive_<n>_temp_c` on the hub device) — so
-> its sub-device exposes humidity/pressure/battery/signal only.
+> the sub-device exposes humidity/pressure/battery/signal only.
 
 > The HiveScale's **pressure** commonly reads a flat **1000 hPa**: on most units
 > the barometer is not activated by the manufacturer, so this is the sensor's

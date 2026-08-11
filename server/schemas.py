@@ -293,13 +293,17 @@ class MeasurementIn(BaseModel):
     accel_2_band_fanning_mg:   Optional[float] = None
     accel_2_band_activity_mg:  Optional[float] = None
 
-    # ── HolyIot 25015 in-hive BLE sensor (per hive) ──────────────────────────
-    # The 25015 is a passive BLE beacon (SHT40 + LPS22HB + LIS2DH12) bridged by
-    # the ESP32. Its acceleration is reported through the accel_N_* fields above
-    # (no FFT bands — a beacon only emits periodic single-shot samples). Humidity
-    # and pressure are promoted to columns; the raw per-axis acceleration,
-    # battery and link RSSI are kept in raw_json (declared so extra="ignore"
-    # does not drop them). Its temperature is delivered via hive_N_temp_c.
+    # ── In-hive BLE sensor (per hive) ────────────────────────────────────────
+    # A passive BLE beacon bridged by the ESP32 — a HolyIot 25015 (SHT40 +
+    # LPS22HB + LIS2DH12), a RuuviTag, or a HiveInside node. Which one it is
+    # rides in ble_N_sensor_type; the nested hives[] form carries the same value
+    # as ble.sensor_type. Its acceleration is reported through the accel_N_*
+    # fields above (no FFT bands — a beacon only emits periodic single-shot
+    # samples). Humidity and pressure are promoted to columns; the raw per-axis
+    # acceleration, battery and link RSSI are kept in raw_json (declared so
+    # extra="ignore" does not drop them). Its temperature is delivered via
+    # hive_N_temp_c.
+    ble_1_sensor_type:      Optional[str]   = None
     ble_1_humidity_percent: Optional[float] = None
     ble_1_pressure_hpa:     Optional[float] = None
     ble_1_accel_x_mg:       Optional[float] = None
@@ -314,6 +318,7 @@ class MeasurementIn(BaseModel):
     ble_1_firmware_version: Optional[str]   = None
     ble_1_board:            Optional[str]   = None
 
+    ble_2_sensor_type:      Optional[str]   = None
     ble_2_humidity_percent: Optional[float] = None
     ble_2_pressure_hpa:     Optional[float] = None
     ble_2_accel_x_mg:       Optional[float] = None
