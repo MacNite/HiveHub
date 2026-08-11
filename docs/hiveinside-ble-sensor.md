@@ -65,10 +65,18 @@ beacon** and opens a connectable OTA window on demand, so the relay locates it b
 its identity address before connecting.
 
 Uploads are **board-stamped** `nrf54lm20a` (the only HiveInside board). In the
-dashboard firmware tool, pick `HiveInside` as the target; the **Board** field then
-shows `HiveInside (nRF54LM20A)` **disabled** — there is nothing to choose, and the
-release is always stamped `nrf54lm20a`. Naming the file
-`hiveinside_nrf54lm20a_1.0.0.bin` keeps the stamp visible in the filename too. The
+dashboard firmware tool the target and version are filled in from the filename as
+soon as the `.bin` is picked: HiveInside's build names its artifact
+`hiveinside-nrf54lm20a-v0.4.7-lowpower.signed.bin` (see HiveInside's
+[`docs/ota-over-ble.md`](https://github.com/MacNite/HiveInside/blob/main/docs/ota-over-ble.md)),
+and the form reads `HiveInside` and `0.4.7` straight out of it — the build variant
+(`bringup` / `lowpower`) and the `.signed` suffix are not part of the version. The
+form says underneath the file picker what it recognized, and nothing is guessed for
+a name it does not recognize: the target stays on whatever is selected and the
+version field is left alone. The **Board** field then shows
+`HiveInside (nRF54LM20A)` **disabled** — there is nothing to choose, and the
+release is always stamped `nrf54lm20a`. The older
+`hiveinside_nrf54lm20a_1.0.0.bin` naming is detected the same way. The
 API still accepts an omitted board (legacy `board = NULL` releases), but the server
 refuses a release whose declared board disagrees with its filename. A HiveInside release now
 unambiguously means an nRF54 image, so no per-board matching is done — the latest

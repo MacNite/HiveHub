@@ -7,15 +7,46 @@ import { drawLineChart, drawSpectrumChart, seriesFrom, dailyMaxSeries, valueAt, 
 import { isSupported as pushSupported, isSubscribed as pushIsSubscribed, subscribe as pushSubscribe, unsubscribe as pushUnsubscribe } from "./push.js";
 
 // Pull the firmware version out of a build artifact's filename so the upload
-// form can pre-fill the Version field. rename_firmware.py names artifacts
-// "<prefix>_<board>_<version>.bin" (e.g. hivehub_esp32_0.21.0.bin,
-// hivehub_esp32-c6_0.9.2.bin), so the version is the trailing dotted token.
-// Requiring a dot means the board tokens (esp32 / c6) are never mistaken for a
-// version; returns "" when no version-looking token is present.
+// form can pre-fill the Version field. Two naming schemes are in play:
+//
+//   * rename_firmware.py (hub, counter) — "<prefix>_<board>_<version>.bin",
+//     e.g. hivehub_esp32_0.21.0.bin, hivetraffic_esp32-c6_0.3.1.bin: the version
+//     is the trailing dotted token, optionally with a "-rc1"-style suffix.
+//   * HiveInside's Zephyr build — "hiveinside-<board>-v<version>-<variant>.signed.bin",
+//     e.g. hiveinside-nrf54lm20a-v0.4.7-lowpower.signed.bin: the version sits in
+//     the middle, behind a "v", with the build variant and ".signed" after it.
+//
+// The v-stamped token is tried first because the trailing-token rule would drag
+// "-lowpower.signed" into the version on a HiveInside artifact. Requiring a dot
+// means the board tokens (esp32 / c6) are never mistaken for a version; returns
+// "" when no version-looking token is present.
 function versionFromFilename(name) {
   const base = (name || "").replace(/\.[^.]*$/, "");
+  const stamped = base.match(/[-_]v(\d+\.\d+(?:\.\d+)*)(?=[-_.]|$)/i);
+  if (stamped) return stamped[1];
   const m = base.match(/(\d+\.\d+(?:\.\d+)*(?:[-_][0-9A-Za-z.]+)?)$/);
   return m ? m[1] : "";
+}
+
+// Pick the upload target out of that same filename, so selecting a HiveInside or
+// HiveTraffic image does not leave Target on the default main unit — an upload
+// with the wrong target is rejected by the server (the filename's board token is
+// not valid for it), and worse, a mis-targeted release that IS accepted would be
+// offered to the wrong hardware. Keyed off the product token every build puts at
+// the front of its artifact name: hiveinside-…, hivetraffic_…, hivehub_… /
+// hivescale_…. Returns "" for an unrecognized name, which leaves whatever the
+// operator picked alone.
+const TARGET_FILENAME_HINTS = [
+  [/hiveinside/, "hiveinside"],
+  [/hivetraffic|beecounter/, "beecounter"],
+  [/hivehub|hivescale/, "hivescale"],
+];
+function targetFromFilename(name) {
+  const n = (name || "").toLowerCase();
+  for (const [pattern, target] of TARGET_FILENAME_HINTS) {
+    if (pattern.test(n)) return target;
+  }
+  return "";
 }
 
 // True when dotted version `a` is strictly newer than `b`, compared component by
@@ -1915,14 +1946,10 @@ function renderDevice(root, state) {
   // the valid values, shown only for that target.
   const fileInput = el("input", { type: "file", accept: ".bin", required: true });
   const versionInput = el("input", { type: "text", placeholder: "e.g. 0.21.0", required: true });
-  // Selecting/dropping a board-stamped .bin pre-fills the version from its
-  // filename (hivehub_esp32_0.21.0.bin → 0.21.0), so the operator rarely has to
-  // retype it. Only fills when we detect a version — an unrecognized name leaves
-  // whatever was typed intact rather than clearing it.
-  fileInput.addEventListener("change", () => {
-    const detected = versionFromFilename(fileInput.files[0] && fileInput.files[0].name);
-    if (detected) versionInput.value = detected;
-  });
+  // What the picked file was recognized as. The Target select changing on its
+  // own is easy to miss, and a silent auto-switch is worse than no auto-switch —
+  // so name what was filled in, and say so when nothing was recognized.
+  const filePicked = el("p", { class: "note", hidden: true });
   const targetSelect = el("select", { class: "full" },
     el("option", { value: "hivescale" }, "Main unit (HiveHub / HiveScale)"),
     el("option", { value: "hiveinside" }, "HiveInside"),
@@ -1956,7 +1983,7 @@ function renderDevice(root, state) {
     el("label", {}, el("span", {}, "Board "), boardTip), boardSelect);
   const BOARD_NOTES = {
     hivescale: "Main-unit firmware must state its board: pick one, or keep auto-detect when the file is named like hivehub_esp32_0.21.0.bin.",
-    hiveinside: "HiveInside ships only for the Nordic nRF54LM20A, so the board is fixed and cannot be changed — the release is always stamped nrf54lm20a (name the file like hiveinside_nrf54lm20a_1.0.0.bin). It is relayed to the sensor with “Relay to node”.",
+    hiveinside: "HiveInside ships only for the Nordic nRF54LM20A, so the board is fixed and cannot be changed — the release is always stamped nrf54lm20a. HiveInside’s build already names its artifact hiveinside-nrf54lm20a-v<version>-<variant>.signed.bin — upload that file as-is (the version-stamped copy of zephyr.signed.bin, not zephyr.signed.bin itself, so bring-up and low-power images stay apart) and this form fills in the target and version from its name. It is relayed to the sensor with “Relay to node”.",
     beecounter: "The HiveTraffic counter is an ESP32-C6, so the board is fixed. HiveTraffic’s build already names its artifact hivetraffic_esp32-c6_<version>.bin — upload that file as-is (it is the application-only image, not a merged factory image), then send it with “Relay to counter”.",
   };
   const syncBoardRow = () => {
@@ -1973,6 +2000,32 @@ function renderDevice(root, state) {
     setTipText(boardTip, BOARD_NOTES[targetSelect.value]);
   };
   targetSelect.addEventListener("change", syncBoardRow);
+  // Selecting/dropping a build artifact fills in Target and Version from its
+  // filename (hivehub_esp32_0.21.0.bin → main unit / 0.21.0;
+  // hiveinside-nrf54lm20a-v0.4.7-lowpower.signed.bin → HiveInside / 0.4.7), so
+  // the operator rarely has to touch either field. Each is filled only when it
+  // was actually detected — an unrecognized name leaves the current selection
+  // and whatever was typed intact rather than clearing them. Registered after
+  // syncBoardRow() exists because switching the target has to rebuild the Board
+  // row (the fixed nRF54 board for HiveInside, the ESP32 pair for the main unit).
+  fileInput.addEventListener("change", () => {
+    const name = (fileInput.files[0] || {}).name || "";
+    const version = versionFromFilename(name);
+    if (version) versionInput.value = version;
+    const target = targetFromFilename(name);
+    if (target && BOARDS_BY_TARGET[target]) {
+      targetSelect.value = target;
+      syncBoardRow();
+    }
+    const filled = [];
+    if (target) filled.push(`target “${targetSelect.selectedOptions[0].textContent}”`);
+    if (version) filled.push(`version ${version}`);
+    filePicked.hidden = !name;
+    filePicked.textContent = !name ? ""
+      : filled.length
+        ? `${name} — filled in ${filled.join(" and ")}.`
+        : `${name} — no target or version recognized in the name; set them below.`;
+  });
   const uploadBtn = el("button", { class: "btn", type: "submit" }, "Upload firmware");
 
   // Result slot under the upload form. After a successful main-unit upload we drop
@@ -2012,6 +2065,7 @@ function renderDevice(root, state) {
     "Uploading only registers a new firmware release for this target — it never installs anything on its own. For the main unit, use “Approve & flash” in the Firmware panel; it appears once the upload is newer than what the device runs, and the device flashes on its next check-in. For a sub-device, use the “Relay to …” button next to the node or counter you want to update.");
   const uploadForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Firmware .bin"), fileInput),
+    filePicked,
     el("div", { class: "form-row" }, el("label", {}, "Version"), versionInput),
     el("div", { class: "form-row" }, el("label", {}, "Target"), targetSelect),
     boardRow,
