@@ -96,7 +96,14 @@ const char* stateText(uint8_t state) {
 // Ask the device what it thinks happened. Returns false when STATUS could not
 // be read at all — which is itself the answer, because it means the link is
 // gone rather than the device having rejected anything.
-bool readStatus(uint8_t& state, uint8_t& err, uint32_t& received) {
+//
+// `driverErrno` is the optional seventh byte: HiveInside 0.4.7 and later append
+// the errno of the failed flash operation there, because the low-power image it
+// actually ships with has no console and so no other way to say *why* a slot
+// write failed. Older firmware — and HiveTraffic, which does not implement it —
+// return six bytes and leave it 0, which is also the "nothing recorded" value.
+bool readStatus(uint8_t& state, uint8_t& err, uint32_t& received,
+                int8_t& driverErrno) {
   if (!s_status || !s_status->canRead()) return false;
   if (!s_client || !s_client->isConnected()) return false;
   std::string s = s_status->readValue();
@@ -105,7 +112,15 @@ bool readStatus(uint8_t& state, uint8_t& err, uint32_t& received) {
   err = (uint8_t)s[5];
   received = ((uint32_t)(uint8_t)s[1]) | ((uint32_t)(uint8_t)s[2] << 8) |
              ((uint32_t)(uint8_t)s[3] << 16) | ((uint32_t)(uint8_t)s[4] << 24);
+  driverErrno = (s.size() >= 7) ? (int8_t)s[6] : 0;
   return true;
+}
+
+// " (errno -116)", or "" when the device recorded nothing. Kept as a suffix so
+// every message below reads the same with and without it.
+String errnoSuffix(int8_t driverErrno) {
+  if (driverErrno == 0) return String();
+  return String(" (errno ") + driverErrno + ")";
 }
 }  // namespace
 
@@ -252,16 +267,19 @@ bool write(const uint8_t* data, size_t len) {
 
       uint8_t state = 0, err = 0;
       uint32_t received = 0;
-      if (!readStatus(state, err, received)) {
+      int8_t driverErrno = 0;
+      if (!readStatus(state, err, received, driverErrno)) {
         Serial.printf("[%s] STATUS unreadable — link is down\n", tag());
         s_lastError = String("OTA DATA write failed after ") + s_sentTotal +
                       " bytes (BLE link lost)";
       } else if (state >= STATE_ERR_FIRST) {
         Serial.printf("[%s] device rejected the stream: state=0x%02X err=0x%02X "
-                      "received=%u (%s)\n", tag(), state, err,
-                      (unsigned)received, stateText(state));
+                      "received=%u (%s%s)\n", tag(), state, err,
+                      (unsigned)received, stateText(state),
+                      errnoSuffix(driverErrno).c_str());
         s_lastError = String(label()) + " rejected the stream after " +
-                      received + " bytes: " + stateText(state) + " (state=0x" +
+                      received + " bytes: " + stateText(state) +
+                      errnoSuffix(driverErrno) + " (state=0x" +
                       String(state, HEX) + ")";
       } else {
         // Link up, device not in an error state, write still refused. Nothing
@@ -299,19 +317,21 @@ bool finish() {
     if (s.size() >= 6) {
       uint8_t state = (uint8_t)s[0];
       uint8_t err   = (uint8_t)s[5];
+      int8_t driverErrno = (s.size() >= 7) ? (int8_t)s[6] : 0;
       if (state == STATE_DONE) {
         Serial.printf("[%s] device reports DONE — it will reboot into the new image\n",
                       tag());
         return true;
       }
       if (state >= STATE_ERR_FIRST) {
-        Serial.printf("[%s] device reported error state=0x%02X err=0x%02X (%s)\n",
-                      tag(), state, err, stateText(state));
+        Serial.printf("[%s] device reported error state=0x%02X err=0x%02X (%s%s)\n",
+                      tag(), state, err, stateText(state),
+                      errnoSuffix(driverErrno).c_str());
         // Name the actual code rather than offering "CRC/size mismatch?" as a
         // guess — the device already told us which of the six it was.
         s_lastError = String(label()) + " rejected image: " + stateText(state) +
-                      " (state=0x" + String(state, HEX) + " err=0x" +
-                      String(err, HEX) + ")";
+                      errnoSuffix(driverErrno) + " (state=0x" +
+                      String(state, HEX) + " err=0x" + String(err, HEX) + ")";
         return false;
       }
     }

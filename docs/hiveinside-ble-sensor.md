@@ -194,6 +194,13 @@ Where it stops, and what it says, maps to a cause:
   (CRC, size, flash write, wrong state) and the transfer never had a chance. The
   same distinction reaches the dashboard, so the row's reason is now the node's
   own verdict rather than "BLE link lost?" for all of them.
+* **`… flash write failed (errno -116)`** — the trailing errno is the node's own
+  `rc` from the failed flash operation, read from the seventh STATUS byte
+  (HiveInside 0.4.7+, 0.24.13+ on this side). It exists because the `lowpower`
+  HiveInside image has no console, so `state=0x12` was otherwise the entire
+  diagnosis available in the field — and six error codes cannot separate a slot
+  that is too small (`-EINVAL`) from a radio timeslot that never arrived
+  (`-ETIMEDOUT`). Older nodes send six bytes and no suffix appears.
 * **`[HEAP] *** CORRUPTION DETECTED at stage: … ***`** — the allocator's own
   structures are damaged. The named stage is the one that did it; everything
   after that point in the boot is unreliable, including any crash that follows.
