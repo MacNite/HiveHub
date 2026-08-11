@@ -12,9 +12,14 @@
 // image.
 //
 // HiveInside (nRF54 MCUboot) and HiveTraffic (ESP32-C6) deliberately expose the
-// SAME framing — BEGIN/DATA/END/ABORT plus a 6-byte STATUS — so one state
-// machine drives both. They differ only in UUIDs and in how the peer is
-// located, which is what Target below captures.
+// SAME framing — BEGIN/DATA/END/ABORT plus a STATUS of at least six bytes — so
+// one state machine drives both. They differ only in UUIDs and in how the peer
+// is located, which is what Target below captures.
+//
+// STATUS is read for its length, never assumed: the first six bytes are the
+// original contract and every device implements them, while HiveInside 0.4.7
+// and later append a seventh carrying the errno of the failed flash operation.
+// Read only what is there and treat a missing byte as "not recorded".
 //
 // Session lifecycle (see hivehub_network.cpp::relayFirmwareOverGatt):
 //   begin(target,mac,size,crc) → write(chunk)… → finish() → cleanup()
@@ -38,6 +43,7 @@ struct Target {
   const char* ctrl;             // WRITE: framed control (BEGIN/END/ABORT)
   const char* data;             // WRITE: payload stream
   const char* status;           // READ/NOTIFY: state(1) + received(4) + err(1)
+                                // [+ errno(1), HiveInside >= 0.4.7]
   uint32_t    connectTimeoutS;  // per connection attempt
   size_t      chunkMax;         // hard cap on a DATA write, before MTU clamping
   // Locate the peer with a short scan before connecting, to learn its address
