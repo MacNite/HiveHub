@@ -24,7 +24,8 @@ namespace beecnt {
 
 // One totals-only reading from a HiveTraffic counter, taken each upload cycle.
 // Field names mirror the HiveTraffic measurement JSON (docs/ble-mode.md in the
-// 2026-easy-bee-counter repo).
+// 2026-easy-bee-counter repo), normalized across wire revisions — see
+// bee_counter_wire.h, which owns the fw:2 / fw:3 branch and the decoding.
 struct Snapshot {
     bool     present          = false;  // device connected and parsed this cycle
     uint8_t  fw_version       = 0;      // wire-protocol revision ("fw")
@@ -36,12 +37,23 @@ struct Snapshot {
     // a String: Snapshot is used as a MAX_HIVES-sized stack array.
     char     version[16]      = {0};
     uint8_t  status_flags     = 0;
-    uint16_t uptime_s         = 0;
+    // 32-bit as of wire revision 3. A uint16_t here would re-impose the exact
+    // ceiling the counter was widened to escape: it clamped at 65535 s
+    // (18 h 12 min), so an always-on counter reported a constant and an
+    // unexpected reset was undetectable. A fw:2 counter still cannot report
+    // more than 65535, but that is now the device's limit, not ours.
+    uint32_t uptime_s         = 0;
     uint8_t  num_gates        = 0;
-    uint8_t  gates_healthy    = 0;
+    // MCP23017 port expanders on the counter answering its I2C bus, 0..3 — NOT
+    // gates, of which there are num_gates (24); each healthy expander covers
+    // eight. Called "gates_healthy" on the wire before revision 3, which is
+    // precisely the misreading the rename fixed. LIVE health, not a boot-time
+    // snapshot: it moves during a deployment as chips fail and recover.
+    uint8_t  mcps_healthy     = 0;
     uint32_t total_in         = 0;      // lifetime totals — never reset by us
     uint32_t total_out        = 0;
-    uint16_t glitch_count     = 0;
+    // 32-bit as of revision 3, saturating on the device rather than wrapping.
+    uint32_t glitch_count     = 0;
 };
 
 // Per-hive form for the hives[] array: writes a nested "bee_counter" object.

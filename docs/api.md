@@ -210,12 +210,21 @@ consecutive totals. For `N` in `1`, `2`:
 | Field | Type | Description |
 |---|---|---|
 | `bee_counter_N_ok` | boolean | Counter reached and parsed this cycle |
-| `bee_counter_N_protocol_version` | integer | Counter firmware revision (BLE `fw` field) |
+| `bee_counter_N_protocol_version` | integer | Counter **wire-format** revision (BLE `fw` field) — not its firmware version, which is `hives[].bee_counter.version` |
 | `bee_counter_N_status_flags` | integer | Status bitfield |
-| `bee_counter_N_uptime_s` | integer | Counter uptime in seconds |
-| `bee_counter_N_num_gates` / `_gates_healthy` | integer | Gate count and healthy-gate count |
-| `bee_counter_N_total_in` / `_total_out` | integer | Cumulative (lifetime) in/out counts |
-| `bee_counter_N_glitch_count` | integer | Diagnostics |
+| `bee_counter_N_uptime_s` | integer | Counter uptime in seconds. 32-bit as of wire revision 3; a `fw:2` counter clamps it at 65535 (18 h 12 min) |
+| `bee_counter_N_num_gates` | integer | Gates wired to the counter (24) |
+| `bee_counter_N_gates_healthy` | integer | **Legacy, wired-era only.** Despite the name this counted MCP23017 port expanders, 0..3 — never gates. BLE counters do not write this column; see below |
+| `bee_counter_N_total_in` / `_total_out` | integer | Cumulative (lifetime) in/out counts, saturating at 4294967295 |
+| `bee_counter_N_glitch_count` | integer | Diagnostics. 32-bit and saturating as of wire revision 3; a `fw:2` counter pins at 65535 |
+
+BLE counters report their expander health as `hives[].bee_counter.mcps_healthy`
+(0..3, **not** a count of working gates — each healthy expander covers eight of
+the 24). It was called `gates_healthy` before HiveTraffic wire revision 3, and
+readings stored before that change carry the old key in
+`hive_readings.raw_json` with the same meaning. The value is live health: it
+moves during a deployment as expanders fail and recover, so nothing may treat it
+as constant after boot.
 
 `bee_counter_N_interval_in` / `_interval_out` are also accepted and are fully
 live — the BLE path leaves them null on ingest and the read APIs backfill them

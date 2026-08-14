@@ -40,6 +40,16 @@ To update a counter:
    image — so it can be uploaded as-is.
 2. Upload it in the dashboard with target *HiveTraffic counter*, or `POST` it to
    the firmware upload endpoint with `target=beecounter`.
+
+   The `target` is what routes the release, and it is always explicit — the
+   backend never infers it from the filename. What the filename does control is
+   the **board**: `board_from_filename` reads `esp32-c6` out of it and
+   `resolve_release_board` rejects the upload if the declared board disagrees,
+   which is what keeps a cross-architecture image away from a counter. The
+   leading `hivetraffic` token is a convenience only: `targetFromFilename` in
+   the dashboard matches `/hivetraffic|beecounter/` and pre-selects the target
+   for you, so an image named with either prefix is targeted correctly and
+   neither is silently mis-filed.
 3. Press **Relay to counter** next to the hive, or call
    `POST /api/v1/devices/{id}/commands/update-beecounter?slot=N`.
 
@@ -97,8 +107,8 @@ All HiveTraffic devices share one service/characteristic (overridable via
 The characteristic returns a compact JSON document — **totals only**:
 
 ```json
-{ "fw":2, "ver":"0.1.0", "uptime_s":1234, "status":15, "num_gates":24,
-  "gates_healthy":3, "total_in":100, "total_out":95, "glitches":2 }
+{ "fw":3, "ver":"0.2.0", "uptime_s":1234, "status":15, "num_gates":24,
+  "mcps_healthy":3, "total_in":100, "total_out":95, "glitches":2 }
 ```
 
 `fw` is the wire-protocol revision; `ver` is the counter's own image version,
@@ -108,6 +118,44 @@ They move independently, and `ver` is absent on firmware that predates it.
 HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects.
 The wire format is totals-only by design: no latch/reset command exists over
 BLE, so a missed connection can never lose counts.
+
+### Two wire revisions, both supported
+
+`firmware/include/bee_counter_wire.h` reads `fw` **first** and branches on it.
+Both revisions parse, and both produce the same record:
+
+| | `fw:2` | `fw:3` |
+| --- | --- | --- |
+| Expander health field | `gates_healthy` | `mcps_healthy` |
+| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit |
+| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating |
+
+This is not politeness toward old firmware. **A counter keeps reporting `fw:2`
+until the OTA relay updates it, and the relay reads this very characteristic
+before it can update anything** — so a parser that understood only `fw:3` would
+strand exactly the devices that need updating. Conversely, HiveHub must ship its
+tolerant parser *before* any counter emitting `fw:3`, or every counter goes
+unreadable in the window between the two deployments.
+
+`mcps_healthy` counts MCP23017 **port expanders** answering on the counter's I2C
+bus — 0..3, while `num_gates` is 24; each healthy expander covers eight gates.
+It is not a count of working gates, which is exactly what the old name invited
+(a perfectly healthy counter reported `gates_healthy: 3` next to
+`num_gates: 24`). The value's meaning did not change in v3, only its name.
+
+It is also **live** health, not a boot-time snapshot: a chip that dies
+mid-deployment drops out of the count within a few polls and clears its status
+bit, and one that recovers is counted again. Nothing may treat it as fixed after
+boot.
+
+HiveHub normalizes both revisions onto the `mcps_healthy` key when it forwards
+the reading as `hives[].bee_counter`, so the server and stored history see one
+name regardless of what the counter emitted. Readings taken before this change
+carry `gates_healthy` in `hive_readings.raw_json` with the same meaning.
+
+The decoder is covered by `test-data/test_bee_counter_wire.cpp`, which parses a
+captured document of each revision and asserts they decode identically. It runs
+in CI on a plain host compiler — no ESP32 and no counter required.
 
 ## Intervals are differenced server-side
 
