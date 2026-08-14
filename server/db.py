@@ -128,28 +128,28 @@ def init_db():
                     bee_counter_1_ok                BOOLEAN,
                     bee_counter_1_protocol_version  INTEGER,
                     bee_counter_1_status_flags      INTEGER,
-                    bee_counter_1_uptime_s          INTEGER,
+                    bee_counter_1_uptime_s          BIGINT,
                     bee_counter_1_num_gates         INTEGER,
                     bee_counter_1_gates_healthy     INTEGER,
                     bee_counter_1_total_in          BIGINT,
                     bee_counter_1_total_out         BIGINT,
                     bee_counter_1_interval_in       BIGINT,
                     bee_counter_1_interval_out      BIGINT,
-                    bee_counter_1_glitch_count      INTEGER,
+                    bee_counter_1_glitch_count      BIGINT,
                     bee_counter_1_busy_retries      INTEGER,
                     bee_counter_1_read_attempts     INTEGER,
                     bee_counter_1_latch_succeeded   BOOLEAN,
                     bee_counter_2_ok                BOOLEAN,
                     bee_counter_2_protocol_version  INTEGER,
                     bee_counter_2_status_flags      INTEGER,
-                    bee_counter_2_uptime_s          INTEGER,
+                    bee_counter_2_uptime_s          BIGINT,
                     bee_counter_2_num_gates         INTEGER,
                     bee_counter_2_gates_healthy     INTEGER,
                     bee_counter_2_total_in          BIGINT,
                     bee_counter_2_total_out         BIGINT,
                     bee_counter_2_interval_in       BIGINT,
                     bee_counter_2_interval_out      BIGINT,
-                    bee_counter_2_glitch_count      INTEGER,
+                    bee_counter_2_glitch_count      BIGINT,
                     bee_counter_2_busy_retries      INTEGER,
                     bee_counter_2_read_attempts     INTEGER,
                     bee_counter_2_latch_succeeded   BOOLEAN,
@@ -228,31 +228,62 @@ def init_db():
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_ok                BOOLEAN;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_protocol_version  INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_status_flags      INTEGER;
-                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_uptime_s          INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_uptime_s          BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_num_gates         INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_gates_healthy     INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_total_in          BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_total_out         BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_interval_in       BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_interval_out      BIGINT;
-                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_glitch_count      INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_glitch_count      BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_busy_retries      INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_read_attempts     INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_1_latch_succeeded   BOOLEAN;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_ok                BOOLEAN;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_protocol_version  INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_status_flags      INTEGER;
-                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_uptime_s          INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_uptime_s          BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_num_gates         INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_gates_healthy     INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_total_in          BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_total_out         BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_interval_in       BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_interval_out      BIGINT;
-                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_glitch_count      INTEGER;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_glitch_count      BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_busy_retries      INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_read_attempts     INTEGER;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS bee_counter_2_latch_succeeded   BOOLEAN;
+
+                -- Widen the two counters HiveTraffic's wire revision 3 grew from
+                -- 16 to 32 bits (see migrations/024_bee_counter_wide_counters.sql).
+                -- ADD COLUMN IF NOT EXISTS above cannot do this: the columns
+                -- already exist on every deployment created before v3, as
+                -- INTEGER. Postgres INTEGER is SIGNED 32-bit and stops at
+                -- 2147483647, while the device can report up to 4294967295 —
+                -- and the glitch tally is designed to arrive at exactly that
+                -- when it saturates, which would raise "integer out of range"
+                -- and fail the entire measurement, not just that field.
+                --
+                -- Guarded on the current type rather than run unconditionally:
+                -- ALTER COLUMN ... TYPE rewrites the table, and init_db() runs
+                -- on every process start.
+                -- All four were created together and are widened together, so
+                -- one of them is a sound guard for the set.
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'measurements'
+                          AND column_name = 'bee_counter_1_uptime_s'
+                          AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE measurements
+                            ALTER COLUMN bee_counter_1_uptime_s     TYPE BIGINT,
+                            ALTER COLUMN bee_counter_1_glitch_count TYPE BIGINT,
+                            ALTER COLUMN bee_counter_2_uptime_s     TYPE BIGINT,
+                            ALTER COLUMN bee_counter_2_glitch_count TYPE BIGINT;
+                    END IF;
+                END $$;
 
                 -- accelerometer (per-hive vibration) columns (idempotent)
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS accel_1_ok                BOOLEAN;

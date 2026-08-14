@@ -70,6 +70,16 @@ jobs:
           g++ -std=gnu++17 -Wall -Wextra -Werror -I firmware/include \
               -o /tmp/test_beehive_decode test-data/test_beehive_decode.cpp
           /tmp/test_beehive_decode
+      # The HiveTraffic measurement decoder is a two-repo wire contract: it has
+      # to keep reading fw:2 documents from counters the OTA relay has not
+      # reached yet as well as the fw:3 ones current firmware emits. Both
+      # captured documents are asserted here.
+      - name: Build and run bee counter wire tests
+        run: |
+          set -e
+          g++ -std=gnu++17 -Wall -Wextra -Werror -I firmware/include \
+              -o /tmp/test_bee_counter_wire test-data/test_bee_counter_wire.cpp
+          /tmp/test_bee_counter_wire
 
   server-tests:
     runs-on: ubuntu-latest

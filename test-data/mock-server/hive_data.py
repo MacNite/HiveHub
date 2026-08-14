@@ -552,7 +552,11 @@ def generate_measurements(interval_minutes: int = 30) -> list[dict]:
                 "bee_counter_1_status_flags": 0,
                 "bee_counter_1_uptime_s": int((ts - CLAIMED_AT).total_seconds()),
                 "bee_counter_1_num_gates": 24,
-                "bee_counter_1_gates_healthy": 24,
+                # 3, not 24: this column counts MCP23017 port expanders, never
+                # gates. The name is the wired era's and is kept for the legacy
+                # flat schema; HiveTraffic renamed it mcps_healthy in wire
+                # revision 3 for exactly the reason this mock had it wrong.
+                "bee_counter_1_gates_healthy": 3,
                 "bee_counter_1_total_in": total_in_a,
                 "bee_counter_1_total_out": total_out_a,
                 "bee_counter_1_interval_in": interval_in_a,
@@ -563,7 +567,7 @@ def generate_measurements(interval_minutes: int = 30) -> list[dict]:
                 "bee_counter_2_status_flags": 0,
                 "bee_counter_2_uptime_s": int((ts - CLAIMED_AT).total_seconds()),
                 "bee_counter_2_num_gates": 24,
-                "bee_counter_2_gates_healthy": 24,
+                "bee_counter_2_gates_healthy": 3,   # expanders, not gates
                 "bee_counter_2_total_in": total_in_b,
                 "bee_counter_2_total_out": total_out_b,
                 "bee_counter_2_interval_in": interval_in_b,

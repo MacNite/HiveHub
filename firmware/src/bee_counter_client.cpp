@@ -7,6 +7,7 @@
 #include <string.h>       // strlcpy for the counter's reported version
 #include <NimBLEDevice.h>
 #include "ble_stack.h"
+#include "bee_counter_wire.h"   // the fw:2 / fw:3 tolerant document decoder
 #include "hive_config.h"
 #endif
 
@@ -31,7 +32,13 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
     bc["status_flags"]     = snap.status_flags;
     bc["uptime_s"]         = snap.uptime_s;
     bc["num_gates"]        = snap.num_gates;
-    bc["gates_healthy"]    = snap.gates_healthy;
+    // Always emitted under the revision-3 name, whichever name the counter used
+    // on the wire: the value has the same meaning in both revisions (MCP23017
+    // expanders answering, 0..3), and normalizing here means the server and
+    // anything reading history sees one key rather than having to branch on
+    // protocol_version too. Readings taken before this change carry the old
+    // "gates_healthy" key in hive_readings.raw_json, with the same meaning.
+    bc["mcps_healthy"]     = snap.mcps_healthy;
     bc["total_in"]         = snap.total_in;
     bc["total_out"]        = snap.total_out;
     bc["glitch_count"]     = snap.glitch_count;
@@ -45,26 +52,31 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
 namespace {
 
 // Parse the HiveTraffic measurement JSON (see 2026-easy-bee-counter
-// docs/ble-mode.md) into a Snapshot. Returns false on malformed JSON. Fields
-// absent in the document keep their Snapshot defaults.
+// docs/ble-mode.md) into a Snapshot. Returns false on malformed JSON or a
+// document carrying no "fw". Fields absent in the document keep their Snapshot
+// defaults.
+//
+// The decoding — including the fw:2 / fw:3 branch and the saturating integer
+// reads — lives in bee_counter_wire.h so it can be tested on a host compiler
+// against captured documents of both revisions
+// (test-data/test_bee_counter_wire.cpp). This wrapper is only the copy into
+// Snapshot.
 bool parseTrafficJson(const char* json, size_t len, Snapshot& out) {
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, json, len);
-    if (err) {
-        Serial.printf("[TRAFFIC] JSON parse failed: %s\n", err.c_str());
+    wire::Measurement m;
+    if (!wire::parseMeasurement(json, len, m)) {
+        Serial.println("[TRAFFIC] measurement document rejected (malformed or not a measurement)");
         return false;
     }
     out.present       = true;
-    out.fw_version    = doc["fw"]            | 0;
-    const char* ver   = doc["ver"]           | "";
-    strlcpy(out.version, ver, sizeof(out.version));
-    out.status_flags  = doc["status"]        | 0;
-    out.uptime_s      = doc["uptime_s"]      | 0;
-    out.num_gates     = doc["num_gates"]     | 0;
-    out.gates_healthy = doc["gates_healthy"] | 0;
-    out.total_in      = doc["total_in"]      | 0u;
-    out.total_out     = doc["total_out"]     | 0u;
-    out.glitch_count  = doc["glitches"]      | 0;
+    out.fw_version    = m.protocol_version;
+    strlcpy(out.version, m.version, sizeof(out.version));
+    out.status_flags  = m.status_flags;
+    out.uptime_s      = m.uptime_s;
+    out.num_gates     = m.num_gates;
+    out.mcps_healthy  = m.mcps_healthy;
+    out.total_in      = m.total_in;
+    out.total_out     = m.total_out;
+    out.glitch_count  = m.glitch_count;
     return true;
 }
 
@@ -107,12 +119,19 @@ bool readTrafficSlot(const String& mac, Snapshot& out) {
             } else {
                 ok = parseTrafficJson(v.c_str(), v.size(), out);
                 if (ok) {
-                    Serial.printf("[TRAFFIC] %s: fw=%s in=%lu out=%lu uptime=%us status=0x%02X\n",
+                    // The wire revision is logged too: a counter still on fw=2
+                    // is one the OTA relay has not reached yet, and that is the
+                    // difference between "old firmware" and "broken link".
+                    Serial.printf("[TRAFFIC] %s: fw=%s wire=v%u in=%lu out=%lu "
+                                  "uptime=%lus mcps=%u/3 status=0x%02X\n",
                                   mac.c_str(),
                                   out.version[0] ? out.version : "?",
+                                  (unsigned)out.fw_version,
                                   (unsigned long)out.total_in,
                                   (unsigned long)out.total_out,
-                                  out.uptime_s, out.status_flags);
+                                  (unsigned long)out.uptime_s,
+                                  (unsigned)out.mcps_healthy,
+                                  out.status_flags);
                 }
             }
         }

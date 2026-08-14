@@ -86,6 +86,17 @@ class HiveBeeCounterIn(BaseModel):
     total_out: Optional[int] = None
     interval_in: Optional[int] = None
     interval_out: Optional[int] = None
+    # The diagnostic fields the counter also reports — protocol_version,
+    # status_flags, uptime_s, num_gates, mcps_healthy, glitch_count — are
+    # deliberately NOT declared. extra="allow" carries them through into
+    # hive_readings.raw_json, which is where they belong: nothing charts or
+    # alerts on them, so a column each would be dead weight.
+    #
+    # mcps_healthy counts MCP23017 port expanders (0..3), NOT gates — each
+    # healthy expander covers eight of the counter's 24. HiveHub normalizes it
+    # to this key from either wire revision; rows stored before HiveTraffic wire
+    # revision 3 carry it as `gates_healthy`, with the same meaning under a name
+    # that invited exactly the wrong reading.
 
 
 class HiveHeartIn(BaseModel):
@@ -243,6 +254,13 @@ class MeasurementIn(BaseModel):
     # rather than stored. The measurements columns are deliberately left in
     # place: they hold real readings from the wired era, and the read path still
     # returns them, so no history is lost.
+    #
+    # NOTE on `_gates_healthy` below: these are the WIRED era's columns and hold
+    # real readings taken under that name. Despite it, the field always counted
+    # MCP23017 port expanders (0..3), never gates. BLE counters report the same
+    # value as hives[].bee_counter.mcps_healthy and never populate these, so the
+    # columns are frozen rather than renamed — repurposing them would make old
+    # and new rows silently incomparable.
     bee_counter_1_ok:                Optional[bool] = None
     bee_counter_1_protocol_version:  Optional[int]  = None
     bee_counter_1_status_flags:      Optional[int]  = None
