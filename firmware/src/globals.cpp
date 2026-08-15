@@ -3,7 +3,7 @@
 
 #include <esp_system.h>
 
-const char* const FIRMWARE_VERSION = "0.24.14";
+const char* const FIRMWARE_VERSION = "0.24.16";
 
 #if ENABLE_HX711
 HX711 scale1;
