@@ -1871,9 +1871,17 @@ function renderDevice(root, state) {
       el("div", { class: "rows" },
         ...nodes.map((d) => {
           const relay = relayOf(d.n);
-          const cell = el("span", { class: "v fw-node-v" },
-            [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "),
-            flag(d.fw), relayBadge(relay));
+          // The running version gets its own element rather than sitting in the
+          // cell as a bare text run: next to a wide relay button a text run is
+          // squeezed to its smallest break point, which on a phone left the
+          // HiveTraffic row reading "v0." — the one thing in the row that has
+          // to stay readable. See .fw-node-ver / .fw-node-meta in style.css.
+          const version = el("span", { class: "fw-node-ver" },
+            [d.fw ? `v${d.fw}` : DASH, d.board].filter(Boolean).join(" · "));
+          // Release flag, relay status and the relay button travel as one group
+          // so they break onto a line of their own under the version instead of
+          // stealing room from it.
+          const meta = [flag(d.fw), relayBadge(relay)];
           if (relayable(d.fw)) {
             const busy = relayInFlight(relay);
             const relayBtn = el("button", {
@@ -1882,8 +1890,10 @@ function renderDevice(root, state) {
             }, cfg.buttonLabel);
             relayBtn.disabled = busy;
             relayBtn.addEventListener("click", () => startRelay(relayBtn, d));
-            cell.append(relayBtn);
+            meta.push(relayBtn);
           }
+          const cell = el("span", { class: "v fw-node-v" }, version,
+            meta.some(Boolean) ? el("span", { class: "fw-node-meta" }, ...meta) : null);
           return el("div", { class: "row" }, el("span", { class: "k" }, d.label), cell);
         })),
       // Spell the failure out in full. The badge's tooltip is easy to miss,
