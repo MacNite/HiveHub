@@ -28,7 +28,23 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
     // empty so the server can tell "counter too old to report a version" from
     // "counter reported an empty string" — the OTA version gate treats an
     // unknown version as "never block", which is only correct for the former.
-    if (snap.version[0]) bc["version"] = snap.version;
+    //
+    // Wrapped in String() to force a COPY into the document. ArduinoJson stores
+    // a const char* by pointer and duplicates only String / char* / Flash
+    // strings, and Snapshot::version is a char[] — so the plain assignment
+    // linked the document to a buffer belonging to buildMeasurementDoc()'s
+    // `beeSnaps` stack array, which is destroyed when that function returns.
+    // The document is serialized later, from finalizeMeasurementJson() and with
+    // initSdCard() in between (see runUploadCycle in main.cpp), so what got
+    // uploaded was whatever the reclaimed frame happened to hold: "0.1.1" came
+    // out truncated ("0.", "0.1", occasionally worse). That is invisible on the
+    // wire but poisons the OTA gate — server/firmware.py::parse_version reads
+    // "0." as 0.0, so the counter looked ancient no matter how often it was
+    // updated and HiveHub re-relayed the same image every cycle, each relay
+    // costing the counter minutes of not counting bees. Every other field
+    // written here is a number, copied by value, which is why only the version
+    // was affected.
+    if (snap.version[0]) bc["version"] = String(snap.version);
     bc["status_flags"]     = snap.status_flags;
     bc["uptime_s"]         = snap.uptime_s;
     bc["num_gates"]        = snap.num_gates;
