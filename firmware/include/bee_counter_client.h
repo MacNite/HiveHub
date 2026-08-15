@@ -35,6 +35,11 @@ struct Snapshot {
     // is what the backend gates an OTA relay on and what confirms, after the
     // counter reboots, that the update actually took. Fixed buffer rather than
     // a String: Snapshot is used as a MAX_HIVES-sized stack array.
+    //
+    // Because it is a char[] and the array is a stack local, anything putting it
+    // into a JsonDocument must copy it (writeSnapshotToHive wraps it in
+    // String()): ArduinoJson links a const char* by pointer, and the document
+    // outlives this struct.
     char     version[16]      = {0};
     uint8_t  status_flags     = 0;
     // 32-bit as of wire revision 3. A uint16_t here would re-impose the exact
