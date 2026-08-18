@@ -1641,8 +1641,9 @@ function renderDevice(root, state) {
       el("option", { value: v, selected: cfg.tempco_source === v ? true : null }, v)));
 
   // Fit tool, scoped to the selected scale: it regresses stored weight against
-  // temperature and writes the coefficient + reference temp straight into the
-  // fields above (apply:false) so they can be reviewed before Save.
+  // temperature and writes the coefficient into the field above (apply:false) so
+  // it can be reviewed before Save. It deliberately leaves the reference
+  // temperature alone — see the note it prints.
   const lookbackInput = el("input", { type: "number", value: "14", min: "1", max: "90" });
   const fitBtn = el("button", { class: "btn ghost", type: "button" }, "Fit coefficient from data");
   const fitOut = el("p", { class: "note" });
@@ -1656,21 +1657,21 @@ function renderDevice(root, state) {
         ? cfgInputs[`scale${n}_tempco_kg_per_c`]
         : (hiveScaleInputs.get(n) || {}).tempco_kg_per_c;
       if (coeff) coeff.input.value = String(r.coeff_kg_per_c);
-      // The reference is the mean temperature of the fitted window; two decimals
-      // is far finer than the correction can resolve.
-      const ref = Math.round(r.ref_temp_c * 100) / 100;
-      if (cfgInputs.tempco_ref_temp_c) cfgInputs.tempco_ref_temp_c.input.value = String(ref);
       tcEnabled.checked = true;
       if (r.temp_source) tcSource.value = r.temp_source;
       scaleSelect.value = String(n); showScale();
-      // Say what the reference is: the window's mean temperature, so every refit
-      // over a different window returns a slightly different one — which only
-      // offsets the compensated series, never its shape.
+      // The reference temperature is the user's to set: it is the temperature at
+      // which this scale reads true — the one it was tared and spanned at — which
+      // no regression can recover. Report the window's mean instead of writing it.
+      const windowMean = fmt(r.ref_temp_c, 2);
+      const refNow = cfgInputs.tempco_ref_temp_c
+        ? cfgInputs.tempco_ref_temp_c.input.value.trim() : "";
       fitOut.textContent =
-        `Filled Scale ${n}: coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(ref, 2)} °C, ` +
-        `R² ${fmt(r.r_squared, 3)} — review and Save. The reference is the mean temperature of the ` +
-        `fitted window, so a later fit over a different window lands slightly elsewhere; that only ` +
-        `offsets the compensated weight, it does not change its shape.` +
+        `Filled Scale ${n}: coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, R² ${fmt(r.r_squared, 3)} ` +
+        `over ${r.n} readings from ${fmt(r.temp_min_c, 1)}–${fmt(r.temp_max_c, 1)} °C — review and Save. ` +
+        `Reference temperature left${refNow ? ` at ${refNow} °C` : ""}: that is the temperature your ` +
+        `scale reads true at — the one it was tared and spanned at — which the fit cannot know. ` +
+        `(This window averaged ${windowMean} °C.)` +
         (Number(r.r_squared) < 0.5
           ? " R² below 0.5 — temperature explains little of this drift here. Fit over a stretch with a constant load and a wide day/night swing."
           : "");
@@ -1695,6 +1696,10 @@ function renderDevice(root, state) {
         el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
         fieldRow("Tempco source", tcSource),
         fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c")),
+        el("p", { class: "note" },
+          "The temperature at which this scale reads true — the one it was tared and " +
+          "spanned at. The correction is zero there and grows as the temperature moves " +
+          "away from it, so fitting a coefficient never changes it."),
         el("div", { class: "fit-row" },
           fieldRow("Fit lookback (days)", lookbackInput),
           el("div", { class: "form-actions" }, fitBtn)),

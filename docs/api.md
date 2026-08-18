@@ -788,7 +788,8 @@ same smoothing applied at read time). A plain fit needs
   "lookback_days": 3,
   "temp_source": "ambient",
   "calibration_mode_only": false,
-  "apply": true
+  "apply": true,
+  "set_ref_temp": false
 }
 ```
 
@@ -796,10 +797,16 @@ same smoothing applied at read time). A plain fit needs
 table's weight columns, hives 3+ from their `hive_readings` rows.
 
 Returns the fit (`coeff_kg_per_c`, `ref_temp_c`, `r_squared`, sample count and
-temperature span). When `apply` is true and the fit succeeds, the coefficient,
-reference temperature and source are written to the config and compensation is
-enabled — into `scale{1,2}_tempco_kg_per_c` for hives 1–2, and into that hive's
-`hive_scales` entry for hives 3+.
+temperature span). When `apply` is true and the fit succeeds, the coefficient and
+source are written to the config and compensation is enabled — into
+`scale{1,2}_tempco_kg_per_c` for hives 1–2, and into that hive's `hive_scales`
+entry for hives 3+.
+
+`tempco_ref_temp_c` is **not** touched unless `set_ref_temp` is true. The
+reference is the temperature at which the scale reads true (the one it was tared
+and spanned at), which a regression cannot recover; the returned `ref_temp_c` is
+just the window's mean temperature, offered as a fallback when the calibration
+temperature is unknown.
 
 ### `GET /api/v1/app/devices/{device_id}/measurements`
 
