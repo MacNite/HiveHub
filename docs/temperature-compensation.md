@@ -44,8 +44,11 @@ compensated_kg = raw_kg - coeff_kg_per_c * (ema_temp_c - ref_temp_c)
   means the scale reads heavier as it warms; the term is subtracted to remove it.
   Expressed in kg/°C (not ppm/°C of span) so it applies directly to the stored
   kilogram value.
-- `ref_temp_c` — the temperature at which the correction is zero, i.e. the
-  temperature the compensated reading is normalized to.
+- `ref_temp_c` — the temperature at which the correction is zero: **the
+  temperature at which the scale reads true**, i.e. the one it was tared and
+  spanned at. Away from it the correction grows linearly. It is a property of how
+  the scale was calibrated, not of the data, so nothing derives it for you — set
+  it from your calibration.
 
 ### Temperature smoothing (EMA)
 
@@ -80,7 +83,7 @@ config endpoints):
 |---|---|---|
 | `tempco_enabled` | `false` | Master switch. Until set, compensation is a no-op. |
 | `tempco_source` | `ambient` | Temperature channel: `ambient`, `hive_1`, or `hive_2`. |
-| `tempco_ref_temp_c` | `20.0` | Reference temperature (°C). |
+| `tempco_ref_temp_c` | `20.0` | Reference temperature (°C) — where the scale reads true (its tare/span temperature). |
 | `scale1_tempco_kg_per_c` | `0.0` | Scale 1 coefficient (kg/°C). |
 | `scale2_tempco_kg_per_c` | `0.0` | Scale 2 coefficient (kg/°C). |
 | `hive_scales[].tempco_kg_per_c` | `0.0` | Coefficient for hives 3–18 (kg/°C), per hive. |
@@ -149,16 +152,19 @@ drift, then fit:
    — and returns:
 
    - `coeff_kg_per_c` — the fitted slope;
-   - `ref_temp_c` — the mean temperature of the window (the natural reference);
+   - `ref_temp_c` — the mean temperature of the window, offered for information
+     (it is the point the fitted line passes through). It is **not** written to
+     the config unless you ask for it with `set_ref_temp: true` — see below;
    - `r_squared` — goodness of fit in `[0, 1]`. **Low values mean temperature
      does not explain the drift well** — treat the coefficient with suspicion and
      check the load really was constant;
    - `n`, `temp_min_c`, `temp_max_c` — sample count and the temperature span
      actually covered. A fit over a narrow span extrapolates poorly.
 
-   With `"apply": true` and a successful fit, the coefficient, reference
-   temperature and source are written to the config and `tempco_enabled` is set.
-   With `"apply": false` you get the numbers back without changing anything.
+   With `"apply": true` and a successful fit, the coefficient and source are
+   written to the config and `tempco_enabled` is set; `tempco_ref_temp_c` is left
+   as configured unless `"set_ref_temp": true` is also sent. With
+   `"apply": false` you get the numbers back without changing anything.
 
 3. Verify: pull recent measurements and confirm the daily sawtooth in
    `scale_*_weight_kg_compensated` is reduced versus the raw series.
@@ -167,22 +173,28 @@ Repeat per hive (`"scale"` is a hive index, 1–18; hives 1–2 are fitted from 
 measurement columns, hives 3+ from their `hive_readings` rows). Coefficients are
 independent because the cells differ.
 
-### Why the reference temperature moves between fits
+### Choosing the reference temperature
 
-`ref_temp_c` is not a property of the load cell — it is simply the **mean
-temperature of the window that was fitted** (of the EMA-smoothed series, so the
-warm-up at the start of the window pulls it slightly too). Two consequences:
+The fit derives the **coefficient**; the **reference** is yours to set, and the
+two are independent — the slope is the slope no matter which point you anchor it
+to.
 
-- Refitting later returns a slightly different reference, because the window is
-  rolling (`start_at`/`end_at` default to the last `lookback_days` ending now) and
-  covers different weather. Changing `lookback_days` moves it for the same reason.
-  Nothing about enabling compensation causes this: the regression always reads the
-  **raw** `scale_*_weight_kg` column, so a compensated device fits exactly as an
-  uncompensated one does.
-- A different reference only **offsets** the compensated series, by
-  `coeff_kg_per_c × Δref` — with a typical few-grams-per-°C coefficient, a degree
-  of reference shift is a few grams. The shape of the curve, and therefore every
-  weight *change* read off it (daily income, consumption, alerts), is untouched.
+Set the reference to the temperature at which the scale was **tared and spanned**.
+That is where the raw reading is trusted, so anchoring there is what makes the
+compensated weight agree with your physical calibration at every temperature. If
+you calibrated at 25 °C, the reference is 25 °C.
 
-So a reference that wanders by a fraction of a degree between fits is expected and
-harmless. What matters is `r_squared` and the temperature span the fit covered.
+The fit reports `ref_temp_c` — the mean temperature of the window it looked at —
+because that is the point the fitted line passes through, and it is a reasonable
+fallback when the calibration temperature was never recorded. It is offered for
+information only: neither the dashboard's *Fit coefficient from data* button nor
+`apply: true` overwrites your configured reference (pass `set_ref_temp: true` to
+the fit endpoint if you deliberately want the window mean stored). Earlier
+versions did overwrite it, which is why a reference set from a real calibration
+could turn into a fraction-of-a-degree-different window average.
+
+Getting the reference wrong is not fatal: it **offsets** the compensated series
+by `coeff_kg_per_c × Δref` and nothing else — with a few-grams-per-°C
+coefficient, a degree of error is a few grams. The shape of the curve, and every
+weight *change* read off it (daily income, consumption, alerts), is unaffected.
+Absolute weight is what suffers, so it is still worth getting right.

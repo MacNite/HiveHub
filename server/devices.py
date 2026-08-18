@@ -298,7 +298,8 @@ def run_temp_compensation_fit(device_id: str, body: "TempCoefficientFitIn") -> d
 
     Shared by the HivePal app endpoint and the local dashboard endpoint; callers
     are responsible for any authorization. See the app endpoint docstring above
-    for the regression details.
+    for the regression details, and the apply branch below for why the reference
+    temperature is not written unless it is explicitly asked for.
     """
     cfg = fetch_device_config(device_id)
     source = body.temp_source or cfg.tempco_source
@@ -356,11 +357,17 @@ def run_temp_compensation_fit(device_id: str, body: "TempCoefficientFitIn") -> d
     )
 
     if body.apply and fit["ok"]:
-        shared = dict(
-            tempco_enabled=True,
-            tempco_source=source,
-            tempco_ref_temp_c=fit["ref_temp_c"],
-        )
+        # The reference temperature is deliberately NOT overwritten by default.
+        # It is the temperature at which the raw reading is trusted — the one the
+        # scale was tared/spanned at — which no regression can recover from the
+        # data. fit["ref_temp_c"] is only the mean temperature of the window (the
+        # point the fitted line passes through), so writing it would silently
+        # replace a value the beekeeper set from their actual calibration with an
+        # artefact of whichever days the fit happened to cover. Callers that do
+        # want the window mean stored can ask for it with set_ref_temp.
+        shared = dict(tempco_enabled=True, tempco_source=source)
+        if body.set_ref_temp:
+            shared["tempco_ref_temp_c"] = fit["ref_temp_c"]
         if body.scale <= 2:
             coeff_field = f"scale{body.scale}_tempco_kg_per_c"
             patch = DeviceConfigUpdate(**shared, **{coeff_field: fit["coeff_kg_per_c"]})

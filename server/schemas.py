@@ -727,9 +727,14 @@ class TempCoefficientFitIn(BaseModel):
     temp_source: Optional[Literal["ambient", "hive_1", "hive_2"]] = None
     # Only consider rows captured in calibration mode (stable, known load).
     calibration_mode_only: bool = False
-    # Persist the fitted coefficient (and ref temp / source) to the device config
-    # and enable compensation. When False, only the fit result is returned.
+    # Persist the fitted coefficient (and source) to the device config and enable
+    # compensation. When False, only the fit result is returned.
     apply: bool = False
+    # Also overwrite tempco_ref_temp_c with the fitted window's mean temperature.
+    # Off by default: the reference is the temperature at which the scale reads
+    # true (the one it was tared/spanned at), which the fit cannot know — the
+    # window mean is returned as ``ref_temp_c`` for information either way.
+    set_ref_temp: bool = False
 
 
 # ── Published charts ("Publish data") ────────────────────────────────────────

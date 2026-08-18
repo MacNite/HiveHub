@@ -382,10 +382,13 @@ def fit_temp_compensation_from_app(
     channel over the requested window (see server/tempcomp.fit_temp_coefficient
     and ema_temperatures) — the same smoothing read-time compensation applies, so
     the coefficient is fitted in the regime it is used in — and returns the fit.
-    With ``apply=true`` the coefficient, reference temperature and
-    temperature source are written to the device config and compensation is
-    enabled — applying ``apply`` requires owner/admin, a plain fit needs only
-    viewer access.
+    With ``apply=true`` the coefficient and temperature source are written to the
+    device config and compensation is enabled — applying ``apply`` requires
+    owner/admin, a plain fit needs only viewer access. The reference temperature
+    is left alone unless ``set_ref_temp=true``: it means "the temperature at which
+    this scale reads true", i.e. the one it was tared/spanned at, which a
+    regression cannot recover. The returned ``ref_temp_c`` is the window's mean
+    temperature, offered for information.
     """
     role = ["owner", "admin"] if body.apply else ["owner", "admin", "viewer"]
     require_device_role(user_id, device_id, role)
