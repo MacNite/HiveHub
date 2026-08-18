@@ -266,16 +266,16 @@ def _hive_sensors(n: int):
         # battery/signal) is published separately, per physical device, via
         # _hive_subdevices — see _HIVE_SUBDEVICES.
     ]
-    # Temperature-compensated weight. The backend's compensation model carries a
-    # coefficient only for scales 1 and 2 (scale{1,2}_tempco_kg_per_c), so the
-    # compensated entity is only meaningful for those two hives; for the rest the
-    # raw weight above is the authoritative value.
-    if n <= 2:
-        sensors.insert(
-            1,
-            (f"scale_{n}_weight_kg_compensated", f"Hive {n} weight (temp-compensated)",
-             "kg", "weight", "measurement", "mdi:scale-balance"),
-        )
+    # Temperature-compensated weight. Every hive can carry a coefficient (hives
+    # 1–2 in the scale{1,2}_tempco_kg_per_c columns, the rest in the per-hive
+    # calibration map), so the entity is offered for all of them; it simply stays
+    # unavailable while that hive has no coefficient, since the payload then omits
+    # the key and the raw weight above is the authoritative value.
+    sensors.insert(
+        1,
+        (f"scale_{n}_weight_kg_compensated", f"Hive {n} weight (temp-compensated)",
+         "kg", "weight", "measurement", "mdi:scale-balance"),
+    )
     return sensors
 
 
@@ -345,17 +345,17 @@ def _present_hive_indices(payload: dict) -> set[int]:
 def _apply_tempco(payload: dict, tempco: tuple) -> None:
     """Add temperature-compensated weights to an already-flattened payload.
 
-    ``tempco`` is ``(source, ref_temp_c, scale1_coeff, scale2_coeff)`` as returned
-    by the backend's ``load_tempco_configs`` (only present when the device has
+    ``tempco`` is ``(source, ref_temp_c, {hive_index: coeff})`` as returned by the
+    backend's ``load_tempco_configs`` (only present when the device has
     compensation enabled with a non-zero coefficient). Mirrors the read-path
     ``attach_temperature_compensation`` but for one live reading: there is no
     history here, so the *instantaneous* temperature is used (the DB/read path
-    keeps the EMA-smoothed version for charts). The coefficient model only covers
-    scales 1 and 2, so only those two compensated keys are emitted.
+    keeps the EMA-smoothed version for charts). Every hive carrying a coefficient
+    gets a compensated key; the rest keep only their raw weight.
     """
-    source, ref_temp, c1, c2 = tempco
+    source, ref_temp, coeffs = tempco
     temp = payload.get(TEMP_SOURCE_FIELD.get(source, "ambient_temp_c"))
-    for n, coeff in ((1, c1), (2, c2)):
+    for n, coeff in coeffs.items():
         w = payload.get(f"scale_{n}_weight_kg")
         if w is None:
             continue
@@ -523,7 +523,8 @@ class MqttPublisher:
         """Publish one measurement. Never raises — failures are logged, not propagated.
 
         ``tempco`` (optional) is the device's temperature-compensation config; when
-        given, ``scale_{1,2}_weight_kg_compensated`` are added to the payload.
+        given, ``scale_{n}_weight_kg_compensated`` is added to the payload for
+        every hive that has a coefficient.
         """
         client = self._client
         if not client:
@@ -537,7 +538,7 @@ class MqttPublisher:
             # Normalise the two firmware battery field names into one HA-friendly key.
             if payload.get("battery_voltage_v") is None and payload.get("battery_voltage") is not None:
                 payload["battery_voltage_v"] = payload["battery_voltage"]
-            # Add temperature-compensated weights (scales 1/2) for the live feed.
+            # Add temperature-compensated weights (per hive) for the live feed.
             if tempco is not None:
                 _apply_tempco(payload, tempco)
 

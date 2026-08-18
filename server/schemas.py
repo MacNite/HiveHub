@@ -447,6 +447,11 @@ class HiveScaleCalibration(BaseModel):
     scale: int = Field(0, ge=0)
     offset: int = 0
     factor: float = -7050.0
+    # Load-cell temperature coefficient for this hive, kg/°C (see tempco_* on
+    # DeviceConfig for the shared enable switch, source and reference). Hives 1–2
+    # keep using scale{1,2}_tempco_kg_per_c; this covers hives 3..MAX_HIVES, which
+    # have no dedicated columns.
+    tempco_kg_per_c: float = 0.0
 
 
 class HiveScaleCalibrationIn(BaseModel):
@@ -454,6 +459,7 @@ class HiveScaleCalibrationIn(BaseModel):
     scale: int = Field(0, ge=0)
     offset: Optional[int] = None
     factor: Optional[float] = None
+    tempco_kg_per_c: Optional[float] = None
 
 
 class DeviceConfig(BaseModel):
@@ -463,7 +469,8 @@ class DeviceConfig(BaseModel):
     scale1_factor: float = -7050.0
     scale2_offset: int = 0
     scale2_factor: float = -7050.0
-    # Calibration for hives 3..MAX_HIVES (hives 1–2 are the scale1/2 fields above).
+    # Calibration for hives 3..MAX_HIVES (hives 1–2 are the scale1/2 fields
+    # above), including each hive's temperature coefficient.
     hive_scales: list[HiveScaleCalibration] = []
     config_version: int = 1
     # ── Load-cell temperature compensation (applied in the backend on read) ───
@@ -484,7 +491,7 @@ class DeviceConfigUpdate(BaseModel):
     scale2_offset: Optional[int] = None
     scale2_factor: Optional[float] = None
     # Upsert calibration for hives 3..MAX_HIVES; each entry updates one hive's
-    # stored offset/factor (omitted fields keep their current value).
+    # stored offset/factor/tempco (omitted fields keep their current value).
     hive_scales: Optional[list[HiveScaleCalibrationIn]] = None
     tempco_enabled: Optional[bool] = None
     tempco_source: Optional[Literal["ambient", "hive_1", "hive_2"]] = None
@@ -709,7 +716,9 @@ class TempCoefficientFitIn(BaseModel):
     empty/unworked hive or a fixed reference mass) and the temperature swung
     enough to expose the drift — e.g. a clear day/night cycle.
     """
-    scale: Literal[1, 2]
+    # Which hive's scale to fit. Hives 1–2 regress the measurements table's
+    # scale_{1,2}_weight_kg columns; hives 3..MAX_HIVES regress hive_readings.
+    scale: int = Field(..., ge=1, le=MAX_HIVES)
     lookback_days: int = Field(default=3, ge=1, le=90)
     start_at: Optional[datetime] = None
     end_at: Optional[datetime] = None

@@ -408,14 +408,18 @@ for hives 3+ (hives 1–2 stay in the `scale1/2_*` fields):
 
 ```json
 "hive_scales": [
-  { "index": 5, "scale": 0, "offset": 123, "factor": -7100.0 }
+  { "index": 5, "scale": 0, "offset": 123, "factor": -7100.0, "tempco_kg_per_c": -0.004 }
 ]
 ```
 
 A `PATCH` may send the same array to set them; each entry updates one hive
-(omitted `offset`/`factor` keep their current value). These are stored per hive
-in `device_configs.scale_offsets_by_hive` and, like the legacy fields, are
-bridged into the firmware's hive registry when `config_version` changes.
+(omitted `offset`/`factor`/`tempco_kg_per_c` keep their current value). These are
+stored per hive in `device_configs.scale_offsets_by_hive` and, like the legacy
+fields, are bridged into the firmware's hive registry when `config_version`
+changes — except `tempco_kg_per_c`, which is a backend read-time correction the
+device never consumes (the hives 3+ counterpart of `scale1/2_tempco_kg_per_c`,
+sharing the device-wide `tempco_enabled` / `tempco_source` / `tempco_ref_temp_c`
+settings).
 
 ### `PATCH /api/v1/devices/{device_id}/config`
 
@@ -788,10 +792,14 @@ same smoothing applied at read time). A plain fit needs
 }
 ```
 
+`scale` is a hive index, 1–18. Hives 1–2 are fitted from the `measurements`
+table's weight columns, hives 3+ from their `hive_readings` rows.
+
 Returns the fit (`coeff_kg_per_c`, `ref_temp_c`, `r_squared`, sample count and
 temperature span). When `apply` is true and the fit succeeds, the coefficient,
 reference temperature and source are written to the config and compensation is
-enabled.
+enabled — into `scale{1,2}_tempco_kg_per_c` for hives 1–2, and into that hive's
+`hive_scales` entry for hives 3+.
 
 ### `GET /api/v1/app/devices/{device_id}/measurements`
 
@@ -804,8 +812,8 @@ Returns measurements for one device.
 | `end_at` | - | - | ISO datetime upper bound |
 
 The response includes off-grid fields when the firmware sends them, plus
-`scale_1_weight_kg_compensated` / `scale_2_weight_kg_compensated` and a
-`tempco_applied` flag. The compensated values apply the per-device coefficient to
+`scale_{n}_weight_kg_compensated` for every hive (mirrored onto each `hives[]`
+entry as `weight_kg_compensated`) and a `tempco_applied` flag. The compensated values apply the per-device coefficient to
 an EMA-smoothed temperature (see
 [temperature-compensation.md](temperature-compensation.md)). When compensation is
 disabled the compensated values equal the raw weights and `tempco_applied` is

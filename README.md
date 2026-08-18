@@ -629,7 +629,7 @@ DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_accel_rules.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_ble_sensor_rules.py
 DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 test-data/test_sd_import.py
-DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hiveheart_fft.py test-data/test_relay_ota_gate.py
+DATABASE_URL=postgresql://unused/unused PYTHONPATH=server python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hive_tempcomp.py test-data/test_hiveheart_fft.py test-data/test_relay_ota_gate.py
 
 # Claim / release lifecycle (needs a real PostgreSQL — it builds the schema and
 # calls the endpoints for real). Skips with a message when the DB is unreachable;

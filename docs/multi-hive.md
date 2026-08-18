@@ -209,10 +209,15 @@ read, insights and temperature-compensation paths keep working unchanged.
   walk the whole registry), same as the passive beacons. Bee counters are
   **BLE/GATT-only** — the old wired I2C BeeCounter (hives 1–2 at
   `0x30`/`0x31`) is no longer supported.
-- Server-side **temperature compensation** is applied to hives 1–2; hives 3+
-  use raw weight for insights.
+- Server-side **temperature compensation** is applied to **every hive** that has
+  a coefficient: hives 1–2 from the `scale{1,2}_tempco_kg_per_c` columns, hives 3+
+  from their `hive_scales` entry (`tempco_kg_per_c`). The enable switch, source
+  and reference temperature stay device-wide, and insights run on the compensated
+  series for all hives.
 - **Scale calibration** is synced for all hives (firmware 0.23.7+): hives 1–2 via
   the legacy `scale1/2_offset`+`factor` config fields and hives 3+ via the
-  `hive_scales` array (stored server-side in `device_configs.scale_offsets_by_hive`).
+  `hive_scales` array (stored server-side in `device_configs.scale_offsets_by_hive`,
+  which also holds each hive's temperature coefficient — a backend-only field the
+  firmware ignores).
   A tare/span done offline on the provisioning portal is reported back to the
   backend on the next check-in and bridged into the registry over remote config.
