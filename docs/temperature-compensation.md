@@ -153,3 +153,23 @@ drift, then fit:
 
 Repeat per scale (`"scale": 2`). Coefficients are independent because the two
 cells differ.
+
+### Why the reference temperature moves between fits
+
+`ref_temp_c` is not a property of the load cell — it is simply the **mean
+temperature of the window that was fitted** (of the EMA-smoothed series, so the
+warm-up at the start of the window pulls it slightly too). Two consequences:
+
+- Refitting later returns a slightly different reference, because the window is
+  rolling (`start_at`/`end_at` default to the last `lookback_days` ending now) and
+  covers different weather. Changing `lookback_days` moves it for the same reason.
+  Nothing about enabling compensation causes this: the regression always reads the
+  **raw** `scale_*_weight_kg` column, so a compensated device fits exactly as an
+  uncompensated one does.
+- A different reference only **offsets** the compensated series, by
+  `coeff_kg_per_c × Δref` — with a typical few-grams-per-°C coefficient, a degree
+  of reference shift is a few grams. The shape of the curve, and therefore every
+  weight *change* read off it (daily income, consumption, alerts), is untouched.
+
+So a reference that wanders by a fraction of a degree between fits is expected and
+harmless. What matters is `r_squared` and the temperature span the fit covered.

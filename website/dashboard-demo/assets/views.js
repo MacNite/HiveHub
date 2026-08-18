@@ -1628,11 +1628,24 @@ function renderDevice(root, state) {
       if (!r || !r.ok) { fitOut.textContent = `Fit failed: ${(r && r.reason) || "insufficient data"}`; return; }
       const coeff = cfgInputs[`scale${n}_tempco_kg_per_c`];
       if (coeff) coeff.input.value = String(r.coeff_kg_per_c);
-      if (cfgInputs.tempco_ref_temp_c) cfgInputs.tempco_ref_temp_c.input.value = String(r.ref_temp_c);
+      // The reference is the mean temperature of the fitted window; two decimals
+      // is far finer than the correction can resolve.
+      const ref = Math.round(r.ref_temp_c * 100) / 100;
+      if (cfgInputs.tempco_ref_temp_c) cfgInputs.tempco_ref_temp_c.input.value = String(ref);
       tcEnabled.checked = true;
       if (r.temp_source) tcSource.value = r.temp_source;
       scaleSelect.value = String(n); showScale();
-      fitOut.textContent = `Filled Scale ${n}: coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(r.ref_temp_c, 1)} °C, R² ${fmt(r.r_squared, 3)} — review and Save.`;
+      // Say what the reference is: the window's mean temperature, so every refit
+      // over a different window returns a slightly different one — which only
+      // offsets the compensated series, never its shape.
+      fitOut.textContent =
+        `Filled Scale ${n}: coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(ref, 2)} °C, ` +
+        `R² ${fmt(r.r_squared, 3)} — review and Save. The reference is the mean temperature of the ` +
+        `fitted window, so a later fit over a different window lands slightly elsewhere; that only ` +
+        `offsets the compensated weight, it does not change its shape.` +
+        (Number(r.r_squared) < 0.5
+          ? " R² below 0.5 — temperature explains little of this drift here. Fit over a stretch with a constant load and a wide day/night swing."
+          : "");
     } catch (err) { fitOut.textContent = ""; state.toast(err.message, "error"); }
     finally { fitBtn.disabled = false; }
   });
@@ -1676,7 +1689,9 @@ function renderDevice(root, state) {
     if (tcSource.value !== cfg.tempco_source) patch.tempco_source = tcSource.value;
     if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
     cfgSaveBtn.disabled = true;
-    try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload(); }
+    // full: true — a light reload carries the pre-save config over instead of
+    // refetching it, repainting the form with the values the save replaced.
+    try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload({ full: true }); }
     catch (err) { state.toast(err.message, "error"); cfgSaveBtn.disabled = false; }
   });
 
@@ -1713,7 +1728,7 @@ function renderDevice(root, state) {
     }
     if (!Object.keys(names).length) { state.toast("No changes to save"); return; }
     chBtn.disabled = true;
-    try { await state.actions.updateChannels({ names }); state.toast("Hive names saved", "success"); state.reload(); }
+    try { await state.actions.updateChannels({ names }); state.toast("Hive names saved", "success"); state.reload({ full: true }); }
     catch (err) { state.toast(err.message, "error"); chBtn.disabled = false; }
   });
   const channelsCard = el("div", { class: "card" }, el("h2", {}, "Hive names"), chForm);
@@ -1863,7 +1878,7 @@ function renderDevice(root, state) {
         state.toast(
           `Relay queued for ${node.label} (${from}${(res && res.version) || latest})`,
           "success");
-        state.reload();
+        state.reload({ full: true }); // relay state rides on the firmware status
       } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
     };
     return el("div", {},
