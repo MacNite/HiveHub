@@ -21,7 +21,7 @@ from hiveheart_fft import decode_fft
 from mqtt_publisher import publisher as mqtt_publisher
 from schemas import MAX_HIVES, HiveReadingIn, MeasurementImportIn, MeasurementIn
 from sd_import import split_new_and_duplicate
-from tempcomp import TEMP_SOURCE_FIELD, compensate_weight, ema_temperatures
+from tempcomp import TEMP_SOURCE_FIELD, apply_compensation
 
 router = APIRouter()
 
@@ -1032,9 +1032,12 @@ def measurement_row_to_dict(r):
 def load_tempco_configs(device_ids) -> dict:
     """Fetch the temperature-compensation config for a set of devices.
 
-    Returns ``{device_id: (source, ref_temp_c, scale1_coeff, scale2_coeff)}``
+    Returns ``{device_id: (source, ref_temp_c, {hive_index: coeff_kg_per_c})}``
     for devices that have compensation *enabled* with at least one non-zero
-    coefficient. Devices absent from the map are left uncompensated.
+    coefficient. Hives 1–2 come from the scale{1,2}_tempco_kg_per_c columns and
+    hives 3..MAX_HIVES from the per-hive calibration map (scale_offsets_by_hive),
+    so every hive a device carries can be compensated. Devices absent from the
+    map — and hives with a zero coefficient — are left uncompensated.
     """
     ids = [d for d in {d for d in device_ids} if d]
     if not ids:
@@ -1045,39 +1048,61 @@ def load_tempco_configs(device_ids) -> dict:
                 cur.execute(
                     """
                     SELECT device_id, tempco_source, tempco_ref_temp_c,
-                           scale1_tempco_kg_per_c, scale2_tempco_kg_per_c
+                           scale1_tempco_kg_per_c, scale2_tempco_kg_per_c,
+                           scale_offsets_by_hive
                     FROM device_configs
                     WHERE device_id = ANY(%s)
-                      AND tempco_enabled
-                      AND (scale1_tempco_kg_per_c <> 0 OR scale2_tempco_kg_per_c <> 0);
+                      AND tempco_enabled;
                     """,
                     (ids,),
                 )
                 rows = cur.fetchall()
     except psycopg.errors.UndefinedColumn:
-        # The temp-compensation columns are missing — migration 006 has not been
-        # applied (e.g. the process was hot-reloaded without re-running init_db).
+        # A temp-compensation column is missing — migration 006 (the coefficient
+        # columns) or 012 (the per-hive calibration map) has not been applied
+        # (e.g. the process was hot-reloaded without re-running init_db).
         # Degrade to serving raw, uncompensated weights rather than 500-ing the
         # whole measurement-read endpoint, which would blank "last data" in the
         # dashboard. Reads keep working; compensation resumes once the migration
         # runs.
         logger.warning(
             "device_configs temp-compensation columns missing; "
-            "serving uncompensated weights. Apply migration "
-            "006_loadcell_temp_compensation.sql (or restart to run init_db)."
+            "serving uncompensated weights. Apply migrations "
+            "006_loadcell_temp_compensation.sql and 012_multi_hive.sql "
+            "(or restart to run init_db)."
         )
         return {}
-    return {r[0]: (r[1], r[2], r[3], r[4]) for r in rows}
+    out = {}
+    for device_id, source, ref_temp, c1, c2, by_hive in rows:
+        coeffs = {n: c for n, c in ((1, c1), (2, c2)) if c}
+        for key, val in (by_hive or {}).items():
+            if not isinstance(val, dict):
+                continue
+            try:
+                idx, coeff = int(key), float(val.get("tempco", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            # Hives 1–2 stay column-backed even if the map carries an entry for
+            # them, so there is exactly one source of truth per hive.
+            if coeff and 3 <= idx <= MAX_HIVES:
+                coeffs[idx] = coeff
+        if coeffs:
+            out[device_id] = (source, ref_temp, coeffs)
+    return out
 
 
 def attach_temperature_compensation(measurements: list[dict]) -> list[dict]:
     """Fill in the compensated-weight fields on serialized measurement dicts.
 
-    Looks up each device's coefficient once (a single batched query), applies an
+    Looks up each device's coefficients once (a single batched query), applies an
     EMA to the temperature series (per device, in time order) to damp transient
-    lag errors, then applies the first-order correction from server/tempcomp.py.
-    Rows whose device has no enabled coefficient keep the defaults set in
-    measurement_row_to_dict (raw weight, tempco_applied=False).
+    lag errors, then applies the first-order correction from server/tempcomp.py to
+    every hive that has a coefficient. Rows whose device has no enabled
+    coefficient keep the defaults set in measurement_row_to_dict / the per-hive
+    flattening (raw weight, tempco_applied=False).
+
+    Run this *after* attach_hive_readings: hives 3..MAX_HIVES only get their
+    ``scale_{n}_weight_kg`` key (and their hives[] entry) from that step.
     """
     if not measurements:
         return measurements
@@ -1095,20 +1120,9 @@ def attach_temperature_compensation(measurements: list[dict]) -> list[dict]:
         cfg = cfgs.get(device_id)
         if not cfg:
             continue
-        source, ref_temp, c1, c2 = cfg
+        source, ref_temp, coeffs = cfg
         field = TEMP_SOURCE_FIELD.get(source, "ambient_temp_c")
-
-        rows.sort(key=lambda m: m["measured_at"])
-        smoothed_temps = ema_temperatures([m.get(field) for m in rows])
-
-        for m, temp in zip(rows, smoothed_temps):
-            m["scale_1_weight_kg_compensated"] = compensate_weight(
-                m["scale_1_weight_kg"], temp, ref_temp, c1
-            )
-            m["scale_2_weight_kg_compensated"] = compensate_weight(
-                m["scale_2_weight_kg"], temp, ref_temp, c2
-            )
-            m["tempco_applied"] = True
+        apply_compensation(rows, field, ref_temp, coeffs)
 
     return measurements
 
@@ -1338,6 +1352,12 @@ def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
     # harmless aliases next to the historical scale_1/2 and hive_1/2 columns.
     put(f"scale_{n}_weight_kg", h.get("weight_kg"))
     put(f"scale_{n}_raw", h.get("raw_weight"))
+    # Default the compensated alias to the raw weight, mirroring what
+    # measurement_row_to_dict does for hives 1–2, so the key exists whether or not
+    # this hive has a coefficient. attach_temperature_compensation overwrites it
+    # for the hives that do.
+    if n > 2:
+        put(f"scale_{n}_weight_kg_compensated", h.get("weight_kg"))
     put(f"hive_{n}_temp_c", h.get("temp_c"))
     put(f"hive_{n}_humidity_percent", h.get("humidity_percent"))
 
@@ -1475,14 +1495,14 @@ def attach_hive_readings(measurements: list[dict]) -> list[dict]:
 
 
 def serialize_measurements(rows) -> list[dict]:
-    """Map raw DB rows to API dicts, attach temperature compensation and the
-    per-hive readings (hives[] array + flat keys for hives 3–18)."""
-    measurements = attach_temperature_compensation(
-        [measurement_row_to_dict(r) for r in rows]
-    )
-    # Flatten per-hive readings first so hives 3–18 expose bee_counter_{n}_* keys,
-    # then difference so those hives get derived interval counts too.
-    measurements = attach_hive_readings(measurements)
+    """Map raw DB rows to API dicts, attach the per-hive readings (hives[] array +
+    flat keys for hives 3–18) and temperature compensation."""
+    # Flatten per-hive readings first: hives 3–18 get their scale_{n}_weight_kg
+    # and bee_counter_{n}_* keys there, and compensation needs those weights to
+    # correct anything beyond scales 1–2. Difference last, so those hives get
+    # derived interval counts too.
+    measurements = attach_hive_readings([measurement_row_to_dict(r) for r in rows])
+    measurements = attach_temperature_compensation(measurements)
     return difference_bee_counter_intervals(measurements)
 
 
@@ -1505,10 +1525,11 @@ def serialize_chart_measurements(cur) -> list[dict]:
         m["scale_2_weight_kg_compensated"] = m.get("scale_2_weight_kg")
         m["tempco_applied"] = False
         measurements.append(m)
-    measurements = attach_temperature_compensation(measurements)
-    # Flatten per-hive readings first (adds bee_counter_{n}_* for hives 3–18),
-    # then difference so those hives get derived interval counts too.
+    # Flatten per-hive readings first (adds scale_{n}_weight_kg and
+    # bee_counter_{n}_* for hives 3–18, which compensation then corrects), then
+    # difference so those hives get derived interval counts too.
     measurements = attach_hive_readings(measurements)
+    measurements = attach_temperature_compensation(measurements)
     return difference_bee_counter_intervals(measurements)
 
 
@@ -1564,13 +1585,13 @@ def measurements_for_insights(rows) -> list[dict]:
     """Build measurement dicts for the insight engine on temperature-compensated
     weights.
 
-    compute_insights() reads weight from ``scale_1_weight_kg`` /
-    ``scale_2_weight_kg``. Those keys hold the raw load-cell weight; the
-    compensated values live under the separate ``*_compensated`` keys. We run the
-    same compensation as the read APIs (serialize_measurements) and then fold the
-    compensated weight into the primary keys so every weight-based detector
-    (swarm, robbing, foraging, absconding, winter risk, harvest window) operates
-    on corrected weight without any change to the engine.
+    compute_insights() reads each hive's weight from ``scale_{n}_weight_kg``.
+    Those keys hold the raw load-cell weight; the compensated values live under
+    the separate ``*_compensated`` keys. We run the same compensation as the read
+    APIs (serialize_measurements) and then fold the compensated weight into the
+    primary keys so every weight-based detector (swarm, robbing, foraging,
+    absconding, winter risk, harvest window) operates on corrected weight without
+    any change to the engine — for every hive, not just scales 1–2.
 
     The compensated fields default to the raw weight when compensation is
     disabled or no coefficient is set, so this is a no-op in that case. These
@@ -1578,12 +1599,10 @@ def measurements_for_insights(rows) -> list[dict]:
     """
     measurements = serialize_measurements(rows)
     for m in measurements:
-        comp1 = m.get("scale_1_weight_kg_compensated")
-        comp2 = m.get("scale_2_weight_kg_compensated")
-        if comp1 is not None:
-            m["scale_1_weight_kg"] = comp1
-        if comp2 is not None:
-            m["scale_2_weight_kg"] = comp2
+        for n in range(1, MAX_HIVES + 1):
+            comp = m.get(f"scale_{n}_weight_kg_compensated")
+            if comp is not None:
+                m[f"scale_{n}_weight_kg"] = comp
     return measurements
 
 

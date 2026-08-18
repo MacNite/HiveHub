@@ -1581,24 +1581,50 @@ function renderDevice(root, state) {
   };
   const fieldRow = (label, control) => el("div", { class: "form-row" }, el("label", {}, label), control);
 
-  // Scales the device exposes. Per-scale calibration and temp-comp are backed by
-  // dedicated columns for scales 1–2, so the selector is built from the hives the
-  // device reports, capped to those two (fallback [1, 2] for a silent device).
-  const reported = availableHives(state).filter((n) => n <= 2);
+  // Scales the device exposes — every hive it reports, not just the first two
+  // (fallback [1, 2] for a device that has not reported yet). Hives 1–2 are
+  // backed by dedicated device_configs columns; hives 3+ live in the per-hive
+  // calibration map the config exposes as hive_scales and the PATCH endpoint
+  // merges entry by entry. Both are edited through the same three fields below.
+  // 18 is the server-side MAX_HIVES; anything past it would be rejected by the
+  // config endpoint, so it never gets an editor.
+  const reported = availableHives(state).filter((n) => n <= 18);
   const scales = reported.length ? reported : [1, 2];
   const scaleTag = (n) => {
     const label = hiveLabel(state, n);
     return label && label !== `Hive ${n}` ? ` · ${label}` : "";
   };
 
+  // Editors for a hive_scales entry. A hive with no stored entry yet shows the
+  // firmware defaults (the values it is actually running with), and since the
+  // initial value is remembered per field, an untouched hive is never sent — so
+  // opening the page cannot write default entries for every hive on the device.
+  const HIVE_SCALE_DEFAULTS = { offset: 0, factor: -7050, tempco_kg_per_c: 0 };
+  const hiveScaleInputs = new Map();   // hive index → { field: {input, int, initial} }
+  const hiveScaleInput = (n, key, isInt) => {
+    const stored = (cfg.hive_scales || []).find((h) => Number(h.index) === n);
+    const cur = stored && stored[key] != null ? stored[key] : HIVE_SCALE_DEFAULTS[key];
+    const input = el("input", {
+      type: "number", step: isInt ? "1" : "any", value: String(cur),
+    });
+    if (!hiveScaleInputs.has(n)) hiveScaleInputs.set(n, {});
+    hiveScaleInputs.get(n)[key] = { input, int: !!isInt, initial: cur };
+    return input;
+  };
+
   // One offset/factor/tempco group per scale; the Scale selector shows one group
   // at a time so the section reads as a per-scale editor rather than a flat list.
   const scaleGroups = new Map();
   for (const n of scales) {
+    const [offset, factor, tempco] = n <= 2
+      ? [numInput(`scale${n}_offset`, true), numInput(`scale${n}_factor`),
+         numInput(`scale${n}_tempco_kg_per_c`)]
+      : [hiveScaleInput(n, "offset", true), hiveScaleInput(n, "factor"),
+         hiveScaleInput(n, "tempco_kg_per_c")];
     scaleGroups.set(n, el("div", { class: "scale-fields" },
-      fieldRow("Offset", numInput(`scale${n}_offset`, true)),
-      fieldRow("Factor", numInput(`scale${n}_factor`)),
-      fieldRow("Tempco coefficient (kg/°C)", numInput(`scale${n}_tempco_kg_per_c`))));
+      fieldRow("Offset", offset),
+      fieldRow("Factor", factor),
+      fieldRow("Tempco coefficient (kg/°C)", tempco)));
   }
   const scaleSelect = el("select", { class: "full" },
     ...scales.map((n) => el("option", { value: String(n) }, `Scale ${n}${scaleTag(n)}`)));
@@ -1626,13 +1652,28 @@ function renderDevice(root, state) {
     try {
       const r = await state.actions.fitTempComp({ scale: n, lookback_days: Number(lookbackInput.value) || 14, apply: false });
       if (!r || !r.ok) { fitOut.textContent = `Fit failed: ${(r && r.reason) || "insufficient data"}`; return; }
-      const coeff = cfgInputs[`scale${n}_tempco_kg_per_c`];
+      const coeff = n <= 2
+        ? cfgInputs[`scale${n}_tempco_kg_per_c`]
+        : (hiveScaleInputs.get(n) || {}).tempco_kg_per_c;
       if (coeff) coeff.input.value = String(r.coeff_kg_per_c);
-      if (cfgInputs.tempco_ref_temp_c) cfgInputs.tempco_ref_temp_c.input.value = String(r.ref_temp_c);
+      // The reference is the mean temperature of the fitted window; two decimals
+      // is far finer than the correction can resolve.
+      const ref = Math.round(r.ref_temp_c * 100) / 100;
+      if (cfgInputs.tempco_ref_temp_c) cfgInputs.tempco_ref_temp_c.input.value = String(ref);
       tcEnabled.checked = true;
       if (r.temp_source) tcSource.value = r.temp_source;
       scaleSelect.value = String(n); showScale();
-      fitOut.textContent = `Filled Scale ${n}: coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(r.ref_temp_c, 1)} °C, R² ${fmt(r.r_squared, 3)} — review and Save.`;
+      // Say what the reference is: the window's mean temperature, so every refit
+      // over a different window returns a slightly different one — which only
+      // offsets the compensated series, never its shape.
+      fitOut.textContent =
+        `Filled Scale ${n}: coeff ${fmt(r.coeff_kg_per_c, 5)} kg/°C, ref ${fmt(ref, 2)} °C, ` +
+        `R² ${fmt(r.r_squared, 3)} — review and Save. The reference is the mean temperature of the ` +
+        `fitted window, so a later fit over a different window lands slightly elsewhere; that only ` +
+        `offsets the compensated weight, it does not change its shape.` +
+        (Number(r.r_squared) < 0.5
+          ? " R² below 0.5 — temperature explains little of this drift here. Fit over a stretch with a constant load and a wide day/night swing."
+          : "");
     } catch (err) { fitOut.textContent = ""; state.toast(err.message, "error"); }
     finally { fitBtn.disabled = false; }
   });
@@ -1672,11 +1713,31 @@ function renderDevice(root, state) {
       if (!Number.isFinite(v) || v === cfg[key]) continue;
       patch[key] = v;
     }
+    // Hives 3+ patch through hive_scales instead of columns. Send an entry only
+    // for a hive whose fields actually changed, with all three values, so the
+    // server-side merge keeps the rest of that entry intact.
+    const hiveScales = [];
+    for (const [n, fields] of hiveScaleInputs) {
+      const entry = { index: n };
+      let changed = false;
+      for (const [key, { input, int, initial }] of Object.entries(fields)) {
+        const raw = input.value.trim();
+        if (raw === "") continue;
+        const v = int ? parseInt(raw, 10) : parseFloat(raw);
+        if (!Number.isFinite(v)) continue;
+        entry[key] = v;
+        if (v !== initial) changed = true;
+      }
+      if (changed) hiveScales.push(entry);
+    }
+    if (hiveScales.length) patch.hive_scales = hiveScales;
     if (tcEnabled.checked !== !!cfg.tempco_enabled) patch.tempco_enabled = tcEnabled.checked;
     if (tcSource.value !== cfg.tempco_source) patch.tempco_source = tcSource.value;
     if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
     cfgSaveBtn.disabled = true;
-    try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload(); }
+    // full: true — a light reload carries the pre-save config over instead of
+    // refetching it, repainting the form with the values the save replaced.
+    try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload({ full: true }); }
     catch (err) { state.toast(err.message, "error"); cfgSaveBtn.disabled = false; }
   });
 
@@ -1713,7 +1774,7 @@ function renderDevice(root, state) {
     }
     if (!Object.keys(names).length) { state.toast("No changes to save"); return; }
     chBtn.disabled = true;
-    try { await state.actions.updateChannels({ names }); state.toast("Hive names saved", "success"); state.reload(); }
+    try { await state.actions.updateChannels({ names }); state.toast("Hive names saved", "success"); state.reload({ full: true }); }
     catch (err) { state.toast(err.message, "error"); chBtn.disabled = false; }
   });
   const channelsCard = el("div", { class: "card" }, el("h2", {}, "Hive names"), chForm);
@@ -1863,7 +1924,7 @@ function renderDevice(root, state) {
         state.toast(
           `Relay queued for ${node.label} (${from}${(res && res.version) || latest})`,
           "success");
-        state.reload();
+        state.reload({ full: true }); // relay state rides on the firmware status
       } catch (e) { state.toast(e.message, "error"); btn.disabled = false; }
     };
     return el("div", {},

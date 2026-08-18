@@ -109,6 +109,51 @@ def compensate_weight(
     return weight_kg - coeff_kg_per_c * (temp_c - ref)
 
 
+def apply_compensation(
+    rows: list,
+    temp_field: str,
+    ref_temp_c: Optional[float],
+    coeff_by_hive: dict,
+    alpha: float = DEFAULT_EMA_ALPHA,
+) -> list:
+    """Write compensated weights onto one device's serialized measurement dicts.
+
+    ``rows`` are read-API measurement dicts for a *single* device (they share one
+    temperature series, so they are smoothed together). ``coeff_by_hive`` maps a
+    hive index to its kg/°C coefficient — hives 1–2 come from the
+    scale{1,2}_tempco_kg_per_c columns, hives 3..18 from the per-hive calibration
+    map — and only the hives listed there are compensated.
+
+    Each hive's raw weight is read from the flat ``scale_{n}_weight_kg`` key that
+    the read path synthesizes for every hive, and the result is written both to
+    ``scale_{n}_weight_kg_compensated`` and onto the matching ``hives[]`` entry as
+    ``weight_kg_compensated``, so flat and nested consumers agree.
+
+    Hives 1–2 always get their compensated key (defaulting to the raw weight, or
+    None, exactly as the uncompensated read path does); hives 3+ only get one when
+    that hive actually reported a weight, so an absent hive stays absent rather
+    than gaining a null field.
+
+    The rows are sorted by ``measured_at`` for the EMA and returned in that order;
+    the dicts are mutated in place.
+    """
+    rows = sorted(rows, key=lambda m: m["measured_at"])
+    smoothed = ema_temperatures([m.get(temp_field) for m in rows], alpha)
+    for m, temp in zip(rows, smoothed):
+        by_index = {h.get("index"): h for h in (m.get("hives") or []) if h}
+        for n, coeff in coeff_by_hive.items():
+            raw_key = f"scale_{n}_weight_kg"
+            if n > 2 and m.get(raw_key) is None:
+                continue
+            value = compensate_weight(m.get(raw_key), temp, ref_temp_c, coeff)
+            m[f"{raw_key}_compensated"] = value
+            hive = by_index.get(n)
+            if hive is not None and hive.get("weight_kg") is not None:
+                hive["weight_kg_compensated"] = value
+        m["tempco_applied"] = True
+    return rows
+
+
 def fit_temp_coefficient(samples: Iterable[tuple]) -> dict:
     """Least-squares fit of weight-vs-temperature drift.
 

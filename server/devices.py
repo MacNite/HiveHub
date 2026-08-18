@@ -16,6 +16,7 @@ from schemas import (
     DeviceConfig,
     DeviceConfigUpdate,
     HiveScaleCalibration,
+    HiveScaleCalibrationIn,
     TempCoefficientFitIn,
 )
 from tempcomp import TEMP_SOURCE_FIELD, ema_temperatures, fit_temp_coefficient
@@ -95,8 +96,8 @@ def hive_scales_from_json(raw) -> list[HiveScaleCalibration]:
     """Turn the scale_offsets_by_hive JSONB map into a sorted hive_scales list.
 
     The column stores calibration for hives 3..MAX_HIVES as {hive_index: {offset,
-    factor, scale}} (hives 1–2 live in the scale1/2 columns). Malformed / stray
-    entries are skipped so a hand-edited row can never break the config read.
+    factor, scale, tempco}} (hives 1–2 live in the scale1/2 columns). Malformed /
+    stray entries are skipped so a hand-edited row can never break the config read.
     """
     if not raw:
         return []
@@ -117,6 +118,7 @@ def hive_scales_from_json(raw) -> list[HiveScaleCalibration]:
                     scale=int(val.get("scale", 0) or 0),
                     offset=int(val.get("offset", 0) or 0),
                     factor=float(val.get("factor", -7050.0)),
+                    tempco_kg_per_c=float(val.get("tempco", 0.0) or 0.0),
                 )
             )
         except (TypeError, ValueError):
@@ -129,9 +131,9 @@ def merge_hive_scales(current, updates: list[dict]) -> dict:
     """Merge the requested hive_scales updates into the stored JSONB map.
 
     ``updates`` are HiveScaleCalibrationIn dicts (from model_dump). Each fully or
-    partially updates one hive entry — an omitted offset/factor keeps its current
-    value — so a device reporting both fields overwrites cleanly while a partial
-    edit never wipes the other field. Returns the new map to store.
+    partially updates one hive entry — an omitted offset/factor/tempco keeps its
+    current value — so a device reporting both fields overwrites cleanly while a
+    partial edit never wipes the other field. Returns the new map to store.
     """
     merged = dict(current) if current else {}
     for hs in updates:
@@ -145,6 +147,8 @@ def merge_hive_scales(current, updates: list[dict]) -> dict:
             entry["offset"] = int(hs["offset"])
         if hs.get("factor") is not None:
             entry["factor"] = float(hs["factor"])
+        if hs.get("tempco_kg_per_c") is not None:
+            entry["tempco"] = float(hs["tempco_kg_per_c"])
         entry.setdefault("offset", 0)
         entry.setdefault("factor", -7050.0)
         merged[key] = entry
@@ -299,22 +303,38 @@ def run_temp_compensation_fit(device_id: str, body: "TempCoefficientFitIn") -> d
     cfg = fetch_device_config(device_id)
     source = body.temp_source or cfg.tempco_source
     temp_field = TEMP_SOURCE_FIELD[source]
-    weight_field = "scale_1_weight_kg" if body.scale == 1 else "scale_2_weight_kg"
 
     end_at = body.end_at or datetime.now(timezone.utc)
     start_at = body.start_at or (end_at - timedelta(days=body.lookback_days))
 
-    where = ["device_id = %s", "measured_at >= %s", "measured_at <= %s",
-             f"{weight_field} IS NOT NULL", f"{temp_field} IS NOT NULL"]
-    params: list[Any] = [device_id, start_at, end_at]
+    # Hives 1–2 have dedicated weight columns on measurements; hives 3..MAX_HIVES
+    # only exist as hive_readings rows, so those are joined in. The temperature
+    # sources are device-level columns on measurements either way.
+    where = ["m.device_id = %s", "m.measured_at >= %s", "m.measured_at <= %s",
+             f"m.{temp_field} IS NOT NULL"]
+    where_params: list[Any] = [device_id, start_at, end_at]
     if body.calibration_mode_only:
-        where.append("calibration_mode IS TRUE")
+        where.append("m.calibration_mode IS TRUE")
+
+    if body.scale <= 2:
+        weight_expr = f"m.scale_{body.scale}_weight_kg"
+        join, join_params = "", []
+    else:
+        weight_expr = "hr.weight_kg"
+        join = ("JOIN hive_readings hr ON hr.measurement_id = m.id "
+                "AND hr.hive_index = %s ")
+        join_params = [body.scale]
+    where.append(f"{weight_expr} IS NOT NULL")
+    # The join's placeholder is bound before the WHERE clause's, so its parameter
+    # has to lead — positional binding follows the SQL text, not the clause order
+    # the code happens to build them in.
+    params = join_params + where_params
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT {temp_field}, {weight_field} FROM measurements "
-                f"WHERE {' AND '.join(where)} ORDER BY measured_at ASC;",
+                f"SELECT m.{temp_field}, {weight_expr} FROM measurements m {join}"
+                f"WHERE {' AND '.join(where)} ORDER BY m.measured_at ASC;",
                 params,
             )
             samples = cur.fetchall()
@@ -336,15 +356,22 @@ def run_temp_compensation_fit(device_id: str, body: "TempCoefficientFitIn") -> d
     )
 
     if body.apply and fit["ok"]:
-        coeff_field = (
-            "scale1_tempco_kg_per_c" if body.scale == 1 else "scale2_tempco_kg_per_c"
-        )
-        patch = DeviceConfigUpdate(
+        shared = dict(
             tempco_enabled=True,
             tempco_source=source,
             tempco_ref_temp_c=fit["ref_temp_c"],
-            **{coeff_field: fit["coeff_kg_per_c"]},
         )
+        if body.scale <= 2:
+            coeff_field = f"scale{body.scale}_tempco_kg_per_c"
+            patch = DeviceConfigUpdate(**shared, **{coeff_field: fit["coeff_kg_per_c"]})
+        else:
+            # Hives 3..MAX_HIVES keep their coefficient in the per-hive
+            # calibration map; the merge leaves that hive's offset/factor alone.
+            patch = DeviceConfigUpdate(
+                **shared,
+                hive_scales=[HiveScaleCalibrationIn(
+                    index=body.scale, tempco_kg_per_c=fit["coeff_kg_per_c"])],
+            )
         update_device_config(device_id, patch)
         fit["applied"] = True
 

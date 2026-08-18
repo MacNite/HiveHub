@@ -67,8 +67,9 @@ disables smoothing (raw temperature); lower values smooth more. `None` readings
 pass through and the EMA carries its last value across the gap.
 
 The math lives in [`server/tempcomp.py`](../server/tempcomp.py) and is covered by
-[`test-data/test_tempcomp.py`](../test-data/test_tempcomp.py) (pure functions, no
-database needed).
+[`test-data/test_tempcomp.py`](../test-data/test_tempcomp.py) and
+[`test-data/test_hive_tempcomp.py`](../test-data/test_hive_tempcomp.py) (the
+per-hive correction and calibration map; pure functions, no database needed).
 
 ## Configuration
 
@@ -82,9 +83,18 @@ config endpoints):
 | `tempco_ref_temp_c` | `20.0` | Reference temperature (°C). |
 | `scale1_tempco_kg_per_c` | `0.0` | Scale 1 coefficient (kg/°C). |
 | `scale2_tempco_kg_per_c` | `0.0` | Scale 2 coefficient (kg/°C). |
+| `hive_scales[].tempco_kg_per_c` | `0.0` | Coefficient for hives 3–18 (kg/°C), per hive. |
 
-Set them via `PATCH /api/v1/app/devices/{device_id}/config` (owner/admin), or let
-the fit endpoint write them for you.
+The enable switch, source and reference are device-wide; only the coefficient is
+per hive, because that is what differs between load cells. Hives 1–2 keep their
+dedicated columns for historical continuity, and hives 3–18 store theirs in the
+same per-hive calibration map as their offset and factor
+(`device_configs.scale_offsets_by_hive`), so no schema change is needed to
+calibrate an 18-hive collector.
+
+Set them via `PATCH /api/v1/app/devices/{device_id}/config` (owner/admin) or in
+the dashboard's *Device & admin → Scale calibration & compensation* panel, which
+lists every hive the device reports, or let the fit endpoint write them for you.
 
 > **Note on the temperature source.** The SHT4x measures *ambient air*, which
 > tracks the cell body closely in steady state but lags it during fast swings
@@ -97,7 +107,9 @@ the fit endpoint write them for you.
 
 The per-device measurement endpoints add, alongside the raw weights:
 
-- `scale_1_weight_kg_compensated`, `scale_2_weight_kg_compensated`
+- `scale_{n}_weight_kg_compensated` for every hive the reading carries (hives
+  1–2 from their columns, hives 3–18 from their `hive_readings` rows)
+- `weight_kg_compensated` on each `hives[]` entry, the nested mirror of the above
 - `tempco_applied` (boolean)
 
 When compensation is disabled (or no coefficient is set), the compensated values
@@ -105,9 +117,9 @@ equal the raw weights and `tempco_applied` is `false`, so clients can always rea
 the compensated field unconditionally.
 
 The raw `scale_*_weight_kg` columns are **never** modified. The insight detectors
-(`server/insights.py`) currently still run on the raw weight; feeding them the
-compensated series is a natural follow-up but is deliberately left out here so
-alert behaviour does not change silently.
+(`server/insights.py`) do run on the compensated series: `measurements_for_insights`
+folds each hive's compensated weight into its `scale_{n}_weight_kg` key before the
+engine sees it, which is a no-op while compensation is off.
 
 ## Deriving the coefficient
 
@@ -151,5 +163,26 @@ drift, then fit:
 3. Verify: pull recent measurements and confirm the daily sawtooth in
    `scale_*_weight_kg_compensated` is reduced versus the raw series.
 
-Repeat per scale (`"scale": 2`). Coefficients are independent because the two
-cells differ.
+Repeat per hive (`"scale"` is a hive index, 1–18; hives 1–2 are fitted from the
+measurement columns, hives 3+ from their `hive_readings` rows). Coefficients are
+independent because the cells differ.
+
+### Why the reference temperature moves between fits
+
+`ref_temp_c` is not a property of the load cell — it is simply the **mean
+temperature of the window that was fitted** (of the EMA-smoothed series, so the
+warm-up at the start of the window pulls it slightly too). Two consequences:
+
+- Refitting later returns a slightly different reference, because the window is
+  rolling (`start_at`/`end_at` default to the last `lookback_days` ending now) and
+  covers different weather. Changing `lookback_days` moves it for the same reason.
+  Nothing about enabling compensation causes this: the regression always reads the
+  **raw** `scale_*_weight_kg` column, so a compensated device fits exactly as an
+  uncompensated one does.
+- A different reference only **offsets** the compensated series, by
+  `coeff_kg_per_c × Δref` — with a typical few-grams-per-°C coefficient, a degree
+  of reference shift is a few grams. The shape of the curve, and therefore every
+  weight *change* read off it (daily income, consumption, alerts), is untouched.
+
+So a reference that wanders by a fraction of a degree between fits is expected and
+harmless. What matters is `r_squared` and the temperature span the fit covered.

@@ -104,7 +104,10 @@ function hiveWeight(row, n) {
 // A device-shaped object for availableHives()/hiveLabel(): custom channel names
 // are only loaded for the active device, so others fall back to firmware names.
 function deviceState(id) {
-  return { latest: state.deviceLatest[id] || null, channels: id === state.activeDeviceId ? state.data?.channels : null, device: deviceMeta(id) };
+  // channels come from the last device-scoped load, so they only apply to the
+  // device that load was for — see loadData()/buildState().
+  const own = id === state.activeDeviceId && state.data?.deviceId === id;
+  return { latest: state.deviceLatest[id] || null, channels: own ? state.data.channels : null, device: deviceMeta(id) };
 }
 // Devices offered in the hive picker: everything except the ones an admin has
 // retired (hidden). Hidden devices stay in state.devices so the admin "Visible
@@ -198,8 +201,19 @@ async function loadData(opts = {}) {
   // readings, insights. Config, channels and firmware status are carried over
   // from the previous load; a full load runs on first load, active-device switch
   // and the manual Refresh button.
-  const full = !!opts.full || !state.data;
-  const prev = state.data;
+  //
+  // "Carried over" is only ever valid for the *same* active device. The picker
+  // can move the active device (ticking another device's hive, Clear, hiding or
+  // deleting a device) and then only schedules a light load — carrying the old
+  // device's config/channels/firmware across that switch showed one device's
+  // calibration, hive names and firmware state under another device's name, so
+  // a configured scale could read back as untouched defaults. Anchor the
+  // carry-over to the device it was loaded for: a different device forces a full
+  // load and never inherits the previous device's panels.
+  const prevDevice = state.data ? state.data.deviceId : null;
+  const sameDevice = !!state.data && prevDevice === state.activeDeviceId;
+  const full = !!opts.full || !sameDevice;
+  const prev = sameDevice ? state.data : null;
   state.loading = true;
   setStatus("Loading…");
   const { days, limit } = RANGES[state.range];
@@ -234,6 +248,7 @@ async function loadData(opts = {}) {
   }
 
   state.data = {
+    deviceId: activeId,
     measurements, latest,
     config: prev?.config ?? null,
     channels: prev?.channels ?? null,
@@ -262,6 +277,7 @@ async function loadData(opts = {}) {
 
   state.data = {
     ...state.data,
+    deviceId: activeId,
     config: val(config, prev?.config ?? null),
     channels: val(channels, prev?.channels ?? null),
     insights: val(insights, prev?.insights ?? null),
@@ -315,10 +331,15 @@ function buildState() {
     range: state.range,
     measurements: (d.measurements && d.measurements[activeId]) || [],
     latest: (d.latest && d.latest[activeId]) || state.deviceLatest[activeId] || null,
-    config: d.config,
-    channels: d.channels,
-    insights: d.insights,
-    firmware: d.firmware,
+    // Device-scoped panels: only ever the active device's own data. A repaint
+    // can land between an active-device switch and the refetch that follows it
+    // (the switch renders immediately, loadData resolves a tick later), and
+    // showing the previous device's calibration/names/firmware under the new
+    // device's id is worse than showing the panels empty for that moment.
+    config: d.deviceId === activeId ? d.config : null,
+    channels: d.deviceId === activeId ? d.channels : null,
+    insights: d.deviceId === activeId ? d.insights : null,
+    firmware: d.deviceId === activeId ? d.firmware : null,
     // Cross-device comparison selection + accessors used by the hive-centric views.
     selection: state.selection.map((s) => ({ deviceId: s.deviceId, hive: Number(s.hive) })),
     multiDevice,
@@ -327,7 +348,7 @@ function buildState() {
     deviceName,
     deviceLatest: (id) => (d.latest && d.latest[id]) || state.deviceLatest[id] || null,
     deviceMeasurements: (id) => (d.measurements && d.measurements[id]) || [],
-    deviceChannels: (id) => (id === activeId ? d.channels : null),
+    deviceChannels: (id) => (id === activeId && d.deviceId === activeId ? d.channels : null),
     authUser: state.authUser,
     features: state.features,
     toast,
