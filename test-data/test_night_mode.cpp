@@ -16,6 +16,30 @@
 // Runs in CI on a plain host compiler — no ESP32, no counter, no hive.
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// Arduino's macro soup, reproduced before the include on purpose.
+// ---------------------------------------------------------------------------
+// This header is built two ways: here, against a bare host compiler, and in the
+// firmware, after Arduino.h has defined a few hundred all-caps macros. The
+// second is far more hostile, and this test could not see it — a `Reason`
+// enumerator named DISABLED collided with esp32-hal-gpio.h's
+// `#define DISABLED 0x00` and broke both firmware builds while every check here
+// passed.
+//
+// So define the ones that actually bite, with their real Arduino values, before
+// including night_mode.h. Any future identifier that strays into the all-caps
+// macro namespace now fails on a host compiler in seconds instead of three
+// minutes into a firmware build. These are deliberately NOT #undef'd.
+#define DISABLED 0x00
+#define INPUT 0x01
+#define OUTPUT 0x03
+#define PULLUP 0x04
+#define PULLDOWN 0x08
+#define HIGH 0x1
+#define LOW 0x0
+#define ANALOG 0xC0
+#define OPEN_DRAIN 0x10
+
 #include "night_mode.h"
 
 #include <cstdio>
@@ -98,7 +122,7 @@ static void test_equal_bounds_are_empty_not_all_day() {
     c.end_minute = c.start_minute;
     const Decision d = decide(c, hm(23, 0), quiet(), CYCLE_S, false);
     CHECK(!d.suspend);
-    CHECK(d.reason == Reason::INVALID_WINDOW);
+    CHECK(d.reason == Reason::InvalidWindow);
 }
 
 static void test_out_of_range_minutes_are_refused() {
@@ -110,7 +134,7 @@ static void test_out_of_range_minutes_are_refused() {
     c.start_minute = 1440;
     const Decision d = decide(c, hm(23, 0), quiet(), CYCLE_S, false);
     CHECK(!d.suspend);
-    CHECK(d.reason == Reason::INVALID_WINDOW);
+    CHECK(d.reason == Reason::InvalidWindow);
 }
 
 static void test_disabled_by_default() {
@@ -122,14 +146,14 @@ static void test_disabled_by_default() {
     const Decision d = decide(c, hm(2, 0), quiet(), CYCLE_S, false);
     CHECK(!d.suspend);
     CHECK(d.duration_s == 0);
-    CHECK(d.reason == Reason::DISABLED);
+    CHECK(d.reason == Reason::Disabled);
 }
 
 static void test_suspends_inside_the_window() {
     g_case = "the ordinary night";
     const Decision d = decide(enabled(), hm(23, 30), quiet(), CYCLE_S, false);
     CHECK(d.suspend);
-    CHECK(d.reason == Reason::SUSPEND);
+    CHECK(d.reason == Reason::Suspend);
     CHECK(d.duration_s == CYCLE_S * GRANT_CYCLES);
 }
 
@@ -138,7 +162,7 @@ static void test_daytime_resumes() {
     const Decision d = decide(enabled(), hm(13, 0), quiet(), CYCLE_S, false);
     CHECK(!d.suspend);
     CHECK(d.duration_s == 0);
-    CHECK(d.reason == Reason::OUTSIDE_WINDOW);
+    CHECK(d.reason == Reason::OutsideWindow);
 }
 
 static void test_unknown_clock_never_suspends() {
@@ -147,11 +171,11 @@ static void test_unknown_clock_never_suspends() {
     g_case = "no valid local time means keep counting";
     const Decision d = decide(enabled(), MINUTES_PER_DAY, quiet(), CYCLE_S, false);
     CHECK(!d.suspend);
-    CHECK(d.reason == Reason::NO_CLOCK);
+    CHECK(d.reason == Reason::NoClock);
 
     const Decision d2 = decide(enabled(), 60000, quiet(), CYCLE_S, false);
     CHECK(!d2.suspend);
-    CHECK(d2.reason == Reason::NO_CLOCK);
+    CHECK(d2.reason == Reason::NoClock);
 }
 
 static void test_relay_pending_wins() {
@@ -161,7 +185,7 @@ static void test_relay_pending_wins() {
     g_case = "a queued OTA relay keeps the counter awake";
     const Decision d = decide(enabled(), hm(1, 0), quiet(), CYCLE_S, true);
     CHECK(!d.suspend);
-    CHECK(d.reason == Reason::RELAY_PENDING);
+    CHECK(d.reason == Reason::RelayPending);
 }
 
 static void test_traffic_gate_postpones_a_busy_hive() {
@@ -173,7 +197,7 @@ static void test_traffic_gate_postpones_a_busy_hive() {
 
     const Decision busy = decide(c, hm(20, 30), quiet(350), CYCLE_S, false);
     CHECK(!busy.suspend);
-    CHECK(busy.reason == Reason::TRAFFIC_ABOVE_LIMIT);
+    CHECK(busy.reason == Reason::TrafficAboveLimit);
 
     // At the threshold exactly: not "above", so it suspends. Documented here
     // because "max 100 bees" reads either way to a human.
@@ -182,7 +206,7 @@ static void test_traffic_gate_postpones_a_busy_hive() {
 
     const Decision settled = decide(c, hm(21, 30), quiet(12), CYCLE_S, false);
     CHECK(settled.suspend);
-    CHECK(settled.reason == Reason::SUSPEND);
+    CHECK(settled.reason == Reason::Suspend);
 }
 
 static void test_traffic_gate_needs_a_baseline() {
@@ -195,7 +219,7 @@ static void test_traffic_gate_needs_a_baseline() {
     Traffic t;                                  // known == false
     const Decision d = decide(c, hm(23, 0), t, CYCLE_S, false);
     CHECK(!d.suspend);
-    CHECK(d.reason == Reason::TRAFFIC_UNKNOWN);
+    CHECK(d.reason == Reason::TrafficUnknown);
 
     // With the gate off, a missing baseline is irrelevant — the clock decides.
     Config no_gate = enabled();

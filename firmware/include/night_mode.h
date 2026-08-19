@@ -60,15 +60,23 @@ constexpr uint32_t GRANT_CYCLES = 2;
 
 // Why decide() answered the way it did. Logged verbatim: "the counter kept
 // counting last night" is otherwise a question with six plausible answers.
+//
+// CamelCase, not SCREAMING_CASE, and not by taste: Arduino's esp32-hal-gpio.h
+// carries `#define DISABLED 0x00`, and the preprocessor does not care that
+// these live in an enum class inside a namespace — an all-caps enumerator is
+// substituted anywhere it appears, and the whole namespace fails to parse. The
+// firmware build caught exactly that. Any name added here must stay out of the
+// all-caps macro namespace that Arduino and ESP-IDF share. (This also matches
+// the house style already used by ClaimStatus in hivehub_network.h.)
 enum class Reason : uint8_t {
-    DISABLED,            // night mode is off for this device
-    NO_CLOCK,            // no valid local time — never guess at the schedule
-    INVALID_WINDOW,      // start == end, or a value out of range
-    OUTSIDE_WINDOW,      // daytime
-    RELAY_PENDING,       // an OTA relay is queued for this counter
-    TRAFFIC_UNKNOWN,     // no previous totals to difference yet
-    TRAFFIC_ABOVE_LIMIT, // still busy; postpone to the next cycle
-    SUSPEND,             // all clear: stop sensing
+    Disabled,          // night mode is off for this device
+    NoClock,           // no valid local time — never guess at the schedule
+    InvalidWindow,     // start == end, or a value out of range
+    OutsideWindow,     // daytime
+    RelayPending,      // an OTA relay is queued for this counter
+    TrafficUnknown,    // no previous totals to difference yet
+    TrafficAboveLimit, // still busy; postpone to the next cycle
+    Suspend,           // all clear: stop sensing
 };
 
 // Per-device configuration, as edited in the dashboard and delivered by
@@ -92,7 +100,7 @@ struct Traffic {
 struct Decision {
     bool     suspend    = false;
     uint32_t duration_s = 0;       // 0 when suspend is false
-    Reason   reason     = Reason::DISABLED;
+    Reason   reason     = Reason::Disabled;
 };
 
 // Is `minute` inside the window, which may wrap midnight?
@@ -138,20 +146,20 @@ inline Decision decide(const Config& cfg, uint16_t minute_of_day,
     Decision d;
 
     if (!cfg.enabled) {
-        d.reason = Reason::DISABLED;
+        d.reason = Reason::Disabled;
         return d;
     }
     if (cfg.start_minute >= MINUTES_PER_DAY ||
         cfg.end_minute >= MINUTES_PER_DAY ||
         cfg.start_minute == cfg.end_minute) {
-        d.reason = Reason::INVALID_WINDOW;
+        d.reason = Reason::InvalidWindow;
         return d;
     }
     // An unsynced clock is the one input whose absence is silent: RTC missing
     // and NTP not yet reached leaves a plausible-looking 1970 that would put
     // every hive in the middle of the night forever.
     if (minute_of_day >= MINUTES_PER_DAY) {
-        d.reason = Reason::NO_CLOCK;
+        d.reason = Reason::NoClock;
         return d;
     }
     // Never suspend a counter we are about to stream an image to. The relay
@@ -159,11 +167,11 @@ inline Decision decide(const Config& cfg, uint16_t minute_of_day,
     // because a transfer costs counted bees — so the two would collide exactly
     // when both are meant to run.
     if (relay_pending) {
-        d.reason = Reason::RELAY_PENDING;
+        d.reason = Reason::RelayPending;
         return d;
     }
     if (!inWindow(minute_of_day, cfg.start_minute, cfg.end_minute)) {
-        d.reason = Reason::OUTSIDE_WINDOW;
+        d.reason = Reason::OutsideWindow;
         return d;
     }
     if (cfg.max_traffic > 0) {
@@ -172,31 +180,31 @@ inline Decision decide(const Config& cfg, uint16_t minute_of_day,
         // shutting the beam on a hive that is still flying, and "I don't know"
         // is not "it's quiet". Costs one cycle.
         if (!traffic.known) {
-            d.reason = Reason::TRAFFIC_UNKNOWN;
+            d.reason = Reason::TrafficUnknown;
             return d;
         }
         if (traffic.crossings > cfg.max_traffic) {
-            d.reason = Reason::TRAFFIC_ABOVE_LIMIT;
+            d.reason = Reason::TrafficAboveLimit;
             return d;
         }
     }
 
     d.suspend    = true;
     d.duration_s = grantSeconds(cycle_seconds);
-    d.reason     = Reason::SUSPEND;
+    d.reason     = Reason::Suspend;
     return d;
 }
 
 inline const char* reasonName(Reason r) {
     switch (r) {
-    case Reason::DISABLED:            return "disabled";
-    case Reason::NO_CLOCK:            return "no valid local time";
-    case Reason::INVALID_WINDOW:      return "invalid window";
-    case Reason::OUTSIDE_WINDOW:      return "outside the night window";
-    case Reason::RELAY_PENDING:       return "an OTA relay is queued";
-    case Reason::TRAFFIC_UNKNOWN:     return "no traffic baseline yet";
-    case Reason::TRAFFIC_ABOVE_LIMIT: return "still busy";
-    case Reason::SUSPEND:             return "inside the night window";
+    case Reason::Disabled:          return "disabled";
+    case Reason::NoClock:           return "no valid local time";
+    case Reason::InvalidWindow:     return "invalid window";
+    case Reason::OutsideWindow:     return "outside the night window";
+    case Reason::RelayPending:      return "an OTA relay is queued";
+    case Reason::TrafficUnknown:    return "no traffic baseline yet";
+    case Reason::TrafficAboveLimit: return "still busy";
+    case Reason::Suspend:           return "inside the night window";
     }
     return "unknown";
 }
