@@ -57,6 +57,11 @@ struct Snapshot {
     uint8_t  mcps_healthy     = 0;
     uint32_t total_in         = 0;      // lifetime totals — never reset by us
     uint32_t total_out        = 0;
+    // Seconds of night-mode suspension still to run on the counter ("idle_s",
+    // wire revision 4+); 0 while it is counting, and 0 for any counter too old
+    // to report it. Non-zero says the flat interval that follows is deliberate
+    // — we asked for it — rather than a failed emitter bank.
+    uint32_t idle_s           = 0;
     // 32-bit as of revision 3, saturating on the device rather than wrapping.
     uint32_t glitch_count     = 0;
 };

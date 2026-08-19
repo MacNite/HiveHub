@@ -170,6 +170,9 @@ export const api = {
     scale2_offset: 12010, scale2_factor: 21.7,
     config_version: 4, tempco_enabled: true, tempco_source: "hive_1",
     tempco_ref_temp_c: 25.0, scale1_tempco_kg_per_c: -0.012, scale2_tempco_kg_per_c: -0.011,
+    beecounter_night_mode_enabled: true, beecounter_night_start_minute: 21 * 60,
+    beecounter_night_end_minute: 5 * 60 + 30, beecounter_night_max_traffic: 60,
+    timezone: "CET-1CEST,M3.5.0,M10.5.0/3",
   }),
 
   channels: (deviceId) => {

@@ -88,7 +88,9 @@ DEVICE_CONFIG_SELECT_COLUMNS = """
     scale2_offset, scale2_factor, config_version,
     tempco_enabled, tempco_source, tempco_ref_temp_c,
     scale1_tempco_kg_per_c, scale2_tempco_kg_per_c,
-    scale_offsets_by_hive
+    scale_offsets_by_hive,
+    beecounter_night_mode_enabled, beecounter_night_start_minute,
+    beecounter_night_end_minute, beecounter_night_max_traffic, timezone
 """
 
 
@@ -163,6 +165,11 @@ def device_config_row_to_model(r) -> DeviceConfig:
         tempco_ref_temp_c=r[9], scale1_tempco_kg_per_c=r[10],
         scale2_tempco_kg_per_c=r[11],
         hive_scales=hive_scales_from_json(r[12]),
+        beecounter_night_mode_enabled=r[13],
+        beecounter_night_start_minute=r[14],
+        beecounter_night_end_minute=r[15],
+        beecounter_night_max_traffic=r[16],
+        timezone=r[17],
     )
 
 

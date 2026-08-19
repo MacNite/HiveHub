@@ -65,6 +65,22 @@ static const char* kV3 =
     "\"num_gates\":24,\"mcps_healthy\":3,\"total_in\":100,"
     "\"total_out\":95,\"glitches\":2}";
 
+// The same device again after the night-mode update, counting normally: every
+// v3 key unchanged plus idle_s, which is 0 whenever the counter is sensing.
+static const char* kV4 =
+    "{\"fw\":4,\"ver\":\"0.2.0\",\"uptime_s\":1234,\"status\":15,"
+    "\"num_gates\":24,\"mcps_healthy\":3,\"total_in\":100,"
+    "\"total_out\":95,\"glitches\":2,\"idle_s\":0}";
+
+// A counter mid-suspension at 02:00: status carries bit 0x80 on top of the
+// usual 15, the totals are frozen, and idle_s counts the grant down. This is
+// the document that has to be distinguishable from a counter whose emitters
+// have failed — which would look identical without the last two fields.
+static const char* kV4Idle =
+    "{\"fw\":4,\"ver\":\"0.2.0\",\"uptime_s\":50000,\"status\":143,"
+    "\"num_gates\":24,\"mcps_healthy\":3,\"total_in\":8123,"
+    "\"total_out\":8090,\"glitches\":2,\"idle_s\":1187}";
+
 // ---------------------------------------------------------------------------
 
 static void test_v2_document() {
@@ -97,6 +113,58 @@ static void test_v3_document() {
   eqi("glitch_count", m.glitch_count, 2);
 }
 
+static void test_v4_document() {
+  g_case = "fw:4";
+  std::printf("fw:4 document (counter counting):\n");
+  const Measurement m = parseOrDie(kV4);
+  eqi("protocol_version", m.protocol_version, 4);
+  eqi("mcps_healthy", m.mcps_healthy, 3);
+  eqi("idle_s", m.idle_s, 0);
+  check("not night idle", !isNightIdle(m));
+  check("night bit clear", (m.status_flags & STATUS_NIGHT_IDLE) == 0);
+}
+
+static void test_v4_suspended_document() {
+  // Why the field exists. Totals frozen and no crossings this interval is
+  // exactly what a dead emitter bank produces; idle_s and bit 0x80 are the only
+  // things separating "deliberately not looking" from "broken".
+  g_case = "fw:4 suspended";
+  std::printf("fw:4 document (counter in night mode):\n");
+  const Measurement m = parseOrDie(kV4Idle);
+  eqi("protocol_version", m.protocol_version, 4);
+  eqi("idle_s", m.idle_s, 1187);
+  eqi("status_flags", m.status_flags, 143);      // 15 | 0x80
+  check("is night idle", isNightIdle(m));
+  check("night bit set", (m.status_flags & STATUS_NIGHT_IDLE) != 0);
+  // The rest of the document still decodes: a suspended counter is still
+  // reporting its health, and mcps_healthy staying at 3 is what says the
+  // expanders are fine and the silence is deliberate.
+  eqi("mcps_healthy", m.mcps_healthy, 3);
+  eqi("total_in", m.total_in, 8123);
+}
+
+static void test_night_status_bit_matches_the_counter() {
+  // Duplicated from HiveTraffic's counter_protocol.h because the two firmwares
+  // share no header. If the counter ever moves the bit, this is what catches it
+  // — on this side, where the consequence is misreading every suspended device.
+  g_case = "status bit 0x80";
+  check("STATUS_NIGHT_IDLE is bit 7", STATUS_NIGHT_IDLE == 0x80);
+  check("REV_NIGHT_MODE is 4", REV_NIGHT_MODE == 4);
+}
+
+static void test_older_counters_report_no_suspension() {
+  // A counter that predates night mode cannot be suspended, and must not look
+  // suspended: idle_s defaults to 0 and isNightIdle() is false for both older
+  // revisions, whatever their status byte happens to carry.
+  g_case = "pre-v4 counters";
+  const Measurement v2 = parseOrDie(kV2);
+  const Measurement v3 = parseOrDie(kV3);
+  eqi("v2 idle_s", v2.idle_s, 0);
+  eqi("v3 idle_s", v3.idle_s, 0);
+  check("v2 not idle", !isNightIdle(v2));
+  check("v3 not idle", !isNightIdle(v3));
+}
+
 static void test_both_revisions_agree() {
   // The rename carried no change of meaning, so the two documents above
   // describe the same device state. If this ever diverges, a fleet mid-rollout
@@ -112,6 +180,16 @@ static void test_both_revisions_agree() {
   check("status", a.status_flags == b.status_flags);
   check("num_gates", a.num_gates == b.num_gates);
   check("fw differs", a.protocol_version != b.protocol_version);
+
+  // v4 describes the same device once more: the revision is purely additive, so
+  // nothing a v3 consumer already read may have moved underneath it.
+  const Measurement c = parseOrDie(kV4);
+  check("v3/v4 mcps_healthy", b.mcps_healthy == c.mcps_healthy);
+  check("v3/v4 uptime_s", b.uptime_s == c.uptime_s);
+  check("v3/v4 totals",
+        b.total_in == c.total_in && b.total_out == c.total_out);
+  check("v3/v4 glitches", b.glitch_count == c.glitch_count);
+  check("v3/v4 status", b.status_flags == c.status_flags);
 }
 
 static void test_v3_wide_fields() {
@@ -247,6 +325,10 @@ static void test_mismatched_revision_and_field_name() {
 int main() {
   test_v2_document();
   test_v3_document();
+  test_v4_document();
+  test_v4_suspended_document();
+  test_night_status_bit_matches_the_counter();
+  test_older_counters_report_no_suspension();
   test_both_revisions_agree();
   test_v3_wide_fields();
   test_out_of_range_saturates();

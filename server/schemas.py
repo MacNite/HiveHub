@@ -87,8 +87,8 @@ class HiveBeeCounterIn(BaseModel):
     interval_in: Optional[int] = None
     interval_out: Optional[int] = None
     # The diagnostic fields the counter also reports — protocol_version,
-    # status_flags, uptime_s, num_gates, mcps_healthy, glitch_count — are
-    # deliberately NOT declared. extra="allow" carries them through into
+    # status_flags, uptime_s, num_gates, mcps_healthy, glitch_count, idle_s —
+    # are deliberately NOT declared. extra="allow" carries them through into
     # hive_readings.raw_json, which is where they belong: nothing charts or
     # alerts on them, so a column each would be dead weight.
     #
@@ -97,6 +97,12 @@ class HiveBeeCounterIn(BaseModel):
     # to this key from either wire revision; rows stored before HiveTraffic wire
     # revision 3 carry it as `gates_healthy`, with the same meaning under a name
     # that invited exactly the wrong reading.
+    #
+    # idle_s (wire revision 4) is the night-mode countdown: non-zero means the
+    # flat interval on this row is deliberate — HiveHub asked the counter to
+    # stop sensing because honey bees do not fly at night — rather than a failed
+    # emitter bank. Nothing charts it either, but it is the only thing that
+    # distinguishes the two, so it must reach raw_json intact.
 
 
 class HiveHeartIn(BaseModel):
@@ -482,6 +488,31 @@ class DeviceConfig(BaseModel):
     tempco_ref_temp_c: float = DEFAULT_REF_TEMP_C
     scale1_tempco_kg_per_c: float = 0.0
     scale2_tempco_kg_per_c: float = 0.0
+    # ── HiveTraffic night mode (see firmware/include/night_mode.h) ───────────
+    # A paired bee counter's 48 IR emitters dominate its power draw by an order
+    # of magnitude, and honey bees are diurnal, so HiveHub can tell the counter
+    # to stop sensing overnight. Per device: every counter on one hub shares an
+    # apiary and a sunset. OFF by default — an existing device is unaffected
+    # until this is deliberately turned on.
+    beecounter_night_mode_enabled: bool = False
+    # LOCAL minutes since midnight. start > end wraps midnight, which the
+    # 20:00-06:00 default does; start == end is an EMPTY window, never a 24-hour
+    # one (the firmware refuses it), so a single mis-set field cannot stop a
+    # counter for good.
+    beecounter_night_start_minute: int = 20 * 60
+    beecounter_night_end_minute: int = 6 * 60
+    # Crossings (in + out) in the last upload cycle above which night mode is
+    # postponed to the next cycle — the "the hive is still flying, wait" rule.
+    # 0 disables the check and enters the window on the clock alone.
+    beecounter_night_max_traffic: int = 0
+    # POSIX TZ string, e.g. "CET-1CEST,M3.5.0,M10.5.0/3". Empty means UTC.
+    #
+    # Load-bearing, not cosmetic: the device clock is UTC (configTime(0, 0, …)),
+    # so without this a window entered as 20:00 fires at 21:00 local in summer,
+    # discarding an hour of foraging on exactly the long evenings that have most
+    # of it. A POSIX string rather than an IANA name because the ESP32 has no
+    # tz database — newlib parses this form directly, DST rules included.
+    timezone: str = ""
 
 
 class DeviceConfigUpdate(BaseModel):
@@ -498,6 +529,15 @@ class DeviceConfigUpdate(BaseModel):
     tempco_ref_temp_c: Optional[float] = None
     scale1_tempco_kg_per_c: Optional[float] = None
     scale2_tempco_kg_per_c: Optional[float] = None
+    beecounter_night_mode_enabled: Optional[bool] = None
+    # Bounded here as well as by the database CHECK. An out-of-range minute
+    # makes the firmware refuse the whole window, which presents as "night mode
+    # never happened" with nothing anywhere saying why — so the write is the
+    # only place a human finds out, and it has to reject rather than clamp.
+    beecounter_night_start_minute: Optional[int] = Field(default=None, ge=0, le=1439)
+    beecounter_night_end_minute: Optional[int] = Field(default=None, ge=0, le=1439)
+    beecounter_night_max_traffic: Optional[int] = Field(default=None, ge=0)
+    timezone: Optional[str] = Field(default=None, max_length=64)
 
 
 # The project was renamed HiveScale -> HiveHub, but the canonical OTA target

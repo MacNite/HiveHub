@@ -178,6 +178,16 @@ void loadConfigFromPrefs() {
   scaleMac1 = prefs.getString("scale_mac1", "");
 #endif
 
+  // HiveTraffic night mode. NVS keys are <=15 characters (the ESP32 Preferences
+  // limit) and the defaults match globals.cpp, so a device that has never been
+  // configured — or one whose namespace was wiped — comes back with the feature
+  // off rather than with a half-set window.
+  nightModeEnabled = prefs.getBool("nm_on", false);
+  nightStartMinute = (uint16_t)prefs.getUShort("nm_start", 20 * 60);
+  nightEndMinute   = (uint16_t)prefs.getUShort("nm_end", 6 * 60);
+  nightMaxTraffic  = prefs.getUInt("nm_maxtraf", 0);
+  nightTimezone    = prefs.getString("nm_tz", "");
+
   // HiveTraffic (wireless bee counter) MACs live in the hive registry
   // (gHives[].ble "beecounter" pairings) and are read there by
   // bee_counter_client.cpp, so no per-slot globals are loaded here. The legacy
@@ -192,6 +202,12 @@ void loadConfigFromPrefs() {
   Serial.printf("[PREFS] interval ms: %lu\n", sendIntervalMs);
   Serial.printf("[PREFS] scale1 offset: %ld factor: %.6f\n", scale1Offset, scale1Factor);
   Serial.printf("[PREFS] scale2 offset: %ld factor: %.6f\n", scale2Offset, scale2Factor);
+  Serial.printf("[PREFS] night mode: %s %02u:%02u-%02u:%02u tz=%s max_traffic=%lu\n",
+                nightModeEnabled ? "on" : "off",
+                (unsigned)(nightStartMinute / 60), (unsigned)(nightStartMinute % 60),
+                (unsigned)(nightEndMinute / 60), (unsigned)(nightEndMinute % 60),
+                nightTimezone.length() ? nightTimezone.c_str() : "UTC",
+                (unsigned long)nightMaxTraffic);
 }
 
 void markClaimRegistered() {
@@ -210,6 +226,20 @@ void clearClaimRegistered() {
   prefs.putBool("claim_reg", false);
   prefs.end();
   Serial.println("[PREFS] Claim released; claim_code will be sent again");
+}
+
+// Persist the night-mode window delivered by /config, so a hub that boots
+// without WiFi still honours the last known one. Without this a device that
+// cannot reach the server runs the emitters all night — the exact deployment
+// (off-grid, marginal connectivity) the feature exists for.
+void saveNightModePrefs() {
+  prefs.begin("hivescale", false);
+  prefs.putBool("nm_on", nightModeEnabled);
+  prefs.putUShort("nm_start", nightStartMinute);
+  prefs.putUShort("nm_end", nightEndMinute);
+  prefs.putUInt("nm_maxtraf", nightMaxTraffic);
+  prefs.putString("nm_tz", nightTimezone);
+  prefs.end();
 }
 
 void saveScaleConfig() {

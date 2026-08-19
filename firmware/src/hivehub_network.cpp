@@ -8,6 +8,7 @@
 #include "ca_cert.h"
 #include "hive_config.h"
 #include "heap_diag.h"
+#include "night_mode.h"   // MINUTES_PER_DAY, for clamping the delivered window
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -462,6 +463,39 @@ void fetchRemoteConfig() {
   }
 
   sendIntervalMs = (unsigned long)(doc["send_interval_seconds"] | 600) * 1000UL;
+
+  // HiveTraffic night mode. Applied UNCONDITIONALLY, unlike the calibration
+  // below: the config_version gate exists because a portal-side tare must not
+  // be reverted by a server that never learned about it, and night mode has no
+  // portal-side counterpart to protect — the dashboard is its only source. A
+  // beekeeper who turns the window off expects it off on the next cycle, not
+  // after the next unrelated config edit bumps the version.
+  //
+  // Defaults match globals.cpp, so a server too old to know these keys leaves
+  // the feature off rather than half-configured. The window is clamped here as
+  // well as server-side: night_mode.h refuses an out-of-range window outright,
+  // and "the counter never slept and nothing said why" is a bad way to find out
+  // a field was 1500.
+  nightModeEnabled = doc["beecounter_night_mode_enabled"] | false;
+  {
+    const uint32_t start = doc["beecounter_night_start_minute"] | 1200;
+    const uint32_t end   = doc["beecounter_night_end_minute"] | 360;
+    nightStartMinute = start < nightmode::MINUTES_PER_DAY ? (uint16_t)start : 1200;
+    nightEndMinute   = end   < nightmode::MINUTES_PER_DAY ? (uint16_t)end   : 360;
+  }
+  nightMaxTraffic = doc["beecounter_night_max_traffic"] | 0;
+  nightTimezone   = doc["timezone"] | "";
+  if (nightModeEnabled) {
+    Serial.printf("[CONFIG] Night mode %02u:%02u-%02u:%02u %s, max traffic %lu\n",
+                  (unsigned)(nightStartMinute / 60), (unsigned)(nightStartMinute % 60),
+                  (unsigned)(nightEndMinute / 60), (unsigned)(nightEndMinute % 60),
+                  nightTimezone.length() ? nightTimezone.c_str() : "UTC",
+                  (unsigned long)nightMaxTraffic);
+  }
+  // Persisted so a hub that boots without WiFi still honours the last known
+  // window instead of running the emitters all night waiting for a config it
+  // cannot fetch.
+  saveNightModePrefs();
 
   // Bridge calibration into the hive registry (the authoritative source for the
   // read path) ONLY when the server config actually changed since it was last

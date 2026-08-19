@@ -7,8 +7,11 @@
 #include <string.h>       // strlcpy for the counter's reported version
 #include <NimBLEDevice.h>
 #include "ble_stack.h"
-#include "bee_counter_wire.h"   // the fw:2 / fw:3 tolerant document decoder
+#include "bee_counter_wire.h"   // the tolerant fw:2/3/4 document decoder
 #include "hive_config.h"
+#include "night_mode.h"
+#include "sensors.h"            // localMinuteOfDay()
+#include "globals.h"            // the night-mode config + RTC totals baseline
 #endif
 
 namespace beecnt {
@@ -58,6 +61,12 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
     bc["total_in"]         = snap.total_in;
     bc["total_out"]        = snap.total_out;
     bc["glitch_count"]     = snap.glitch_count;
+    // Emitted unconditionally, including the 0 a counting counter reports and
+    // the 0 a pre-v4 counter implies. Omitting it when zero would make "this
+    // counter cannot be suspended" and "this counter is counting right now"
+    // the same absence in stored history, and the whole reason the field
+    // exists is to tell a deliberate flat interval from a broken one.
+    bc["idle_s"]           = snap.idle_s;
 }
 
 // ---------------------------------------------------------------------------
@@ -93,13 +102,121 @@ bool parseTrafficJson(const char* json, size_t len, Snapshot& out) {
     out.total_in      = m.total_in;
     out.total_out     = m.total_out;
     out.glitch_count  = m.glitch_count;
+    out.idle_s        = m.idle_s;
     return true;
 }
 
+// Write one night-mode grant to an already-connected counter.
+//
+// Returns false when the counter has no control characteristic, which is simply
+// what a pre-v4 firmware looks like: night mode then degrades to "this counter
+// keeps counting", never to an error, and the OTA relay will bring it up to a
+// firmware that can be suspended in the normal course of things.
+//
+// Deliberately fire-and-forget beyond that. The counter's own deadline is the
+// authority, we re-arm every cycle anyway, and a failed write costs one cycle
+// of emitters — not correctness. Blocking the measurement read on it would
+// trade the reading we came for against a power optimisation.
+bool writeIdleGrant(NimBLERemoteService* svc, uint32_t duration_s) {
+    if (!svc) return false;
+    NimBLERemoteCharacteristic* chr =
+        svc->getCharacteristic(NimBLEUUID(BEECOUNTER_GATT_CONTROL_UUID));
+    if (!chr || !chr->canWrite()) return false;
+
+    // opcode + uint32 little-endian, matching beecounter_proto::CTRL_OP_SET_IDLE.
+    uint8_t frame[5];
+    frame[0] = BEECOUNTER_CTRL_OP_SET_IDLE;
+    frame[1] = (uint8_t)(duration_s);
+    frame[2] = (uint8_t)(duration_s >> 8);
+    frame[3] = (uint8_t)(duration_s >> 16);
+    frame[4] = (uint8_t)(duration_s >> 24);
+    // With response: the counter's reply is the only confirmation that the
+    // grant landed, and there is exactly one small write per cycle, so there is
+    // nothing to gain from the unacknowledged variant.
+    return chr->writeValue(frame, sizeof(frame), true);
+}
+
+// Everything the night-mode decision needs that is the same for every counter
+// on this hub: the configured window, the current local time, the upload
+// interval and whether a firmware relay is unfinished. Gathered once per cycle
+// rather than per hive — the clock does not move meaningfully across a handful
+// of GATT sessions, and a window boundary falling between two hives would
+// suspend one and not the other for no reason a beekeeper could reconstruct.
+struct NightContext {
+    nightmode::Config cfg;
+    uint16_t          minute = nightmode::MINUTES_PER_DAY;   // "no clock"
+    uint32_t          cycle_s = 600;
+    bool              relay_pending = false;
+};
+
+// Is a firmware relay in flight?
+//
+// The ordinary relay path needs no guard: checkCommands() runs after this
+// function, a suspended counter still accepts an image (HiveTraffic pauses
+// sensing during a transfer regardless, and refuses a *new* suspension while
+// one is running), and the post-OTA reboot clears any suspension anyway.
+//
+// What this catches is the interrupted case. rtcRelayMagic survives a reset, so
+// it is set exactly while a relay is unfinished — and that is when the counter
+// most needs to be awake, advertising and reachable for the retry, rather than
+// suspended by a HiveHub that is about to try again. Conservative on purpose:
+// it is also set for a HiveInside relay, and one extra cycle of counting is not
+// worth distinguishing them.
+bool relayInFlight() {
+    return rtcRelayMagic != 0;
+}
+
+// Assemble the night-mode configuration the dashboard delivered.
+nightmode::Config nightConfig() {
+    nightmode::Config c;
+    c.enabled      = nightModeEnabled;
+    c.start_minute = nightStartMinute;
+    c.end_minute   = nightEndMinute;
+    c.max_traffic  = nightMaxTraffic;
+    return c;
+}
+
+// Crossings on hive slot `h` since the previous cycle, from the totals kept in
+// RTC memory across HiveHub's own deep sleep. `known` is false until this slot
+// has been read at least once — the gate must not treat "never seen" as "quiet".
+nightmode::Traffic trafficSince(uint8_t h, const Snapshot& snap) {
+    nightmode::Traffic t;
+    if (h >= MAX_HIVES || !snap.present) return t;
+    if (rtcCounterTotalsValid & (1UL << h)) {
+        t.known = true;
+        t.crossings =
+            nightmode::crossingsBetween(rtcCounterTotalIn[h], snap.total_in) +
+            nightmode::crossingsBetween(rtcCounterTotalOut[h], snap.total_out);
+    }
+    return t;
+}
+
+// Remember this cycle's totals as the next cycle's baseline.
+void rememberTotals(uint8_t h, const Snapshot& snap) {
+    if (h >= MAX_HIVES || !snap.present) return;
+    rtcCounterTotalIn[h]  = snap.total_in;
+    rtcCounterTotalOut[h] = snap.total_out;
+    rtcCounterTotalsValid |= (1UL << h);
+}
+
 // Connect to `mac`, read the measurement characteristic once, parse it into
-// `out`. Tries public then random address type (HiveTraffic advertises with the
+// `out`, then decide and apply night mode on the same connection.
+//
+// The ordering is forced and worth stating: the night-mode traffic gate asks
+// how busy this hive was during the cycle that just ended, which is this
+// cycle's fresh totals minus the previous cycle's — so the decision cannot be
+// made until the read has happened. Doing it here rather than in the caller is
+// what keeps it to ONE connection per counter per cycle.
+//
+// Tries public then random address type (HiveTraffic advertises with the
 // ESP32's default random static address, but seeded MACs may be either).
-bool readTrafficSlot(const String& mac, Snapshot& out) {
+//
+// `slot` is the hive index, for the RTC-held totals baseline. A grant of 0 is a
+// real instruction (resume now), not a no-op: it is how a counter suspended by
+// a previous cycle is released the moment the window ends or the beekeeper
+// turns the feature off.
+bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
+                     const NightContext& night) {
     if (mac.length() == 0) return false;
 
     NimBLEClient* client = NimBLEDevice::createClient();
@@ -151,6 +268,41 @@ bool readTrafficSlot(const String& mac, Snapshot& out) {
                 }
             }
         }
+
+        // Now that the totals are in hand, decide — and apply on the
+        // connection we already have: no extra scan, no extra connect, one
+        // 5-byte write. Doing it after the read also means a counter about to
+        // be suspended still reports everything it counted up to this moment;
+        // suspending first would freeze the totals a fraction of a second
+        // before we sampled them.
+        //
+        // A failed read leaves out.present false, so trafficSince() reports no
+        // baseline and the gate (if configured) postpones — which is the right
+        // answer: we have no idea how busy this hive is.
+        const nightmode::Decision decision =
+            nightmode::decide(night.cfg, night.minute, trafficSince(slot, out),
+                              night.cycle_s, night.relay_pending);
+        if (night.cfg.enabled) {
+            if (writeIdleGrant(svc, decision.duration_s)) {
+                Serial.printf("[TRAFFIC] %s: night mode %s (%lus) — %s\n",
+                              mac.c_str(),
+                              decision.suspend ? "armed" : "cleared",
+                              (unsigned long)decision.duration_s,
+                              nightmode::reasonName(decision.reason));
+            } else if (decision.suspend) {
+                // Only worth a line when we wanted something to happen. A
+                // pre-v4 counter has no control characteristic at all, so a
+                // failed "resume" write is its expected steady state and would
+                // otherwise print every cycle, forever.
+                Serial.printf("[TRAFFIC] %s: night mode not applied "
+                              "(counter too old, or write refused)\n",
+                              mac.c_str());
+            }
+        }
+        // The baseline for the next cycle's gate. Only advanced on a successful
+        // read (rememberTotals guards on present), so an unreachable cycle does
+        // not turn into a fabricated interval next time.
+        rememberTotals(slot, out);
     }
 
     // HiveTraffic stays connectable; close the link deterministically and wait
@@ -177,6 +329,12 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
     }
     if (!anyPaired) return;
 
+    NightContext night;
+    night.cfg           = nightConfig();
+    night.minute        = localMinuteOfDay();
+    night.cycle_s       = (uint32_t)(sendIntervalMs / 1000UL);
+    night.relay_pending = relayInFlight();
+
     blestack::acquire();
     uint8_t readAttempts = 0;
     for (uint8_t h = 0; h < hivecfg::gHiveCount && h < cap; h++) {
@@ -191,7 +349,13 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
                 break;
             }
             readAttempts++;
-            (void)readTrafficSlot(p.mac, out[h]);
+
+            // readTrafficSlot reads, then decides, then applies — all on one
+            // connection. The decision has to follow the read because the
+            // traffic gate is about the cycle that just ended, and it has to
+            // precede the disconnect because the alternative is a second
+            // connection per counter per cycle.
+            (void)readTrafficSlot(p.mac, out[h], h, night);
             break;  // at most one HiveTraffic counter per hive
         }
     }
