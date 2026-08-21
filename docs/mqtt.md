@@ -116,6 +116,14 @@ the single value the hive resolves to.
 > Home Assistant updates the device in place (the entity `unique_id`s do not
 > depend on the type).
 >
+> Home Assistant assigns an `entity_id` **once**, when it first registers an
+> entity, and never rewrites it afterwards — so an entity that was created while
+> the beacon was announced under a different identity keeps the old slug (e.g.
+> `sensor.…_holyiot_battery` on a device now correctly named *HiveInside*) even
+> though its displayed name updates. The reading is correct; only the id is
+> historical. Rename it in Home Assistant (entity settings → *Entity ID*) if the
+> stale slug bothers you.
+>
 > Their entity sets differ because the hardware does: the HolyIOT and the
 > RuuviTag have a barometer and send raw axes the hub turns into a vibration
 > RMS/peak, while the HiveInside has no barometer but runs its vibration and

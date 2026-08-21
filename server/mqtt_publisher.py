@@ -390,11 +390,14 @@ class MqttPublisher:
         # a hive that appears later (e.g. added in the portal) still gets entities.
         self._discovered_hives: dict[str, set[int]] = {}
         # Per-device, per in-hive sub-device ("<hive>:<source>") record of what has
-        # been announced: the identity it was announced under plus the flat keys
-        # that already have an entity. Discovery is per field and only fires once
-        # that field actually arrives, so a module is never given entities for
-        # readings it does not produce; a field that shows up later still gets one.
-        self._discovered_subdevices: dict[str, dict[str, tuple[str, set[str]]]] = {}
+        # been announced: the full (manufacturer, model, label) identity it was
+        # announced under plus the flat keys that already have an entity.
+        # Discovery is per field and only fires once that field actually arrives,
+        # so a module is never given entities for readings it does not produce; a
+        # field that shows up later still gets one.
+        self._discovered_subdevices: dict[
+            str, dict[str, tuple[tuple[str, str, str], set[str]]]
+        ] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -562,8 +565,16 @@ class MqttPublisher:
                     # time later just adds its entity then.
                     for source, manufacturer, model, label, sensors in _hive_subdevices(n, payload):
                         key = f"{n}:{source}"
-                        announced_model, announced = seen_sub.get(key, (model, set()))
-                        if announced_model != model:
+                        # The whole identity is the tag, not just the model: the
+                        # generic BLE fallback and the HolyIOT beacon share the
+                        # model "In-hive BLE sensor" and differ only in
+                        # manufacturer and entity-name label, so comparing models
+                        # alone would leave a beacon first seen without a type
+                        # named "Hive N BLE sensor ..." forever once it resolved
+                        # to a HolyIOT.
+                        identity = (manufacturer, model, label)
+                        announced_identity, announced = seen_sub.get(key, (identity, set()))
+                        if announced_identity != identity:
                             # The BLE beacon's type became known, or it was swapped
                             # for a different brand: re-announce everything it
                             # already has under the new identity so the existing
@@ -583,7 +594,7 @@ class MqttPublisher:
                         self._publish_sensor_configs(
                             client, device_id, display_name, todo, device_block=block
                         )
-                        seen_sub[key] = (model, announced | {s[0] for s in todo})
+                        seen_sub[key] = (identity, announced | {s[0] for s in todo})
 
             client.publish(
                 self._device_availability_topic(device_id),
