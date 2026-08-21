@@ -78,7 +78,7 @@ Health check. No authentication required. `version` is the backend server
 version (`SERVER_VERSION` in `server/config.py`).
 
 ```json
-{ "status": "ok", "version": "0.3.0" }
+{ "status": "ok", "version": "0.3.1" }
 ```
 
 ### `GET /api/v1/time`
@@ -377,9 +377,35 @@ Returns the current config for a device. A default config is created if none exi
   "tempco_source": "ambient",
   "tempco_ref_temp_c": 20.0,
   "scale1_tempco_kg_per_c": 0.0,
-  "scale2_tempco_kg_per_c": 0.0
+  "scale2_tempco_kg_per_c": 0.0,
+  "beecounter_night_mode_enabled": false,
+  "beecounter_night_start_minute": 1200,
+  "beecounter_night_end_minute": 360,
+  "beecounter_night_max_traffic": 0,
+  "timezone": ""
 }
 ```
+
+The `beecounter_night_*` fields configure **HiveTraffic night mode** — see
+[hivetraffic-bee-counter.md](hivetraffic-bee-counter.md#night-mode). Unlike the
+calibration fields below, the device applies them on **every** config fetch
+rather than only when `config_version` changes: there is no portal-side
+counterpart to protect, and turning the window off has to take effect on the
+next cycle rather than waiting for an unrelated edit to bump the version.
+
+| Field | Meaning |
+| --- | --- |
+| `beecounter_night_mode_enabled` | Master switch. `false` by default, so an existing device is unaffected until it is turned on. |
+| `beecounter_night_start_minute` / `beecounter_night_end_minute` | The window, in **local** minutes since midnight (0–1439). `start > end` wraps midnight, which the 20:00–06:00 default does. `start == end` is an **empty** window, not a 24-hour one — the firmware refuses it, so a single mis-set field cannot stop a counter for good. |
+| `beecounter_night_max_traffic` | Crossings (in + out) in the last upload cycle above which night mode is postponed to the next cycle. `0` disables the check. |
+| `timezone` | POSIX TZ string, e.g. `CET-1CEST,M3.5.0,M10.5.0/3`. Empty means UTC. |
+
+`timezone` is load-bearing rather than cosmetic. The device clock is UTC, so
+without it a window entered as 20:00 fires at 21:00 local in summer — discarding
+an hour of foraging on exactly the long evenings that have most of it. It is a
+POSIX string rather than an IANA name because the ESP32 carries no tz database;
+newlib parses this form directly, DST rules included. The dashboard offers
+presets for the common zones and a free-text field for anything else.
 
 The `tempco_*` fields drive backend load-cell temperature compensation. They are
 informational for the device (which keeps sending raw weights); the correction is
@@ -1115,7 +1141,7 @@ The backend auto-creates and updates the schema on startup.
 | `devices` | Device identity, claim status, per-device API key hash, display name, last seen, firmware version, and the owner-approved firmware version (accept-to-apply gate) |
 | `device_members` | Users with `owner`, `admin`, or `viewer` role per device |
 | `device_channels` | Display names for scale channel 1 and 2 |
-| `device_configs` | Send interval, offsets, calibration factors, config version |
+| `device_configs` | Send interval, offsets, calibration factors, config version, bee-counter night mode |
 | `measurements` | Measurement records, including power/acoustic/bee-counter columns and `raw_json` |
 | `firmware_releases` | Firmware versions available for OTA, with `target`, `crc32`, and `owner_user_id` (NULL = global/official; otherwise the owner the release is private to) |
 | `device_commands` | Pending, claimed, done, and failed commands, with the `attempts` counter used to recover abandoned claims |

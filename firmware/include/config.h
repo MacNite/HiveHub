@@ -620,6 +620,20 @@
 #ifndef BEECOUNTER_GATT_CHAR_UUID
 #define BEECOUNTER_GATT_CHAR_UUID    "8e8b0102-7a1c-4b9e-9a2f-1d6e0b9c1a01"
 #endif
+// Night-mode control characteristic (HiveTraffic protocol v4 and later). We
+// write "stop sensing for N seconds" here once per cycle for as long as the
+// configured night window lasts; see night_mode.h for the decision and
+// HiveTraffic's docs/ble-mode.md for the frames. A counter too old to have it
+// simply has no such characteristic, and the write is skipped — night mode
+// degrades to "this counter keeps counting", never to an error.
+#ifndef BEECOUNTER_GATT_CONTROL_UUID
+#define BEECOUNTER_GATT_CONTROL_UUID "8e8b0103-7a1c-4b9e-9a2f-1d6e0b9c1a01"
+#endif
+// Control opcodes, mirroring beecounter_proto in the HiveTraffic repo.
+#ifndef BEECOUNTER_CTRL_OP_SET_IDLE
+#define BEECOUNTER_CTRL_OP_SET_IDLE 0x01
+#endif
+
 // OTA characteristics. Unlike HiveInside these live in the SAME service as the
 // measurement characteristic above — HiveTraffic has only one service.
 // Must match HiveTraffic Firmware/src/ble_link.cpp.

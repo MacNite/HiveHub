@@ -1679,6 +1679,96 @@ function renderDevice(root, state) {
     finally { fitBtn.disabled = false; }
   });
 
+  // ── HiveTraffic night mode ──────────────────────────────────────────────
+  // Mirrors server/dashboard/assets/views.js. Times are entered as local
+  // wall-clock and stored as minutes since midnight; the window may wrap
+  // midnight (20:00 -> 06:00).
+  const minutesToHhmm = (m) => {
+    const v = Number(m);
+    if (!Number.isFinite(v) || v < 0 || v > 1439) return "";
+    return `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
+  };
+  const hhmmToMinutes = (text) => {
+    const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(text || "");
+    if (!m) return null;
+    const h = Number(m[1]), min = Number(m[2]);
+    if (h > 23 || min > 59) return null;
+    return h * 60 + min;
+  };
+
+  const nmEnabled = el("input", { type: "checkbox" });
+  nmEnabled.checked = !!cfg.beecounter_night_mode_enabled;
+  const nmStart = el("input", { type: "time", value: minutesToHhmm(cfg.beecounter_night_start_minute ?? 1200) });
+  const nmEnd = el("input", { type: "time", value: minutesToHhmm(cfg.beecounter_night_end_minute ?? 360) });
+  const nmMaxTraffic = el("input", {
+    type: "number", min: "0", step: "1",
+    value: String(cfg.beecounter_night_max_traffic ?? 0),
+  });
+
+  // A POSIX TZ string rather than an IANA name: the ESP32 carries no tz
+  // database, and newlib parses this form directly, DST rules included.
+  const TZ_PRESETS = [
+    ["", "UTC (no local time)"],
+    ["CET-1CEST,M3.5.0,M10.5.0/3", "Central Europe (Berlin, Paris, Madrid)"],
+    ["GMT0BST,M3.5.0/1,M10.5.0", "United Kingdom / Ireland"],
+    ["EET-2EEST,M3.5.0/3,M10.5.0/4", "Eastern Europe (Helsinki, Athens)"],
+    ["EST5EDT,M3.2.0,M11.1.0", "US Eastern"],
+    ["CST6CDT,M3.2.0,M11.1.0", "US Central"],
+    ["MST7MDT,M3.2.0,M11.1.0", "US Mountain"],
+    ["PST8PDT,M3.2.0,M11.1.0", "US Pacific"],
+  ];
+  const nmTzCustom = el("input", {
+    type: "text", placeholder: "CET-1CEST,M3.5.0,M10.5.0/3",
+    value: cfg.timezone || "",
+  });
+  const storedTz = cfg.timezone || "";
+  const isPreset = TZ_PRESETS.some(([value]) => value === storedTz);
+  const nmTzSelect = el("select", { class: "full" },
+    ...TZ_PRESETS.map(([value, label]) =>
+      el("option", { value, selected: isPreset && value === storedTz ? true : null }, label)),
+    el("option", { value: "__custom__", selected: isPreset ? null : true }, "Custom…"));
+  const nmTzCustomRow = fieldRow("POSIX TZ string", nmTzCustom);
+  const syncTzRow = () => { nmTzCustomRow.hidden = nmTzSelect.value !== "__custom__"; };
+  nmTzSelect.addEventListener("change", syncTzRow);
+  syncTzRow();
+
+  // Mirrors server/dashboard/assets/views.js: its own form in its own top-level
+  // drop-down, because folded into the Configuration grid it sat two levels down
+  // inside a closed <details> where nobody would find it.
+  const nmSaveBtn = el("button", { class: "btn", type: "submit" }, "Save night mode");
+  const nmForm = el("form", {},
+    el("div", { class: "config-grid" },
+      el("div", { class: "config-block" },
+        el("h3", {}, "Night mode"),
+        el("p", { class: "note" },
+          "Honey bees are diurnal — flight needs light, and stops below about " +
+          "10 °C regardless — while a HiveTraffic counter's 48 IR emitters are " +
+          "the largest item in its power budget. In this window the counter is " +
+          "told to stop sensing, which is what makes it fit an off-grid supply. " +
+          "It keeps advertising, so readings and firmware relays still work."),
+        el("div", { class: "form-row" },
+          el("label", {}, el("span", {}, "Enable night mode "), nmEnabled)),
+        fieldRow("Night starts (local)", nmStart),
+        fieldRow("Night ends (local)", nmEnd),
+        el("p", { class: "note" },
+          "The window may cross midnight. Setting both to the same time " +
+          "disables it rather than covering the whole day. Leave a margin " +
+          "either side of dusk and dawn: activity peaks just before sunset " +
+          "and just before sunrise."),
+        fieldRow("Timezone", nmTzSelect),
+        nmTzCustomRow,
+        el("p", { class: "note" },
+          "The device clock is UTC. Without a timezone the window drifts by " +
+          "an hour at each daylight-saving change."),
+        fieldRow("Postpone above (crossings per cycle)", nmMaxTraffic),
+        el("p", { class: "note" },
+          "If more than this many bees crossed in the last upload cycle, night " +
+          "mode waits for the next one. 0 goes by the clock alone."))),
+    el("p", { class: "note" },
+      "Applies to every HiveTraffic counter paired to this device. Saving bumps " +
+      "the config version; the counter is told on the next upload cycle."),
+    el("div", { class: "form-actions" }, nmSaveBtn));
+
   const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
   const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
   const cfgForm = el("form", {},
@@ -2361,6 +2451,7 @@ function renderDevice(root, state) {
   node.append(
     topGrid,
     collapsible("Configuration", false, cfgForm, calCard),
+    collapsible("HiveTraffic setup", false, nmForm),
     // Publishing is optional server-side (ENABLE_PUBLIC_EMBEDS): when it is off,
     // every /publish endpoint 404s, so the panel is not built at all rather than
     // offered and then failing on open. state.features comes from the auth

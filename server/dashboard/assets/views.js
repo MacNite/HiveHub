@@ -1888,6 +1888,151 @@ function renderDevice(root, state) {
     finally { fitBtn.disabled = false; }
   });
 
+  // ── HiveTraffic night mode ──────────────────────────────────────────────
+  // A paired bee counter's 48 IR emitters dominate its power draw by an order
+  // of magnitude, and honey bees are diurnal, so the counter can be told to
+  // stop sensing overnight. Times are entered as local wall-clock and stored as
+  // minutes since midnight; the window may wrap midnight (20:00 -> 06:00).
+  const minutesToHhmm = (m) => {
+    const v = Number(m);
+    if (!Number.isFinite(v) || v < 0 || v > 1439) return "";
+    return `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
+  };
+  const hhmmToMinutes = (text) => {
+    const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(text || "");
+    if (!m) return null;
+    const h = Number(m[1]), min = Number(m[2]);
+    if (h > 23 || min > 59) return null;
+    return h * 60 + min;
+  };
+
+  const nmEnabled = el("input", { type: "checkbox" });
+  nmEnabled.checked = !!cfg.beecounter_night_mode_enabled;
+  const nmStart = el("input", { type: "time", value: minutesToHhmm(cfg.beecounter_night_start_minute ?? 1200) });
+  const nmEnd = el("input", { type: "time", value: minutesToHhmm(cfg.beecounter_night_end_minute ?? 360) });
+  const nmMaxTraffic = el("input", {
+    type: "number", min: "0", step: "1",
+    value: String(cfg.beecounter_night_max_traffic ?? 0),
+  });
+
+  // A POSIX TZ string rather than an IANA name, because the ESP32 has no tz
+  // database — newlib parses this form directly, DST rules included. The
+  // presets cover the common cases; "Custom" exposes the raw field for anyone
+  // who needs a zone that is not listed.
+  const TZ_PRESETS = [
+    ["", "UTC (no local time)"],
+    ["CET-1CEST,M3.5.0,M10.5.0/3", "Central Europe (Berlin, Paris, Madrid)"],
+    ["GMT0BST,M3.5.0/1,M10.5.0", "United Kingdom / Ireland"],
+    ["EET-2EEST,M3.5.0/3,M10.5.0/4", "Eastern Europe (Helsinki, Athens)"],
+    ["EST5EDT,M3.2.0,M11.1.0", "US Eastern"],
+    ["CST6CDT,M3.2.0,M11.1.0", "US Central"],
+    ["MST7MDT,M3.2.0,M11.1.0", "US Mountain"],
+    ["PST8PDT,M3.2.0,M11.1.0", "US Pacific"],
+  ];
+  const nmTzCustom = el("input", {
+    type: "text", placeholder: "CET-1CEST,M3.5.0,M10.5.0/3",
+    value: cfg.timezone || "",
+  });
+  const storedTz = cfg.timezone || "";
+  const isPreset = TZ_PRESETS.some(([value]) => value === storedTz);
+  const nmTzSelect = el("select", { class: "full" },
+    ...TZ_PRESETS.map(([value, label]) =>
+      el("option", { value, selected: isPreset && value === storedTz ? true : null }, label)),
+    el("option", { value: "__custom__", selected: isPreset ? null : true }, "Custom…"));
+  const nmTzCustomRow = fieldRow("POSIX TZ string", nmTzCustom);
+  const syncTzRow = () => { nmTzCustomRow.hidden = nmTzSelect.value !== "__custom__"; };
+  nmTzSelect.addEventListener("change", syncTzRow);
+  syncTzRow();
+  const selectedTz = () =>
+    (nmTzSelect.value === "__custom__" ? nmTzCustom.value.trim() : nmTzSelect.value);
+
+  // Its own form and its own save button, in its own top-level drop-down.
+  // Folded into the Configuration grid it was effectively invisible: that panel
+  // is a <details> closed by default, so the fields sat two levels down behind
+  // scale calibration, where nobody looking for a bee-counter setting would
+  // think to look.
+  const nmSaveBtn = el("button", { class: "btn", type: "submit" }, "Save night mode");
+  const nmForm = el("form", {},
+    el("div", { class: "config-grid" },
+      el("div", { class: "config-block" },
+        el("h3", {}, "Night mode"),
+        el("p", { class: "note" },
+          "Honey bees are diurnal — flight needs light, and stops below about " +
+          "10 °C regardless — while a HiveTraffic counter's 48 IR emitters are " +
+          "the largest item in its power budget. In this window the counter is " +
+          "told to stop sensing, which is what makes it fit an off-grid supply. " +
+          "It keeps advertising, so readings and firmware relays still work."),
+        el("div", { class: "form-row" },
+          el("label", {}, el("span", {}, "Enable night mode "), nmEnabled)),
+        fieldRow("Night starts (local)", nmStart),
+        fieldRow("Night ends (local)", nmEnd),
+        el("p", { class: "note" },
+          "The window may cross midnight. Setting both to the same time " +
+          "disables it rather than covering the whole day. Leave a margin " +
+          "either side of dusk and dawn: activity peaks just before sunset " +
+          "and just before sunrise, so a window that starts too early loses " +
+          "real foraging on long summer evenings."),
+        fieldRow("Timezone", nmTzSelect),
+        nmTzCustomRow,
+        el("p", { class: "note" },
+          "The device clock is UTC. Without a timezone the window drifts by " +
+          "an hour at each daylight-saving change."),
+        fieldRow("Postpone above (crossings per cycle)", nmMaxTraffic),
+        el("p", { class: "note" },
+          "If more than this many bees crossed in the last upload cycle, night " +
+          "mode waits for the next one — so a hive still flying at 20:00 in " +
+          "June is not cut off mid-flight. 0 disables the check and goes by " +
+          "the clock alone."))),
+    el("p", { class: "note" },
+      "Applies to every HiveTraffic counter paired to this device. Saving bumps " +
+      "the config version; the counter is told on the next upload cycle."),
+    el("div", { class: "form-actions" }, nmSaveBtn));
+
+  nmForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const patch = {};
+    if (nmEnabled.checked !== !!cfg.beecounter_night_mode_enabled) {
+      patch.beecounter_night_mode_enabled = nmEnabled.checked;
+    }
+    // Times are sent as minutes since midnight. An unparseable or empty field is
+    // left out entirely rather than sent as 0, which is not a missing value but
+    // a real and very wrong window (midnight).
+    const startMin = hhmmToMinutes(nmStart.value);
+    if (startMin !== null && startMin !== cfg.beecounter_night_start_minute) {
+      patch.beecounter_night_start_minute = startMin;
+    }
+    const endMin = hhmmToMinutes(nmEnd.value);
+    if (endMin !== null && endMin !== cfg.beecounter_night_end_minute) {
+      patch.beecounter_night_end_minute = endMin;
+    }
+    const maxTraffic = parseInt(nmMaxTraffic.value, 10);
+    if (Number.isFinite(maxTraffic) && maxTraffic >= 0 &&
+        maxTraffic !== cfg.beecounter_night_max_traffic) {
+      patch.beecounter_night_max_traffic = maxTraffic;
+    }
+    const tz = selectedTz();
+    if (tz !== (cfg.timezone || "")) patch.timezone = tz;
+
+    // Enabling a window whose ends are equal would be stored happily and then
+    // refused by the firmware, so the counter would simply never sleep and
+    // nothing anywhere would say why. Catch it at the only point a human is
+    // looking.
+    const finalStart = patch.beecounter_night_start_minute ?? cfg.beecounter_night_start_minute;
+    const finalEnd = patch.beecounter_night_end_minute ?? cfg.beecounter_night_end_minute;
+    if (nmEnabled.checked && finalStart === finalEnd) {
+      state.toast("Night mode start and end are the same — the window would never apply", "error");
+      return;
+    }
+
+    if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
+    nmSaveBtn.disabled = true;
+    try {
+      await state.actions.updateConfig(patch);
+      state.toast("Night mode saved", "success");
+      state.reload({ full: true });
+    } catch (err) { state.toast(err.message, "error"); nmSaveBtn.disabled = false; }
+  });
+
   const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
   const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
   const cfgForm = el("form", {},
@@ -1947,6 +2092,7 @@ function renderDevice(root, state) {
     if (hiveScales.length) patch.hive_scales = hiveScales;
     if (tcEnabled.checked !== !!cfg.tempco_enabled) patch.tempco_enabled = tcEnabled.checked;
     if (tcSource.value !== cfg.tempco_source) patch.tempco_source = tcSource.value;
+
     if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
     cfgSaveBtn.disabled = true;
     // full: true — a light reload carries the *previous* config over instead of
@@ -2573,6 +2719,7 @@ function renderDevice(root, state) {
   node.append(
     topGrid,
     collapsible("Configuration", false, cfgForm, calCard),
+    collapsible("HiveTraffic setup", false, nmForm),
     // Publishing is optional server-side (ENABLE_PUBLIC_EMBEDS): when it is off,
     // every /publish endpoint 404s, so the panel is not built at all rather than
     // offered and then failing on open. state.features comes from the auth

@@ -60,6 +60,15 @@ the counter reboots and the following measurement read reports the new version.
 and pauses gate polling while writing flash, so every bee crossing during those
 minutes is lost. Relay at night or in poor flying weather.
 
+That advice still holds with [night mode](#night-mode) enabled, and the two do
+not collide: a suspended counter stays advertising and connectable, so the relay
+runs exactly as it would in daylight. The counter refuses a *new* suspension
+while a transfer is in progress, HiveHub does not suspend a counter while a
+relay is unfinished, and the post-OTA reboot clears any suspension anyway — the
+next cycle re-arms it if the window is still open. This is the main reason night
+mode is a sensing suspension rather than deep sleep, which would have made the
+recommended relay window the one time of day a counter is unreachable.
+
 ### Version gate
 
 The relay is refused with `409` unless the release is strictly newer than the
@@ -107,8 +116,8 @@ All HiveTraffic devices share one service/characteristic (overridable via
 The characteristic returns a compact JSON document — **totals only**:
 
 ```json
-{ "fw":3, "ver":"0.2.0", "uptime_s":1234, "status":15, "num_gates":24,
-  "mcps_healthy":3, "total_in":100, "total_out":95, "glitches":2 }
+{ "fw":4, "ver":"0.2.0", "uptime_s":1234, "status":15, "num_gates":24,
+  "mcps_healthy":3, "total_in":100, "total_out":95, "glitches":2, "idle_s":0 }
 ```
 
 `fw` is the wire-protocol revision; `ver` is the counter's own image version,
@@ -119,16 +128,21 @@ HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects.
 The wire format is totals-only by design: no latch/reset command exists over
 BLE, so a missed connection can never lose counts.
 
-### Two wire revisions, both supported
+### Three wire revisions, all supported
 
 `firmware/include/bee_counter_wire.h` reads `fw` **first** and branches on it.
-Both revisions parse, and both produce the same record:
+Every revision parses, and they produce the same record:
 
-| | `fw:2` | `fw:3` |
-| --- | --- | --- |
-| Expander health field | `gates_healthy` | `mcps_healthy` |
-| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit |
-| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating |
+| | `fw:2` | `fw:3` | `fw:4` |
+| --- | --- | --- | --- |
+| Expander health field | `gates_healthy` | `mcps_healthy` | `mcps_healthy` |
+| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit | 32-bit |
+| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating | 32-bit, saturating |
+| `idle_s` + status bit `0x80` | — | — | night-mode countdown |
+
+`fw:4` is purely additive, so the parser read those documents correctly before
+it knew `idle_s` existed — it skips unknown keys. What it could not do is tell a
+*suspended* counter from a broken one, which is the whole reason for reading it.
 
 This is not politeness toward old firmware. **A counter keeps reporting `fw:2`
 until the OTA relay updates it, and the relay reads this very characteristic
@@ -156,6 +170,83 @@ carry `gates_healthy` in `hive_readings.raw_json` with the same meaning.
 The decoder is covered by `test-data/test_bee_counter_wire.cpp`, which parses a
 captured document of each revision and asserts they decode identically. It runs
 in CI on a plain host compiler — no ESP32 and no counter required.
+
+## Night mode
+
+A HiveTraffic counter's 48 IR emitters are its power budget: 24 series pairs
+behind 22 Ω ballast, all lit together for the settle+read window of every 5 ms
+poll — roughly 0.5–1.0 A peak and, at the pulsed sampler's ~35 % duty, an
+average an order of magnitude above the ~18 mA the ESP32-C6 and its three port
+expanders draw between them. On an off-grid hive it is the whole supply.
+
+European honey bees are diurnal. Flight requires light — they do not fly in
+darkness at any temperature — and stops below roughly 10 °C regardless, so
+overnight that draw buys nothing. Night mode parks the emitters.
+
+**It is off by default.** Turn it on per device under **Device & admin →
+Bee counter night mode**, or `PATCH` the config fields directly (see
+[api.md](api.md#get-apiv1devicesdevice_idconfig)).
+
+| Setting | Meaning |
+| --- | --- |
+| Enable night mode | Master switch |
+| Night starts / ends | **Local** wall-clock times. The window may cross midnight; setting both the same disables it rather than covering the whole day |
+| Timezone | POSIX TZ string. The device clock is UTC, so without one the window drifts an hour at each DST change |
+| Postpone above | Crossings in the last cycle above which night mode waits for the next one. 0 goes by the clock alone |
+
+### How it works
+
+The counter has no RTC, no NVS and no network, and this design deliberately does
+not give it any. HiveHub owns the schedule and tells the counter only a bounded
+**duration** — "stop sensing for N seconds" — re-armed once per upload cycle for
+as long as the window lasts:
+
+1. `bee_counter_client.cpp` reads the measurement characteristic as usual.
+2. `night_mode.h::decide()` weighs the local clock, the window, the traffic gate
+   and whether a firmware relay is unfinished.
+3. If it says suspend, a 5-byte `SET_IDLE` frame goes out **on the same
+   connection** — no extra scan, no extra connect.
+4. The counter reports `idle_s` and status bit `0x80` until the grant expires.
+
+Every path that is not certain returns "keep counting": no valid local time, no
+traffic baseline yet, a window whose ends are equal, a relay in flight. The
+worst outcome of a bug here is a counter that counts, which is what it did
+before the feature existed. The grant is deliberately short (two upload cycles,
+capped at an hour on both sides), so a HiveHub that dies mid-night cannot leave
+a counter blind — the deadline simply runs out.
+
+The traffic gate is the "not yet" rule: if more bees crossed in the last cycle
+than the threshold, night mode waits. It is evaluated from the totals of the
+*previous* cycle, held in RTC memory across HiveHub's own deep sleep, which for
+a threshold like "fewer than 100 crossings in the last ten minutes" is the
+intended reading. A hive with no baseline yet — first cycle after a reboot — is
+postponed rather than waved through: "I don't know how busy this is" is not "it
+is quiet".
+
+### Why not deep sleep
+
+Deep sleep saves the residual ~18 mA on top of what parking the emitters already
+saves, under 10 % of the total, and costs the measurement read (every night row
+would carry `bee_counter.ok=false`), the firmware relay path that is
+specifically recommended for night use, the ability to cancel a wrong schedule,
+the counter's RAM-held lifetime totals, and a truthful `uptime_s`. The ESP32-C6's
+deep-sleep timer also runs off a temperature-dependent internal RC oscillator:
+over an 8–12 h sleep in a hive that swings 10–25 °C, expect minutes of drift and
+up to ~30 minutes worst case. Re-arming a short grant against HiveHub's DS3231
+(±2 ppm) means nothing accumulates. See HiveTraffic's `docs/ble-mode.md` for the
+device-side reasoning.
+
+### Reading the data
+
+The counter's totals are frozen while suspended, so the differenced interval
+across the window is a genuine zero rather than a gap — the same value a quiet
+night produces anyway. What `idle_s` adds is the ability to tell that zero from
+a counter whose emitter FETs have died, which otherwise produces an identical
+row. It is stored on every reading as `hives[].bee_counter.idle_s`.
+
+Counters running firmware older than `fw:4` have no control characteristic. The
+write is skipped and they keep counting; the OTA relay will bring them up to a
+firmware that can be suspended in the normal course of things.
 
 ## Intervals are differenced server-side
 

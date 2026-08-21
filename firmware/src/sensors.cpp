@@ -15,6 +15,7 @@
 #include <WiFi.h>
 #include <time.h>
 #include <sys/time.h>
+#include <stdlib.h>   // setenv(), for the night-mode timezone
 #include <math.h>
 #include <vector>
 
@@ -29,6 +30,8 @@
 #if ENABLE_BEEHIVE_GATT
 #include "beehive_gatt.h"
 #endif
+
+#include "night_mode.h"   // nightmode::MINUTES_PER_DAY, the "no clock" sentinel
 
 void initializeTime(bool wokeFromDeepSleep) {
   if (rtcHasValidTime()) {
@@ -45,6 +48,65 @@ void initializeTime(bool wokeFromDeepSleep) {
   }
 
   syncTime();
+}
+
+// ---------------------------------------------------------------------------
+// Local wall-clock time, for the HiveTraffic night-mode window
+// ---------------------------------------------------------------------------
+// Everything else in this firmware works in UTC and never has to care: readings
+// carry a UTC timestamp and the backend does the rest. Night mode is the one
+// feature the beekeeper expresses in local time — "20:00" means 20:00 at the
+// apiary — so this is where UTC becomes local, and the only place a timezone
+// exists at all.
+//
+// It matters more than it looks. configTime(0, 0, ...) puts the device on UTC,
+// so without a TZ a window entered as 20:00 would fire at 21:00 local in
+// summer and 20:00 in winter — an hour of foraging silently discarded on the
+// long evenings when there is most of it. The TZ string carries the DST rules,
+// so the window tracks the clock on the wall all year.
+
+// Push the configured POSIX TZ into the C library, when it changes. Cheap and
+// idempotent: called from the accessor below rather than from a setup path, so
+// no ordering between "config arrived" and "window evaluated" can leave a stale
+// zone in place.
+static void applyNightTimezone() {
+  static String applied = "\x01";   // impossible value: forces the first apply
+  if (applied == nightTimezone) return;
+  applied = nightTimezone;
+  if (nightTimezone.length()) {
+    setenv("TZ", nightTimezone.c_str(), 1);
+  } else {
+    setenv("TZ", "UTC0", 1);
+  }
+  tzset();
+  Serial.printf("[TIME] Timezone set to %s\n",
+                nightTimezone.length() ? nightTimezone.c_str() : "UTC");
+}
+
+// Current UTC epoch, or 0 when there is no trustworthy clock.
+//
+// The system clock is preferred because NTP sets it directly; the DS3231 is the
+// fallback for a boot with no WiFi. Both hold UTC — syncTime() writes gmtime()
+// into the RTC — so DateTime::unixtime() is a straight conversion and no
+// timezone is involved on this side.
+static time_t currentUtcEpoch() {
+  const time_t sys = time(nullptr);
+  if (sys > 1700000000) return sys;      // plausible: past Nov 2023
+  if (rtcHasValidTime()) return (time_t)rtc.now().unixtime();
+  return 0;
+}
+
+uint16_t localMinuteOfDay() {
+  const time_t epoch = currentUtcEpoch();
+  // No clock: the caller must treat this as "do not guess". An unsynced device
+  // reports a plausible-looking 1970, which is the middle of the night, and
+  // would otherwise park every counter in the fleet indefinitely.
+  if (epoch == 0) return nightmode::MINUTES_PER_DAY;
+
+  applyNightTimezone();
+  struct tm local;
+  if (localtime_r(&epoch, &local) == nullptr) return nightmode::MINUTES_PER_DAY;
+  return (uint16_t)(local.tm_hour * 60 + local.tm_min);
 }
 
 String timestampNow() {

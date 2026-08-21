@@ -11,6 +11,13 @@
 
 String timestampNow();
 void syncTime();
+
+// Local wall-clock minutes since midnight (0..1439), honouring the configured
+// POSIX timezone, or nightmode::MINUTES_PER_DAY when there is no trustworthy
+// clock. Only the HiveTraffic night-mode window uses local time; everything
+// else in this firmware is UTC. See the comment above the definition for why
+// the timezone is load-bearing rather than cosmetic.
+uint16_t localMinuteOfDay();
 void initializeTime(bool wokeFromDeepSleep);
 
 float weightFromRaw(long raw, long offset, float factor);

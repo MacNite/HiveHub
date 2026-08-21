@@ -72,14 +72,25 @@ jobs:
           /tmp/test_beehive_decode
       # The HiveTraffic measurement decoder is a two-repo wire contract: it has
       # to keep reading fw:2 documents from counters the OTA relay has not
-      # reached yet as well as the fw:3 ones current firmware emits. Both
-      # captured documents are asserted here.
+      # reached yet, as well as the fw:3 and fw:4 ones newer firmware emits.
+      # A captured document of each revision is asserted here.
       - name: Build and run bee counter wire tests
         run: |
           set -e
           g++ -std=gnu++17 -Wall -Wextra -Werror -I firmware/include \
               -o /tmp/test_bee_counter_wire test-data/test_bee_counter_wire.cpp
           /tmp/test_bee_counter_wire
+      # Night mode decides whether to blind a bee counter, and gets it wrong
+      # quietly in both directions — a lost day of foraging looks like bad
+      # weather, and a counter that never sleeps looks like nothing at all.
+      # Midnight wrap, an unsynced clock and the traffic gate are all pinned
+      # here rather than left to a season of field observation.
+      - name: Build and run night mode tests
+        run: |
+          set -e
+          g++ -std=gnu++17 -Wall -Wextra -Werror -I firmware/include \
+              -o /tmp/test_night_mode test-data/test_night_mode.cpp
+          /tmp/test_night_mode
 
   server-tests:
     runs-on: ubuntu-latest

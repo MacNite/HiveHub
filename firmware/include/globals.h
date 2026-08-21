@@ -133,6 +133,26 @@ extern String scaleMac1;
 // up to MAX_HIVES. Paired in the portal, seeded via HIVE_i_JSON, or via the
 // legacy WBEECNT_n_MAC / counter_mac{0,1} keys (migrated into the registry).
 
+// ---- HiveTraffic night mode ----------------------------------------------
+// When to tell a paired HiveTraffic counter to stop sensing, because honey bees
+// are diurnal and its 48 IR emitters are the largest item in an off-grid power
+// budget. Delivered by /api/v1/devices/{id}/config, persisted in NVS so a hub
+// that boots without WiFi still applies the last known window, and decided per
+// cycle by night_mode.h. OFF unless deliberately enabled.
+//
+// The window is LOCAL wall-clock minutes since midnight and may wrap midnight
+// (20:00 -> 06:00 is start 1200, end 360). See nightTimezone below: without a
+// TZ the device clock is UTC, and "20:00" would drift by an hour twice a year.
+extern bool     nightModeEnabled;
+extern uint16_t nightStartMinute;
+extern uint16_t nightEndMinute;
+// Crossings (in + out) in the last cycle above which night mode is postponed to
+// the next one. 0 disables the check.
+extern uint32_t nightMaxTraffic;
+// POSIX TZ string (e.g. "CET-1CEST,M3.5.0,M10.5.0/3"), applied with setenv()/
+// tzset() so localtime() honours it. Empty means UTC.
+extern String   nightTimezone;
+
 // ---- Scale calibration ----------------------------------------------------
 extern long scale1Offset;
 extern long scale2Offset;
@@ -156,6 +176,16 @@ extern uint32_t rtcBootCount;
 // See markRelayInFlight()/reportInterruptedRelay() in hivehub_network.cpp.
 extern uint32_t rtcRelayCommandId;
 extern uint32_t rtcRelayMagic;
+// Previous cycle's HiveTraffic lifetime totals, per hive index, so the night
+// mode traffic gate can difference them into "crossings since the last cycle".
+// In RTC memory because HiveHub deep-sleeps between cycles: in plain RAM there
+// would never be a previous reading to compare against, and the gate would
+// postpone night mode forever. rtcCounterTotalsValid is a per-hive bitmask, so
+// a hive that has never been read is "unknown" rather than "zero" — which the
+// gate treats very differently.
+extern uint32_t rtcCounterTotalIn[MAX_HIVES];
+extern uint32_t rtcCounterTotalOut[MAX_HIVES];
+extern uint32_t rtcCounterTotalsValid;
 
 // ---- Small shared utilities ----------------------------------------------
 void debugLine();

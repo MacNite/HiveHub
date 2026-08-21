@@ -3,7 +3,7 @@
 
 #include <esp_system.h>
 
-const char* const FIRMWARE_VERSION = "0.24.16";
+const char* const FIRMWARE_VERSION = "0.24.17";
 
 #if ENABLE_HX711
 HX711 scale1;
@@ -47,6 +47,16 @@ unsigned long lastCycleMs = 0;
 unsigned long lastOtaCheckMs = 0;
 unsigned long provisioningStartedMs = 0;
 unsigned long sendIntervalMs = 10UL * 60UL * 1000UL;
+
+// HiveTraffic night mode. Defaults are the feature switched OFF with a
+// plausible window behind it, so enabling it in the dashboard is one checkbox
+// and never a half-configured state. See night_mode.h for what they mean and
+// hivehub_network.cpp::fetchRemoteConfig for where they come from.
+bool     nightModeEnabled = false;
+uint16_t nightStartMinute = 20 * 60;   // 20:00 local
+uint16_t nightEndMinute   = 6 * 60;    // 06:00 local
+uint32_t nightMaxTraffic  = 0;         // 0 = no traffic gate
+String   nightTimezone    = "";        // empty = UTC
 unsigned long calibrationModeStartedMs = 0;
 unsigned long calibrationModeIntervalMs = CALIBRATION_MODE_DEFAULT_INTERVAL_MS;
 unsigned long calibrationModeTimeoutMs = CALIBRATION_MODE_DEFAULT_TIMEOUT_MS;
@@ -93,6 +103,16 @@ RTC_DATA_ATTR uint32_t rtcBootCount = 0;
 // The magic guards against reading whatever a power-on reset left behind.
 RTC_DATA_ATTR uint32_t rtcRelayCommandId = 0;
 RTC_DATA_ATTR uint32_t rtcRelayMagic = 0;
+
+// Previous cycle's HiveTraffic totals per hive, for the night-mode traffic
+// gate. RTC memory because HiveHub deep-sleeps between cycles — in plain RAM
+// there would never be a previous reading and the gate would postpone night
+// mode forever. The validity bitmask matters: hive N never read yet must be
+// "unknown", not "zero crossings", or the gate would wave through a hive it has
+// no information about. Zeroed on a cold boot, which is exactly right.
+RTC_DATA_ATTR uint32_t rtcCounterTotalIn[MAX_HIVES] = {0};
+RTC_DATA_ATTR uint32_t rtcCounterTotalOut[MAX_HIVES] = {0};
+RTC_DATA_ATTR uint32_t rtcCounterTotalsValid = 0;
 
 void debugLine() {
   Serial.println("----------------------------------------");

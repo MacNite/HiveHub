@@ -442,6 +442,30 @@ def init_db():
                 ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS tempco_by_hive JSONB;
                 ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS scale_offsets_by_hive JSONB;
 
+                -- HiveTraffic night mode (migration 025). Per device, not per
+                -- hive: every counter on one hub shares an apiary and a sunset.
+                -- The window is LOCAL minutes since midnight and may wrap
+                -- (20:00-06:00 is 1200 -> 360); `timezone` is a POSIX TZ string
+                -- and is load-bearing, because the device clock is UTC and
+                -- without it the window drifts an hour at each DST change.
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS beecounter_night_mode_enabled BOOLEAN NOT NULL DEFAULT false;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS beecounter_night_start_minute INTEGER NOT NULL DEFAULT 1200;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS beecounter_night_end_minute INTEGER NOT NULL DEFAULT 360;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS beecounter_night_max_traffic INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT '';
+                -- An out-of-range minute makes the firmware refuse the window
+                -- outright, which presents as "night mode never happened" with
+                -- nothing saying why. Reject it where a human can see it.
+                ALTER TABLE device_configs DROP CONSTRAINT IF EXISTS device_configs_night_start_check;
+                ALTER TABLE device_configs ADD CONSTRAINT device_configs_night_start_check
+                    CHECK (beecounter_night_start_minute BETWEEN 0 AND 1439);
+                ALTER TABLE device_configs DROP CONSTRAINT IF EXISTS device_configs_night_end_check;
+                ALTER TABLE device_configs ADD CONSTRAINT device_configs_night_end_check
+                    CHECK (beecounter_night_end_minute BETWEEN 0 AND 1439);
+                ALTER TABLE device_configs DROP CONSTRAINT IF EXISTS device_configs_night_max_traffic_check;
+                ALTER TABLE device_configs ADD CONSTRAINT device_configs_night_max_traffic_check
+                    CHECK (beecounter_night_max_traffic >= 0);
+
                 CREATE TABLE IF NOT EXISTS firmware_releases (
                     id BIGSERIAL PRIMARY KEY,
                     version TEXT NOT NULL,
