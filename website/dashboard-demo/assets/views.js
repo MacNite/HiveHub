@@ -1732,33 +1732,14 @@ function renderDevice(root, state) {
   nmTzSelect.addEventListener("change", syncTzRow);
   syncTzRow();
 
-  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
-  const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
-  const cfgForm = el("form", {},
+  // Mirrors server/dashboard/assets/views.js: its own form in its own top-level
+  // drop-down, because folded into the Configuration grid it sat two levels down
+  // inside a closed <details> where nobody would find it.
+  const nmSaveBtn = el("button", { class: "btn", type: "submit" }, "Save night mode");
+  const nmForm = el("form", {},
     el("div", { class: "config-grid" },
       el("div", { class: "config-block" },
-        el("h3", {}, "General"),
-        el("div", { class: "rows" },
-          metaRow("Device ID", state.device?.device_id || DASH),
-          metaRow("Config version", cfg.config_version ?? DASH)),
-        fieldRow("Send interval (s)", numInput("send_interval_seconds", true))),
-      el("div", { class: "config-block" },
-        el("h3", {}, "Scale calibration & compensation"),
-        fieldRow("Scale", scaleSelect),
-        ...scaleGroups.values(),
-        el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
-        fieldRow("Tempco source", tcSource),
-        fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c")),
-        el("p", { class: "note" },
-          "The temperature at which this scale reads true — the one it was tared and " +
-          "spanned at. The correction is zero there and grows as the temperature moves " +
-          "away from it, so fitting a coefficient never changes it."),
-        el("div", { class: "fit-row" },
-          fieldRow("Fit lookback (days)", lookbackInput),
-          el("div", { class: "form-actions" }, fitBtn)),
-        fitOut),
-      el("div", { class: "config-block" },
-        el("h3", {}, "Bee counter night mode"),
+        el("h3", {}, "Night mode"),
         el("p", { class: "note" },
           "Honey bees are diurnal — flight needs light, and stops below about " +
           "10 °C regardless — while a HiveTraffic counter's 48 IR emitters are " +
@@ -1783,6 +1764,36 @@ function renderDevice(root, state) {
         el("p", { class: "note" },
           "If more than this many bees crossed in the last upload cycle, night " +
           "mode waits for the next one. 0 goes by the clock alone."))),
+    el("p", { class: "note" },
+      "Applies to every HiveTraffic counter paired to this device. Saving bumps " +
+      "the config version; the counter is told on the next upload cycle."),
+    el("div", { class: "form-actions" }, nmSaveBtn));
+
+  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
+  const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
+  const cfgForm = el("form", {},
+    el("div", { class: "config-grid" },
+      el("div", { class: "config-block" },
+        el("h3", {}, "General"),
+        el("div", { class: "rows" },
+          metaRow("Device ID", state.device?.device_id || DASH),
+          metaRow("Config version", cfg.config_version ?? DASH)),
+        fieldRow("Send interval (s)", numInput("send_interval_seconds", true))),
+      el("div", { class: "config-block" },
+        el("h3", {}, "Scale calibration & compensation"),
+        fieldRow("Scale", scaleSelect),
+        ...scaleGroups.values(),
+        el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
+        fieldRow("Tempco source", tcSource),
+        fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c")),
+        el("p", { class: "note" },
+          "The temperature at which this scale reads true — the one it was tared and " +
+          "spanned at. The correction is zero there and grows as the temperature moves " +
+          "away from it, so fitting a coefficient never changes it."),
+        el("div", { class: "fit-row" },
+          fieldRow("Fit lookback (days)", lookbackInput),
+          el("div", { class: "form-actions" }, fitBtn)),
+        fitOut)),
     el("p", { class: "note" }, "Saving bumps the config version; the device applies it on its next check-in."),
     el("div", { class: "form-actions" }, cfgSaveBtn));
   showScale();
@@ -2440,6 +2451,7 @@ function renderDevice(root, state) {
   node.append(
     topGrid,
     collapsible("Configuration", false, cfgForm, calCard),
+    collapsible("HiveTraffic setup", false, nmForm),
     // Publishing is optional server-side (ENABLE_PUBLIC_EMBEDS): when it is off,
     // every /publish endpoint 404s, so the panel is not built at all rather than
     // offered and then failing on open. state.features comes from the auth

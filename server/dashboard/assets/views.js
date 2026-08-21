@@ -1946,33 +1946,16 @@ function renderDevice(root, state) {
   const selectedTz = () =>
     (nmTzSelect.value === "__custom__" ? nmTzCustom.value.trim() : nmTzSelect.value);
 
-  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
-  const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
-  const cfgForm = el("form", {},
+  // Its own form and its own save button, in its own top-level drop-down.
+  // Folded into the Configuration grid it was effectively invisible: that panel
+  // is a <details> closed by default, so the fields sat two levels down behind
+  // scale calibration, where nobody looking for a bee-counter setting would
+  // think to look.
+  const nmSaveBtn = el("button", { class: "btn", type: "submit" }, "Save night mode");
+  const nmForm = el("form", {},
     el("div", { class: "config-grid" },
       el("div", { class: "config-block" },
-        el("h3", {}, "General"),
-        el("div", { class: "rows" },
-          metaRow("Device ID", state.device?.device_id || DASH),
-          metaRow("Config version", cfg.config_version ?? DASH)),
-        fieldRow("Send interval (s)", numInput("send_interval_seconds", true))),
-      el("div", { class: "config-block" },
-        el("h3", {}, "Scale calibration & compensation"),
-        fieldRow("Scale", scaleSelect),
-        ...scaleGroups.values(),
-        el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
-        fieldRow("Tempco source", tcSource),
-        fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c")),
-        el("p", { class: "note" },
-          "The temperature at which this scale reads true — the one it was tared and " +
-          "spanned at. The correction is zero there and grows as the temperature moves " +
-          "away from it, so fitting a coefficient never changes it."),
-        el("div", { class: "fit-row" },
-          fieldRow("Fit lookback (days)", lookbackInput),
-          el("div", { class: "form-actions" }, fitBtn)),
-        fitOut),
-      el("div", { class: "config-block" },
-        el("h3", {}, "Bee counter night mode"),
+        el("h3", {}, "Night mode"),
         el("p", { class: "note" },
           "Honey bees are diurnal — flight needs light, and stops below about " +
           "10 °C regardless — while a HiveTraffic counter's 48 IR emitters are " +
@@ -2000,6 +1983,81 @@ function renderDevice(root, state) {
           "mode waits for the next one — so a hive still flying at 20:00 in " +
           "June is not cut off mid-flight. 0 disables the check and goes by " +
           "the clock alone."))),
+    el("p", { class: "note" },
+      "Applies to every HiveTraffic counter paired to this device. Saving bumps " +
+      "the config version; the counter is told on the next upload cycle."),
+    el("div", { class: "form-actions" }, nmSaveBtn));
+
+  nmForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const patch = {};
+    if (nmEnabled.checked !== !!cfg.beecounter_night_mode_enabled) {
+      patch.beecounter_night_mode_enabled = nmEnabled.checked;
+    }
+    // Times are sent as minutes since midnight. An unparseable or empty field is
+    // left out entirely rather than sent as 0, which is not a missing value but
+    // a real and very wrong window (midnight).
+    const startMin = hhmmToMinutes(nmStart.value);
+    if (startMin !== null && startMin !== cfg.beecounter_night_start_minute) {
+      patch.beecounter_night_start_minute = startMin;
+    }
+    const endMin = hhmmToMinutes(nmEnd.value);
+    if (endMin !== null && endMin !== cfg.beecounter_night_end_minute) {
+      patch.beecounter_night_end_minute = endMin;
+    }
+    const maxTraffic = parseInt(nmMaxTraffic.value, 10);
+    if (Number.isFinite(maxTraffic) && maxTraffic >= 0 &&
+        maxTraffic !== cfg.beecounter_night_max_traffic) {
+      patch.beecounter_night_max_traffic = maxTraffic;
+    }
+    const tz = selectedTz();
+    if (tz !== (cfg.timezone || "")) patch.timezone = tz;
+
+    // Enabling a window whose ends are equal would be stored happily and then
+    // refused by the firmware, so the counter would simply never sleep and
+    // nothing anywhere would say why. Catch it at the only point a human is
+    // looking.
+    const finalStart = patch.beecounter_night_start_minute ?? cfg.beecounter_night_start_minute;
+    const finalEnd = patch.beecounter_night_end_minute ?? cfg.beecounter_night_end_minute;
+    if (nmEnabled.checked && finalStart === finalEnd) {
+      state.toast("Night mode start and end are the same — the window would never apply", "error");
+      return;
+    }
+
+    if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
+    nmSaveBtn.disabled = true;
+    try {
+      await state.actions.updateConfig(patch);
+      state.toast("Night mode saved", "success");
+      state.reload({ full: true });
+    } catch (err) { state.toast(err.message, "error"); nmSaveBtn.disabled = false; }
+  });
+
+  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
+  const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
+  const cfgForm = el("form", {},
+    el("div", { class: "config-grid" },
+      el("div", { class: "config-block" },
+        el("h3", {}, "General"),
+        el("div", { class: "rows" },
+          metaRow("Device ID", state.device?.device_id || DASH),
+          metaRow("Config version", cfg.config_version ?? DASH)),
+        fieldRow("Send interval (s)", numInput("send_interval_seconds", true))),
+      el("div", { class: "config-block" },
+        el("h3", {}, "Scale calibration & compensation"),
+        fieldRow("Scale", scaleSelect),
+        ...scaleGroups.values(),
+        el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
+        fieldRow("Tempco source", tcSource),
+        fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c")),
+        el("p", { class: "note" },
+          "The temperature at which this scale reads true — the one it was tared and " +
+          "spanned at. The correction is zero there and grows as the temperature moves " +
+          "away from it, so fitting a coefficient never changes it."),
+        el("div", { class: "fit-row" },
+          fieldRow("Fit lookback (days)", lookbackInput),
+          el("div", { class: "form-actions" }, fitBtn)),
+        fitOut)),
     el("p", { class: "note" }, "Saving bumps the config version; the device applies it on its next check-in."),
     el("div", { class: "form-actions" }, cfgSaveBtn));
   showScale();
@@ -2034,39 +2092,6 @@ function renderDevice(root, state) {
     if (hiveScales.length) patch.hive_scales = hiveScales;
     if (tcEnabled.checked !== !!cfg.tempco_enabled) patch.tempco_enabled = tcEnabled.checked;
     if (tcSource.value !== cfg.tempco_source) patch.tempco_source = tcSource.value;
-
-    // Night mode. Times are sent as minutes since midnight; an unparseable or
-    // empty time field is left out entirely rather than sent as 0, which is a
-    // real and very wrong window (midnight) rather than a missing value.
-    if (nmEnabled.checked !== !!cfg.beecounter_night_mode_enabled) {
-      patch.beecounter_night_mode_enabled = nmEnabled.checked;
-    }
-    const startMin = hhmmToMinutes(nmStart.value);
-    if (startMin !== null && startMin !== cfg.beecounter_night_start_minute) {
-      patch.beecounter_night_start_minute = startMin;
-    }
-    const endMin = hhmmToMinutes(nmEnd.value);
-    if (endMin !== null && endMin !== cfg.beecounter_night_end_minute) {
-      patch.beecounter_night_end_minute = endMin;
-    }
-    const maxTraffic = parseInt(nmMaxTraffic.value, 10);
-    if (Number.isFinite(maxTraffic) && maxTraffic >= 0 &&
-        maxTraffic !== cfg.beecounter_night_max_traffic) {
-      patch.beecounter_night_max_traffic = maxTraffic;
-    }
-    const tz = selectedTz();
-    if (tz !== (cfg.timezone || "")) patch.timezone = tz;
-
-    // Enabling a window whose ends are equal would be stored happily and then
-    // refused by the firmware, so the counter would simply never sleep and
-    // nothing anywhere would say why. Catch it at the only point a human is
-    // looking.
-    const finalStart = patch.beecounter_night_start_minute ?? cfg.beecounter_night_start_minute;
-    const finalEnd = patch.beecounter_night_end_minute ?? cfg.beecounter_night_end_minute;
-    if (nmEnabled.checked && finalStart === finalEnd) {
-      state.toast("Night mode start and end are the same — the window would never apply", "error");
-      return;
-    }
 
     if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
     cfgSaveBtn.disabled = true;
@@ -2694,6 +2719,7 @@ function renderDevice(root, state) {
   node.append(
     topGrid,
     collapsible("Configuration", false, cfgForm, calCard),
+    collapsible("HiveTraffic setup", false, nmForm),
     // Publishing is optional server-side (ENABLE_PUBLIC_EMBEDS): when it is off,
     // every /publish endpoint 404s, so the panel is not built at all rather than
     // offered and then failing on open. state.features comes from the auth
