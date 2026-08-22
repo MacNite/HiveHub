@@ -382,7 +382,10 @@ Returns the current config for a device. A default config is created if none exi
   "beecounter_night_start_minute": 1200,
   "beecounter_night_end_minute": 360,
   "beecounter_night_max_traffic": 0,
-  "timezone": ""
+  "timezone": "",
+  "beecounter_bank1_enabled": true,
+  "beecounter_bank2_enabled": true,
+  "beecounter_bank3_enabled": true
 }
 ```
 
@@ -399,6 +402,33 @@ next cycle rather than waiting for an unrelated edit to bump the version.
 | `beecounter_night_start_minute` / `beecounter_night_end_minute` | The window, in **local** minutes since midnight (0–1439). `start > end` wraps midnight, which the 20:00–06:00 default does. `start == end` is an **empty** window, not a 24-hour one — the firmware refuses it, so a single mis-set field cannot stop a counter for good. |
 | `beecounter_night_max_traffic` | Crossings (in + out) in the last upload cycle above which night mode is postponed to the next cycle. `0` disables the check. |
 | `timezone` | POSIX TZ string, e.g. `CET-1CEST,M3.5.0,M10.5.0/3`. Empty means UTC. |
+
+The `beecounter_bank*_enabled` fields configure **HiveTraffic emitter banks** —
+see [hivetraffic-bee-counter.md](hivetraffic-bee-counter.md#emitter-banks).
+Applied on every config fetch for the same reason the night-mode fields are.
+
+| Field | Meaning |
+| --- | --- |
+| `beecounter_bank1_enabled` | Emitter MOSFET for gates 00–07. `true` by default. |
+| `beecounter_bank2_enabled` | Emitter MOSFET for gates 10–17. `true` by default. |
+| `beecounter_bank3_enabled` | Emitter MOSFET for gates 20–27. `true` by default. |
+
+A counter's 48 IR emitters sit behind three MOSFETs, one per group of eight
+gates, and they dominate its power draw. Measured on the counter's 3.3 V rail:
+one bank ~0.14 A, two ~0.22 A, three ~0.30 A — roughly 80 mA per bank on top of
+a ~60 mA floor. Switching one off stops its eight gates being counted at all, so
+the totals drop in proportion; the counter reports the mask back as
+`hives[].bee_counter.banks` so a deliberately dark bank is distinguishable from
+a failed one.
+
+A PATCH that would leave **all three** disabled is rejected with `400`. The
+counter refuses a mask of zero outright — it keeps the mask it had — so storing
+one would only leave the dashboard and the hardware permanently disagreeing. A
+counter that should count nothing is unpaired instead.
+
+The device requires HiveTraffic firmware 0.3.0 (wire revision 5) or newer to
+apply the mask; on an older counter the write is skipped and all three banks
+stay on.
 
 `timezone` is load-bearing rather than cosmetic. The device clock is UTC, so
 without it a window entered as 20:00 fires at 21:00 local in summer — discarding

@@ -3,7 +3,7 @@
 
 #include <esp_system.h>
 
-const char* const FIRMWARE_VERSION = "0.24.18";
+const char* const FIRMWARE_VERSION = "0.24.19";
 
 #if ENABLE_HX711
 HX711 scale1;
@@ -57,6 +57,12 @@ uint16_t nightStartMinute = 20 * 60;   // 20:00 local
 uint16_t nightEndMinute   = 6 * 60;    // 06:00 local
 uint32_t nightMaxTraffic  = 0;         // 0 = no traffic gate
 String   nightTimezone    = "";        // empty = UTC
+
+// HiveTraffic emitter banks: all three enabled until /config says otherwise,
+// which matches the counter's own power-on default. Assembled from the three
+// per-bank booleans in fetchRemoteConfig() and re-asserted over BLE every
+// cycle, because the counter deliberately does not persist it.
+uint8_t  beeBankMask      = BEECOUNTER_BANK_MASK_ALL;
 unsigned long calibrationModeStartedMs = 0;
 unsigned long calibrationModeIntervalMs = CALIBRATION_MODE_DEFAULT_INTERVAL_MS;
 unsigned long calibrationModeTimeoutMs = CALIBRATION_MODE_DEFAULT_TIMEOUT_MS;

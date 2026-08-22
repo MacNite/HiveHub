@@ -81,6 +81,24 @@ static const char* kV4Idle =
     "\"num_gates\":24,\"mcps_healthy\":3,\"total_in\":8123,"
     "\"total_out\":8090,\"glitches\":2,\"idle_s\":1187}";
 
+// The same device again after the emitter-bank update, running everything:
+// every v4 key unchanged plus "banks", which is 7 whenever all three MOSFETs
+// are enabled — which is every counter nobody has deliberately narrowed.
+static const char* kV5 =
+    "{\"fw\":5,\"ver\":\"0.3.0\",\"uptime_s\":1234,\"status\":15,"
+    "\"num_gates\":24,\"mcps_healthy\":3,\"total_in\":100,"
+    "\"total_out\":95,\"glitches\":2,\"idle_s\":0,\"banks\":7}";
+
+// A counter running one bank: eight gates counted, sixteen deliberately dark.
+// num_gates still reports 24 because that is what is WIRED; the mask is what
+// says how much of it is looking. This is the document that has to be
+// distinguishable from a counter with two dead emitter FETs, which produces the
+// same permanently flat two thirds of the totals.
+static const char* kV5OneBank =
+    "{\"fw\":5,\"ver\":\"0.3.0\",\"uptime_s\":9000,\"status\":15,"
+    "\"num_gates\":24,\"mcps_healthy\":3,\"total_in\":410,"
+    "\"total_out\":402,\"glitches\":1,\"idle_s\":0,\"banks\":1}";
+
 // ---------------------------------------------------------------------------
 
 static void test_v2_document() {
@@ -141,6 +159,78 @@ static void test_v4_suspended_document() {
   // expanders are fine and the silence is deliberate.
   eqi("mcps_healthy", m.mcps_healthy, 3);
   eqi("total_in", m.total_in, 8123);
+}
+
+static void test_v5_document() {
+  g_case = "fw:5";
+  std::printf("fw:5 document (all three emitter banks live):\n");
+  const Measurement m = parseOrDie(kV5);
+  eqi("protocol_version", m.protocol_version, 5);
+  eqs("version", m.version, "0.3.0");
+  eqi("bank_mask", m.bank_mask, 7);
+  eqi("active gates", activeGates(m), 24);
+  check("no bank disabled", !hasDisabledBank(m));
+  // Everything v4 carried still decodes: the revision is purely additive.
+  eqi("mcps_healthy", m.mcps_healthy, 3);
+  eqi("idle_s", m.idle_s, 0);
+  eqi("total_in", m.total_in, 100);
+}
+
+static void test_v5_narrowed_document() {
+  // Why the field exists. Two thirds of the entrance contributing nothing, for
+  // good, is character for character what two dead emitter FETs produce; the
+  // mask is the only thing separating "deliberately narrowed" from "broken".
+  g_case = "fw:5 one bank";
+  std::printf("fw:5 document (counter narrowed to one bank):\n");
+  const Measurement m = parseOrDie(kV5OneBank);
+  eqi("bank_mask", m.bank_mask, 1);
+  eqi("active gates", activeGates(m), 8);
+  check("a bank is disabled", hasDisabledBank(m));
+  // num_gates describes the BOARD and must not move with the mask — every
+  // stored reading would silently change meaning if it did.
+  eqi("num_gates", m.num_gates, 24);
+  // And it is not suspended: the two power controls are independent, and a
+  // narrowed counter is still counting on the banks it has.
+  check("not night idle", !isNightIdle(m));
+}
+
+static void test_older_counters_report_every_bank_on() {
+  // The default that matters. A counter too old to report "banks" is running
+  // its whole entrance — it has no way not to — so the absence of the field
+  // must read as 0x07, never as 0. A zero default would make every counter the
+  // OTA relay has not reached yet look like it had been switched off, and that
+  // reading would be written into stored history.
+  g_case = "pre-v5 counters";
+  const Measurement v2 = parseOrDie(kV2);
+  const Measurement v4 = parseOrDie(kV4);
+  eqi("v2 bank_mask", v2.bank_mask, BANK_MASK_ALL);
+  eqi("v4 bank_mask", v4.bank_mask, BANK_MASK_ALL);
+  eqi("v4 active gates", activeGates(v4), 24);
+  check("v2 no bank disabled", !hasDisabledBank(v2));
+  check("v4 no bank disabled", !hasDisabledBank(v4));
+}
+
+static void test_phantom_banks_are_masked_off() {
+  // A four-FET board's mask arriving at this parser must not report a bank
+  // HiveHub would then try to address. Bits above the third are dropped.
+  g_case = "phantom bank bits";
+  const Measurement m = parseOrDie("{\"fw\":5,\"banks\":255}");
+  eqi("bank_mask", m.bank_mask, BANK_MASK_ALL);
+  eqi("active gates", activeGates(m), 24);
+  // A mask of 0 is not something the counter can be in — it refuses one — so
+  // it is stored as read rather than flattened to ALL, which would hide it.
+  const Measurement zero = parseOrDie("{\"fw\":5,\"banks\":0}");
+  eqi("zero stays zero", zero.bank_mask, 0);
+  eqi("zero active gates", activeGates(zero), 0);
+}
+
+static void test_bank_constants_match_the_counter() {
+  // Duplicated from HiveTraffic's counter_protocol.h because the two firmwares
+  // share no header. If the counter grows a fourth FET, or moves the revision
+  // that introduced the field, this is what catches it on this side.
+  g_case = "bank constants";
+  check("BANK_MASK_ALL is three banks", BANK_MASK_ALL == 0x07);
+  check("REV_LED_BANKS is 5", REV_LED_BANKS == 5);
 }
 
 static void test_night_status_bit_matches_the_counter() {
@@ -327,6 +417,11 @@ int main() {
   test_v3_document();
   test_v4_document();
   test_v4_suspended_document();
+  test_v5_document();
+  test_v5_narrowed_document();
+  test_older_counters_report_every_bank_on();
+  test_phantom_banks_are_masked_off();
+  test_bank_constants_match_the_counter();
   test_night_status_bit_matches_the_counter();
   test_older_counters_report_no_suspension();
   test_both_revisions_agree();

@@ -466,6 +466,22 @@ def init_db():
                 ALTER TABLE device_configs ADD CONSTRAINT device_configs_night_max_traffic_check
                     CHECK (beecounter_night_max_traffic >= 0);
 
+                -- HiveTraffic emitter-bank enables (migration 026). One
+                -- IRLB8721 MOSFET per MCP23017 since the 2026-08 board, so each
+                -- third of the entrance is independently switchable: bank 1 =
+                -- gates 00..07, bank 2 = 10..17, bank 3 = 20..27. Measured at
+                -- 3.3 V, one bank draws ~0.14 A, two ~0.22 A, three ~0.30 A.
+                -- All TRUE by default: a counter runs its whole entrance until
+                -- someone deliberately narrows it. Three booleans rather than a
+                -- bitmask because the dashboard draws three checkboxes and a
+                -- config dump should be readable. No CHECK forbidding all-false
+                -- here — the dashboard refuses it and the counter refuses to
+                -- apply it, and a constraint would break a PATCH that turns the
+                -- last one off and another one on at once.
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS beecounter_bank1_enabled BOOLEAN NOT NULL DEFAULT true;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS beecounter_bank2_enabled BOOLEAN NOT NULL DEFAULT true;
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS beecounter_bank3_enabled BOOLEAN NOT NULL DEFAULT true;
+
                 CREATE TABLE IF NOT EXISTS firmware_releases (
                     id BIGSERIAL PRIMARY KEY,
                     version TEXT NOT NULL,

@@ -485,6 +485,36 @@ void fetchRemoteConfig() {
   }
   nightMaxTraffic = doc["beecounter_night_max_traffic"] | 0;
   nightTimezone   = doc["timezone"] | "";
+
+  // HiveTraffic emitter banks, delivered as three booleans and assembled into
+  // the bitmask the counter's SET_BANKS opcode takes. Applied unconditionally
+  // for the same reason the window above is: the dashboard is the only source,
+  // so there is no local edit for a config_version gate to protect.
+  //
+  // Defaults are all-on, per field, so a server too old to know these keys
+  // leaves every counter running its full entrance rather than switching banks
+  // off on the strength of a missing key.
+  {
+    uint8_t mask = 0;
+    if (doc["beecounter_bank1_enabled"] | true) mask |= 0x01;
+    if (doc["beecounter_bank2_enabled"] | true) mask |= 0x02;
+    if (doc["beecounter_bank3_enabled"] | true) mask |= 0x04;
+    // An all-off mask is refused rather than stored. The dashboard will not
+    // save one and the counter will not apply one, so honouring it here would
+    // only produce a HiveHub that believes it switched a counter off and a
+    // counter that is still counting — with the disagreement invisible until
+    // someone compares the two.
+    if (mask == 0) {
+      Serial.println("[CONFIG] All bee counter banks disabled in config — ignoring");
+      mask = BEECOUNTER_BANK_MASK_ALL;
+    }
+    if (mask != beeBankMask) {
+      Serial.printf("[CONFIG] Bee counter banks 0x%02X -> 0x%02X\n",
+                    (unsigned)beeBankMask, (unsigned)mask);
+    }
+    beeBankMask = mask;
+  }
+
   if (nightModeEnabled) {
     Serial.printf("[CONFIG] Night mode %02u:%02u-%02u:%02u %s, max traffic %lu\n",
                   (unsigned)(nightStartMinute / 60), (unsigned)(nightStartMinute % 60),
@@ -493,8 +523,8 @@ void fetchRemoteConfig() {
                   (unsigned long)nightMaxTraffic);
   }
   // Persisted so a hub that boots without WiFi still honours the last known
-  // window instead of running the emitters all night waiting for a config it
-  // cannot fetch.
+  // window and bank mask, instead of running the emitters all night — or all
+  // 24 gates — waiting for a config it cannot fetch.
   saveNightModePrefs();
 
   // Bridge calibration into the hive registry (the authoritative source for the

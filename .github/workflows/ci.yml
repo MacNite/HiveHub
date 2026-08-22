@@ -72,8 +72,8 @@ jobs:
           /tmp/test_beehive_decode
       # The HiveTraffic measurement decoder is a two-repo wire contract: it has
       # to keep reading fw:2 documents from counters the OTA relay has not
-      # reached yet, as well as the fw:3 and fw:4 ones newer firmware emits.
-      # A captured document of each revision is asserted here.
+      # reached yet, as well as the fw:3, fw:4 and fw:5 ones newer firmware
+      # emits. A captured document of each revision is asserted here.
       - name: Build and run bee counter wire tests
         run: |
           set -e
@@ -129,6 +129,7 @@ jobs:
           python3 test-data/test_ble_sensor_rules.py
           python3 test-data/test_sd_import.py
           python3 test-data/test_data_export.py
+          python3 test-data/test_bee_counter_banks.py
           python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hive_tempcomp.py \
                             test-data/test_hiveheart_fft.py \
                             test-data/test_mqtt_ha_discovery.py \

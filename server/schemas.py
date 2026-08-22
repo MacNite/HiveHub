@@ -87,9 +87,9 @@ class HiveBeeCounterIn(BaseModel):
     interval_in: Optional[int] = None
     interval_out: Optional[int] = None
     # The diagnostic fields the counter also reports — protocol_version,
-    # status_flags, uptime_s, num_gates, mcps_healthy, glitch_count, idle_s —
-    # are deliberately NOT declared. extra="allow" carries them through into
-    # hive_readings.raw_json, which is where they belong: nothing charts or
+    # status_flags, uptime_s, num_gates, mcps_healthy, glitch_count, idle_s,
+    # banks — are deliberately NOT declared. extra="allow" carries them through
+    # into hive_readings.raw_json, which is where they belong: nothing charts or
     # alerts on them, so a column each would be dead weight.
     #
     # mcps_healthy counts MCP23017 port expanders (0..3), NOT gates — each
@@ -103,6 +103,15 @@ class HiveBeeCounterIn(BaseModel):
     # stop sensing because honey bees do not fly at night — rather than a failed
     # emitter bank. Nothing charts it either, but it is the only thing that
     # distinguishes the two, so it must reach raw_json intact.
+    #
+    # banks (wire revision 5) is the same argument at a third of the counter:
+    # a bitmask of the three emitter MOSFETs that are enabled (bit 0 = gates
+    # 00..07, and so on; 7 = all three). A cleared bit means those eight gates
+    # are deliberately dark, so their share of the totals is permanently flat —
+    # character for character what a dead FET produces. It is emitted on every
+    # reading, including the 7 of a counter nobody has narrowed, because a field
+    # that appeared only when interesting would make "all banks on" and "counter
+    # too old to say" the same absence.
 
 
 class HiveHeartIn(BaseModel):
@@ -513,6 +522,25 @@ class DeviceConfig(BaseModel):
     # of it. A POSIX string rather than an IANA name because the ESP32 has no
     # tz database — newlib parses this form directly, DST rules included.
     timezone: str = ""
+    # ── HiveTraffic emitter banks (see firmware/include/bee_counter_client.h) ─
+    # The counter's 48 IR emitters sit behind three IRLB8721 MOSFETs, one per
+    # MCP23017, so each third of the entrance is independently switchable:
+    # bank 1 = gates 00..07, bank 2 = 10..17, bank 3 = 20..27. Measured on the
+    # counter's 3.3 V rail, one bank draws ~0.14 A, two ~0.22 A and three
+    # ~0.30 A — about 80 mA per bank on top of a ~60 mA floor.
+    #
+    # All three ON by default: a counter runs its whole entrance until someone
+    # deliberately narrows it. Turning one off stops eight gates being counted
+    # at all, so their share of the totals goes permanently flat — which is why
+    # the counter reports the mask back (wire revision 5) rather than leaving it
+    # indistinguishable from a dead FET.
+    #
+    # Three booleans rather than one bitmask: the dashboard draws three
+    # checkboxes and this object is read by humans. The firmware assembles the
+    # mask it writes over BLE.
+    beecounter_bank1_enabled: bool = True
+    beecounter_bank2_enabled: bool = True
+    beecounter_bank3_enabled: bool = True
 
 
 class DeviceConfigUpdate(BaseModel):
@@ -538,6 +566,13 @@ class DeviceConfigUpdate(BaseModel):
     beecounter_night_end_minute: Optional[int] = Field(default=None, ge=0, le=1439)
     beecounter_night_max_traffic: Optional[int] = Field(default=None, ge=0)
     timezone: Optional[str] = Field(default=None, max_length=64)
+    # Emitter banks. Not validated against each other here: a PATCH carries only
+    # the fields that changed, so "is the last bank being turned off?" cannot be
+    # answered from this object alone — it needs the stored row. That check runs
+    # in update_device_config(), which has both halves.
+    beecounter_bank1_enabled: Optional[bool] = None
+    beecounter_bank2_enabled: Optional[bool] = None
+    beecounter_bank3_enabled: Optional[bool] = None
 
 
 # The project was renamed HiveScale -> HiveHub, but the canonical OTA target
