@@ -348,7 +348,7 @@ static void portalRunBleScan() {
 }
 
 // Map a recognised advertisement format to the portal's sensor-type vocabulary
-// (the SENSOR_TYPES keys in the setup-page script) so picking a device from the
+// (the BEACON_TYPES keys in the setup-page script) so picking a device from the
 // dropdown can pre-select its type. Devices that advertise no known in-hive
 // format (including GATT-mode sensors, which carry no measurement payload) map
 // to "" and leave the type dropdown untouched.
@@ -848,10 +848,12 @@ void handleSetupRoot() {
   // ── Hive-centric mapping ───────────────────────────────────────────────────
   // Top-level "+ Add hive"; each hive maps exactly one scale source (HX711,
   // NAU7802 channel, or beehivemonitoring.com HiveScale) and its in-hive
-  // sensors (one BLE beacon/GATT OR one wired DS18B20 probe). The page submits one JSON
-  // blob per hive in exactly the shape hivecfg::hiveFromJson() parses.
+  // sensors — one per lane (ble_lanes.h): a beacon OR a wired DS18B20 probe,
+  // plus a HiveTraffic bee counter, plus a HiveHeart. The page submits one JSON
+  // blob per hive in exactly the shape hivecfg::hiveFromJson() parses, which
+  // re-checks every lane; the add-button state here is convenience only.
   html += "<fieldset><legend>Hives &amp; sensors</legend>";
-  html += "<p>Add a hive, choose its single scale source, then optionally add exactly one in-hive sensor: either one BLE beacon/GATT sensor or one wired DS18B20 probe. An I2C scan ran when this page loaded; ";
+  html += "<p>Add a hive, choose its single scale source, then add its in-hive sensors: up to three BLE sensors &mdash; one beacon, one HiveTraffic bee counter, one HiveHeart &mdash; where the beacon slot may instead hold a wired DS18B20 probe. An I2C scan ran when this page loaded; ";
   html += "see <a href='/i2c/scan'>I2C scan details</a> to verify wiring. ";
 #if ENABLE_BLE_SCAN
   html += "A BLE scan ran when the portal started: discovered sensors can be picked from the dropdown next to each MAC field, and the field stays editable for sensors that are currently powered off. ";
@@ -893,7 +895,13 @@ void handleSetupRoot() {
 
   // Inline controller (no external assets — works on the offline captive portal).
   html += R"HVJS(<script>(function(){
-var SENSOR_TYPES=[["holyiot","HolyIot 25015 — beacon"],["ruuvitag","RuuviTag — beacon"],["hiveinside_nrf54","HiveInside (nRF54LM20A) — beacon"],["hiveheart","HiveHeart — GATT"],["beecounter","HiveTraffic counter — GATT"]];
+// Only the beacon formats share a slot: HolyIot, RuuviTag and HiveInside all
+// decode into the one hives[].ble object, so they stay one dropdown. The
+// counter and HiveHeart own their own nested objects and get their own add
+// buttons instead — see ble_lanes.h, which hiveFromJson enforces on save.
+var BEACON_TYPES=[["holyiot","HolyIot 25015 — beacon"],["ruuvitag","RuuviTag — beacon"],["hiveinside_nrf54","HiveInside (nRF54LM20A) — beacon"]];
+function laneOf(t){return t=="hivescale"?"scale":(t=="beecounter"?"counter":(t=="hiveheart"?"heart":"beacon"));}
+var LANE_LABEL={counter:"HiveTraffic counter &mdash; GATT",heart:"HiveHeart &mdash; GATT"};
 var host=document.getElementById("hives"),form=document.getElementById("cfgform"),dsList=document.getElementById("dsprobeopts");
 if(dsList)dsList.innerHTML=(DETECTED_PROBES||[]).map(function(r){return "<option value='"+r+"'>";}).join("");
 function clone(o){return JSON.parse(JSON.stringify(o));}
@@ -907,16 +915,21 @@ function allWiredScales(){var seen={},out=[],nau=0;DETECTED_SCALES.forEach(funct
 function add(o){var k=scaleKey(o);if(seen[k])return;var c=clone(o);c.label=labelScale(c,nau);seen[k]=1;out.push(c);}
 DETECTED_SCALES.forEach(add);if(addDefaultNau)add(DEFAULT_NAU_SCALE);return out;}
 function findScale(k){var scales=allWiredScales();for(var i=0;i<scales.length;i++)if(scaleKey(scales[i])==k)return clone(scales[i]);return null;}
-function normalizeHive(h){var s=(h.s||[]).slice(0,1),bl=[],wirelessMac="",ds=(typeof h.ds=="string")?h.ds:(h.ds?h.ds:null);(h.bl||[]).forEach(function(b){if(b.t=="hivescale"){if(!wirelessMac)wirelessMac=b.m||"";}else if(ds===null&&bl.length<MAX_INHIVE_BLE){bl.push({t:b.t,m:b.m||""});}});return {i:h.i,n:h.n||"",s:s,ds:ds,bl:bl,sk:s.length?scaleKey(s[0]):(wirelessMac?"ble":"none"),wm:wirelessMac};}
+function normalizeHive(h){var s=(h.s||[]).slice(0,1),bl=[],wirelessMac="",seen={},ds=(typeof h.ds=="string")?h.ds:(h.ds?h.ds:null);
+if(ds!==null)seen.beacon=1;
+(h.bl||[]).forEach(function(b){var t=b.t||"holyiot",ln=laneOf(t);if(ln=="scale"){if(!wirelessMac)wirelessMac=b.m||"";return;}if(seen[ln])return;seen[ln]=1;bl.push({t:t,m:b.m||""});});
+return {i:h.i,n:h.n||"",s:s,ds:ds,bl:bl,sk:s.length?scaleKey(s[0]):(wirelessMac?"ble":"none"),wm:wirelessMac};}
 var HIVES=(INITIAL_HIVES||[]).map(normalizeHive);
 function usedScales(){var u={};HIVES.forEach(function(h){h.s.forEach(function(o){u[scaleKey(o)]=1;});});return u;}
 function usedProbes(){var u={};HIVES.forEach(function(h){if(h.ds)u[h.ds]=1;});return u;}
 function nextScale(){var u=usedScales(),scales=allWiredScales();for(var i=0;i<scales.length;i++){if(!u[scaleKey(scales[i])])return clone(scales[i]);}return null;}
 function nextProbe(){var u=usedProbes();for(var i=0;i<DETECTED_PROBES.length;i++){if(!u[DETECTED_PROBES[i]])return DETECTED_PROBES[i];}return "";}
 function nextIndex(){var u={};HIVES.forEach(function(h){u[h.i]=1;});for(var i=1;i<=MAX_HIVES;i++){if(!u[i])return i;}return MAX_HIVES;}
-function hasInhiveSensor(h){return h.ds!==null||h.bl.length>=MAX_INHIVE_BLE;}
+// A DS18B20 fills the beacon lane: probe and beacon are the same in-hive
+// temperature slot, so a hive takes one or the other.
+function hasLane(h,ln){if(ln=="beacon"&&h.ds!==null)return true;for(var i=0;i<h.bl.length;i++)if(laneOf(h.bl[i].t)==ln)return true;return false;}
 function scaleOpts(h){var sel=h.sk||"none",html="<option value='none'"+(sel=="none"?" selected":"")+">(no scale)</option>",scales=allWiredScales(),seen={};scales.forEach(function(o){seen[scaleKey(o)]=1;});if(h.s[0]&&!seen[scaleKey(h.s[0])]){var saved=clone(h.s[0]);saved.label=labelScale(saved,1)+" (saved; not detected)";scales.unshift(saved);}scales.forEach(function(o){var k=scaleKey(o);html+="<option value='"+k+"'"+(k==sel?" selected":"")+">"+o.label+"</option>";});html+="<option value='ble'"+(sel=="ble"?" selected":"")+">BLE HiveScale from Beehivemonitoring</option>";return html;}
-function typeOpts(sel){return SENSOR_TYPES.map(function(t){return "<option value='"+t[0]+"'"+(t[0]==sel?" selected":"")+">"+t[1]+"</option>";}).join("");}
+function beaconOpts(sel){return BEACON_TYPES.map(function(t){return "<option value='"+t[0]+"'"+(t[0]==sel?" selected":"")+">"+t[1]+"</option>";}).join("");}
 function setScaleChoice(h,val){h.sk=val;if(val=="ble"||val=="none"){h.s=[];return;}var n=findScale(val);if(n){var old=h.s[0]||{};n.off=old.off||0;n.fac=old.fac||-7050;h.s=[n];}}
 function render(){
 host.innerHTML="";
@@ -925,7 +938,7 @@ var c=document.createElement("fieldset");c.className="wsrow";
 c.innerHTML="<legend>Hive "+h.i+"</legend>"+
 "<label>Name (optional)</label><input data-hn placeholder='e.g. Apiary A #3'>"+
 "<h3>Scale</h3><div data-scale-wrap></div>"+
-"<h3>In-hive sensor</h3><div data-sensors></div><p class='meta'>Choose either one BLE sensor or one DS18B20 probe.</p><p><button type='button' class='button' data-addble>&#10133; Add BLE sensor</button> <button type='button' class='button' data-addds>&#10133; Add DS18B20</button></p>"+
+"<h3>In-hive sensors</h3><div data-sensors></div><p class='meta'>Up to three BLE sensors per hive, one of each kind: an in-hive beacon, a HiveTraffic bee counter and a HiveHeart. The wired DS18B20 shares the beacon slot &mdash; both supply the hive temperature &mdash; so add a beacon <i>or</i> a probe, not both.</p><p><button type='button' class='button' data-addble>&#10133; Add BLE in-hive sensor</button> <button type='button' class='button' data-addds>&#10133; Add DS18B20</button> <button type='button' class='button' data-addbc>&#10133; Add HiveTraffic counter</button> <button type='button' class='button' data-addhh>&#10133; Add HiveHeart</button></p>"+
 "<p><button type='button' class='button danger' data-delhive>Remove hive</button></p>";
 host.appendChild(c);
 var nm=c.querySelector("[data-hn]");nm.value=h.n||"";nm.addEventListener("input",function(){h.n=this.value;});
@@ -941,17 +954,23 @@ row.innerHTML="<b>Wired DS18B20</b> <input data-ds list='dsprobeopts' pattern='[
 sn.appendChild(row);
 var dss=row.querySelector("[data-ds]");dss.value=h.ds||"";dss.addEventListener("input",function(){h.ds=dss.value.trim();});
 row.querySelector("[data-rm]").addEventListener("click",function(){h.ds=null;render();});}
-h.bl.slice(0,MAX_INHIVE_BLE).forEach(function(b,bi){var row=document.createElement("p");row.className="wnote";
-row.innerHTML="<select data-bt>"+typeOpts(b.t)+"</select>"+(BLE_SCAN?" <select data-bsel></select>":"")+" <input data-bm placeholder='AA:BB:CC:DD:EE:FF'> <button type='button' class='button' data-rm>Remove</button>";
+h.bl.slice(0,MAX_INHIVE_BLE).forEach(function(b,bi){var ln=laneOf(b.t),row=document.createElement("p");row.className="wnote";
+row.innerHTML=(ln=="beacon"?"<select data-bt>"+beaconOpts(b.t)+"</select>":"<b>"+LANE_LABEL[ln]+"</b>")+(BLE_SCAN?" <select data-bsel></select>":"")+" <input data-bm placeholder='AA:BB:CC:DD:EE:FF'> <button type='button' class='button' data-rm>Remove</button>";
 sn.appendChild(row);
-var bt=row.querySelector("[data-bt]");bt.value=b.t;bt.addEventListener("change",function(){b.t=bt.value;});
+var bt=row.querySelector("[data-bt]");if(bt){bt.value=b.t;bt.addEventListener("change",function(){b.t=bt.value;});}
 var mi=row.querySelector("[data-bm]");mi.value=b.m||"";mi.addEventListener("input",function(){b.m=this.value;});
-var bs=row.querySelector("[data-bsel]");if(bs){fillBleSelect(bs,b.m);bs.addEventListener("change",function(){if(!bs.value)return void mi.focus();b.m=bs.value;mi.value=bs.value;var d=bleByMac(bs.value);if(d&&d.t){b.t=d.t;bt.value=d.t;}});mi.addEventListener("input",function(){fillBleSelect(bs,mi.value);});}
+// Auto-typing from the scan only applies to the beacon row: discover() reports a
+// type for beacon formats only, and a counter/heart row's type is fixed by the
+// button that created it, so a pick there must never rewrite it.
+var bs=row.querySelector("[data-bsel]");if(bs){fillBleSelect(bs,b.m);bs.addEventListener("change",function(){if(!bs.value)return void mi.focus();b.m=bs.value;mi.value=bs.value;var d=bleByMac(bs.value);if(bt&&d&&d.t){b.t=d.t;bt.value=d.t;}});mi.addEventListener("input",function(){fillBleSelect(bs,mi.value);});}
 row.querySelector("[data-rm]").addEventListener("click",function(){h.bl.splice(bi,1);render();});});
-var addBle=c.querySelector("[data-addble]"),addDs=c.querySelector("[data-addds]");
-addBle.disabled=hasInhiveSensor(h);addDs.disabled=hasInhiveSensor(h);
-addBle.addEventListener("click",function(){if(!hasInhiveSensor(h)){h.ds=null;h.bl=[{t:"holyiot",m:""}];render();}});
-addDs.addEventListener("click",function(){if(!hasInhiveSensor(h)){h.bl=[];h.ds=nextProbe();render();}});
+var addBle=c.querySelector("[data-addble]"),addDs=c.querySelector("[data-addds]"),addBc=c.querySelector("[data-addbc]"),addHh=c.querySelector("[data-addhh]");
+addBle.disabled=hasLane(h,"beacon");addDs.disabled=hasLane(h,"beacon");
+addBc.disabled=hasLane(h,"counter");addHh.disabled=hasLane(h,"heart");
+addBle.addEventListener("click",function(){if(!hasLane(h,"beacon")){h.bl.push({t:"holyiot",m:""});render();}});
+addDs.addEventListener("click",function(){if(!hasLane(h,"beacon")){h.ds=nextProbe();render();}});
+addBc.addEventListener("click",function(){if(!hasLane(h,"counter")){h.bl.push({t:"beecounter",m:""});render();}});
+addHh.addEventListener("click",function(){if(!hasLane(h,"heart")){h.bl.push({t:"hiveheart",m:""});render();}});
 c.querySelector("[data-delhive]").addEventListener("click",function(){HIVES.splice(hi,1);render();});
 });
 document.getElementById("hempty").style.display=HIVES.length?"none":"block";
@@ -968,7 +987,7 @@ if(dup){ev.preventDefault();alert("Two hives are mapped to the same scale channe
 var out=HIVES.map(function(h){var o={i:h.i,n:h.n||""};
 o.s=(h.sk!="ble"&&h.sk!="none"?h.s.slice(0,1):[]).map(function(s){return s.b=="nau"?{b:"nau",mux:s.mux,adc:s.adc,off:s.off||0,fac:s.fac||-7050}:{b:"hx",hx:s.hx,off:s.off||0,fac:s.fac||-7050};});
 if(h.ds&&h.ds.length)o.ds=h.ds;
-var bl=(h.ds===null?h.bl.filter(function(b){return b.m&&b.m.length;}).slice(0,MAX_INHIVE_BLE).map(function(b){return {t:b.t,m:b.m};}):[]);
+var bl=h.bl.filter(function(b){return b.m&&b.m.length&&!(h.ds!==null&&laneOf(b.t)=="beacon");}).slice(0,MAX_INHIVE_BLE).map(function(b){return {t:b.t,m:b.m};});
 if(h.sk=="ble"&&h.wm&&h.wm.length)bl.push({t:"hivescale",m:h.wm});
 o.bl=bl;
 return o;});

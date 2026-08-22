@@ -2,7 +2,8 @@
 # Build and run the host-level I2C hardening tests. Needs only a C++17 g++/clang++
 # — no Arduino toolchain: the tests exercise the exact production headers
 # (i2c_iface.h, nau7802_checked.h, scale_math.h, scale_topology.h) against the
-# scripted mock bus in mock_i2c.h.
+# scripted mock bus in mock_i2c.h, plus the pure per-hive BLE pairing lane rules
+# in ble_lanes.h.
 set -e
 cd "$(dirname "$0")"
 : "${CXX:=g++}"
@@ -14,3 +15,7 @@ mkdir -p build
 "$CXX" -std=gnu++17 -Wall -Wextra -Werror -I../include \
        -o build/test_sht4x_recovery test_sht4x_recovery.cpp
 ./build/test_sht4x_recovery
+
+"$CXX" -std=gnu++17 -Wall -Wextra -Werror -I../include \
+       -o build/test_ble_lanes test_ble_lanes.cpp
+./build/test_ble_lanes

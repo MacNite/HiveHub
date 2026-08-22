@@ -94,8 +94,10 @@ Build with `ENABLE_WIRELESS_BEECOUNTER=1` (the
 [configurator](../website/configurator.html) emits this when you add a
 *HiveTraffic* wireless sensor), then pair each counter's MAC:
 
-* in the **provisioning portal** — add an in-hive sensor to any hive, pick
-  *HiveTraffic counter*, and enter/copy its MAC; or
+* in the **provisioning portal** — press **➕ Add HiveTraffic counter** on any
+  hive and enter/copy its MAC. The counter has its own lane, so it sits
+  alongside that hive's in-hive beacon (HiveInside, HolyIot, RuuviTag), its
+  wired DS18B20 and its HiveHeart rather than competing with them; or
 * seed it in `secrets.h` via a `HIVE_i_JSON` blob's `bl` entry
   (`{"t":"beecounter","m":"AA:BB:CC:DD:EE:FF"}`) for any hive, or via the legacy
   `WBEECNT_1_MAC` / `WBEECNT_2_MAC` macros for hives 1–2.

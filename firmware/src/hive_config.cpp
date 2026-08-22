@@ -138,8 +138,17 @@ bool hiveFromJson(const String& json, Hive& out) {
   const char* ds = d["ds"] | (const char*)nullptr;
   if (ds && romFromHex(String(ds), out.dsRom)) out.hasDsRom = true;
 
-  bool scaleAssigned = out.scaleCount > 0;
-  bool inHiveSensorAssigned = out.hasDsRom;
+  // One pairing per lane (ble_lanes.h). Two pre-claims carry the wired hardware
+  // into the same bookkeeping:
+  //   - a wired scale channel takes the SCALE lane, so a hive keeps exactly one
+  //     scale source — either that channel or a wireless HiveScale pairing;
+  //   - a DS18B20 takes the BEACON lane, because probe and beacon are the same
+  //     in-hive temperature slot (both feed hives[].temp_c).
+  // A counter or a HiveHeart is unaffected by either, which is the whole point:
+  // they write their own nested objects and never collide with a beacon.
+  blelanes::LaneSet lanes;
+  if (out.scaleCount > 0) lanes.claim(blelanes::Lane::Scale);
+  if (out.hasDsRom)       lanes.claim(blelanes::Lane::Beacon);
 
   JsonArray bl = d["bl"].as<JsonArray>();
   for (JsonObject o : bl) {
@@ -148,17 +157,13 @@ bool hiveFromJson(const String& json, Hive& out) {
     String mac  = o["m"] | "";
     if (!mac.length()) continue;
 
-    // A beehivemonitoring.com HiveScale is a scale source, not an in-hive
-    // auxiliary sensor. Keep at most one scale source per hive: either the
-    // single wired channel above, or one wireless HiveScale pairing.
-    if (type == "hivescale") {
-      if (scaleAssigned) continue;
-      scaleAssigned = true;
-    } else {
-      // The backend has one nested `ble` object per hive_readings row, so keep
-      // only one in-hive BLE sensor and do not allow it together with DS18B20.
-      if (inHiveSensorAssigned) continue;
-      inHiveSensorAssigned = true;
+    // Lane already occupied -> drop this pairing. First one stored wins, which
+    // is the same behaviour the old single-slot rule had.
+    if (!lanes.claim(type.c_str())) {
+      Serial.printf("[HIVECFG] Hive %u: dropping duplicate %s pairing %s "
+                    "(that sensor slot is already taken)\n",
+                    out.index, type.c_str(), mac.c_str());
+      continue;
     }
 
     out.ble[out.bleCount].type = type;
@@ -174,10 +179,18 @@ bool hiveFromJson(const String& json, Hive& out) {
 // HX711 instance N-1 (with its stored offset/factor) and the slot-N BLE pairings
 // from the old fixed-key fan-out (ble_mac, heart_mac, scale_mac, counter_mac).
 static void migrateLegacy(Preferences& p) {
+  // Same lane rule as hiveFromJson: one pairing per family. A pre-0.20 device
+  // could have all three legacy MACs set at once (ble_mac + heart_mac +
+  // counter_mac), and they land in three different lanes — so all three now
+  // migrate. Before lanes, only the first survived and the rest were dropped.
   auto addInHiveBle = [](Hive& h, const char* type, const String& mac) {
-    if (mac.length() == 0 || h.hasDsRom || h.bleCount >= MAX_BLE_PER_HIVE) return;
+    if (mac.length() == 0 || h.bleCount >= MAX_BLE_PER_HIVE) return;
+    blelanes::Lane lane = blelanes::laneFor(type);
+    // No DS18B20 ROM was ever stored pre-0.20, so hasDsRom is false here; the
+    // check is kept so the beacon/probe exclusion holds if that ever changes.
+    if (h.hasDsRom && lane == blelanes::Lane::Beacon) return;
     for (uint8_t b = 0; b < h.bleCount; b++)
-      if (h.ble[b].type != "hivescale") return;
+      if (blelanes::laneFor(h.ble[b].type.c_str()) == lane) return;
     h.ble[h.bleCount].type = type;
     h.ble[h.bleCount].mac  = mac;
     h.bleCount++;
@@ -203,9 +216,9 @@ static void migrateLegacy(Preferences& p) {
     h.scales[0].factor  = p.getFloat(i == 0 ? "s1_factor" : "s2_factor", -7050.0f);
     // No ROM was stored pre-0.20; sensors.cpp falls back to probe index order
     // (hive.index-1) when hasDsRom is false, preserving the old behaviour.
-    // Keep one non-scale in-hive sensor in the new registry. Legacy wireless
-    // HiveScale pairings were secondary scale sources, so they are not migrated
-    // when the hive already has a wired scale channel.
+    // Each legacy MAC goes into its own lane. Legacy wireless HiveScale pairings
+    // were secondary scale sources, so they are not migrated when the hive
+    // already has a wired scale channel (it always does, just above).
     addInHiveBle(h, "holyiot",    p.getString(i == 0 ? "ble_mac0"     : "ble_mac1",     ""));
     addInHiveBle(h, "hiveheart",  p.getString(i == 0 ? "heart_mac0"   : "heart_mac1",   ""));
     addInHiveBle(h, "beecounter", p.getString(i == 0 ? "counter_mac0" : "counter_mac1", ""));
