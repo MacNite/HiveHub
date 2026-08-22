@@ -172,6 +172,10 @@ export const api = {
     tempco_ref_temp_c: 25.0, scale1_tempco_kg_per_c: -0.012, scale2_tempco_kg_per_c: -0.011,
     beecounter_night_mode_enabled: true, beecounter_night_start_minute: 21 * 60,
     beecounter_night_end_minute: 5 * 60 + 30, beecounter_night_max_traffic: 60,
+    // All three emitter banks live: the counter is running its whole 24-gate
+    // entrance, which is the default and what the demo device does.
+    beecounter_bank1_enabled: true, beecounter_bank2_enabled: true,
+    beecounter_bank3_enabled: true,
     timezone: "CET-1CEST,M3.5.0,M10.5.0/3",
   }),
 

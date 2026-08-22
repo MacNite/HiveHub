@@ -25,6 +25,13 @@
 //            correctly before it knew the field existed — it skips unknown
 //            keys. What it could not do is tell a suspended counter from a
 //            broken one, which is the point of reading it.
+//   fw >= 5  adds "banks": which of the counter's three emitter MOSFETs are
+//            enabled. Additive in the same way, and needed for the same reason
+//            — a bank switched off produces a permanently flat third of the
+//            totals, character for character what a dead FET produces. A
+//            counter too old to report it is running all three banks, which is
+//            why bank_mask defaults to ALL rather than to zero: the absence of
+//            the field means "everything is on", never "nothing is".
 //
 // Both must keep working, and not as a courtesy: a counter in the field reports
 // fw:2 until it is updated over the air, and HiveHub's OTA relay has to read
@@ -68,6 +75,19 @@ constexpr uint8_t REV_MCPS_HEALTHY = 3;
 // First protocol revision carrying "idle_s" and the night-mode status bit.
 constexpr uint8_t REV_NIGHT_MODE = 4;
 
+// First protocol revision carrying "banks", and therefore the first that
+// understands the SET_BANKS control opcode. bee_counter_client.cpp gates the
+// write on it rather than writing hopefully: an older counter ignores the
+// opcode and logs it, which would print every cycle forever.
+constexpr uint8_t REV_LED_BANKS = 5;
+
+// All three emitter banks enabled — the mask a counter runs unless told
+// otherwise, the mask it returns to after any reset, and what this parser
+// reports for a counter too old to carry the field. Mirrors
+// beecounter_proto::BANK_MASK_ALL in the HiveTraffic repo; duplicated for the
+// same reason STATUS_NIGHT_IDLE is, and pinned by the same test.
+constexpr uint8_t BANK_MASK_ALL = 0x07;
+
 // Status bit 0x80: the counter is deliberately not sensing. Mirrors
 // beecounter_proto::STATUS_NIGHT_IDLE in the HiveTraffic repo; duplicated
 // rather than shared because the two firmwares have no common header, and
@@ -101,7 +121,32 @@ struct Measurement {
     // stop, because honey bees do not fly at night. Without it that is
     // indistinguishable from failed emitters.
     uint32_t idle_s           = 0;
+    // Which of the counter's three emitter MOSFETs are enabled: bit 0 = gates
+    // 00..07, bit 1 = 10..17, bit 2 = 20..27. Read from "banks" (fw >= 5).
+    //
+    // Defaults to ALL, not to 0. A counter too old to report the field is
+    // running its whole entrance, and a zero default would make every pre-v5
+    // counter look like it had been switched off entirely — the exact
+    // misreading that would then be written into stored history.
+    uint8_t  bank_mask        = BANK_MASK_ALL;
 };
+
+// How many gates this counter is actually watching, given its bank mask. The
+// counter keeps reporting num_gates as what is WIRED (24), because that is a
+// fact about the board; this is what is being counted right now.
+inline uint8_t activeGates(const Measurement& m) {
+    uint8_t banks = 0;
+    for (uint8_t bit = 1; bit; bit = static_cast<uint8_t>(bit << 1)) {
+        if (m.bank_mask & bit) banks++;
+    }
+    return static_cast<uint8_t>(banks * 8U);
+}
+
+// Is any bank switched off? The flat totals that follow are then deliberate,
+// in exactly the way isNightIdle() means for a whole counter.
+inline bool hasDisabledBank(const Measurement& m) {
+    return (m.bank_mask & BANK_MASK_ALL) != BANK_MASK_ALL;
+}
 
 // Is this counter currently suspended? Reads the countdown rather than the
 // status bit, because the countdown is the value the firmware derives at
@@ -294,6 +339,14 @@ inline bool parseMeasurement(const char* json, size_t len, Measurement& out) {
             out.glitch_count = value;
         } else if (klen == 6 && memcmp(key, "idle_s", 6) == 0) {
             out.idle_s = value;
+        } else if (klen == 5 && memcmp(key, "banks", 5) == 0) {
+            // Masked to the three banks this hardware has, so a counter on a
+            // future four-FET board cannot report a bank HiveHub would then
+            // try to switch. A value of 0 is stored as read: it is not a thing
+            // the counter can be in (it refuses an all-off mask), so seeing one
+            // means something is wrong and flattening it to ALL would hide it.
+            detail::assignU8(out.bank_mask,
+                             value & static_cast<uint32_t>(BANK_MASK_ALL));
         }
         // else: unknown key, already skipped.
     }

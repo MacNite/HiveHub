@@ -90,7 +90,8 @@ DEVICE_CONFIG_SELECT_COLUMNS = """
     scale1_tempco_kg_per_c, scale2_tempco_kg_per_c,
     scale_offsets_by_hive,
     beecounter_night_mode_enabled, beecounter_night_start_minute,
-    beecounter_night_end_minute, beecounter_night_max_traffic, timezone
+    beecounter_night_end_minute, beecounter_night_max_traffic, timezone,
+    beecounter_bank1_enabled, beecounter_bank2_enabled, beecounter_bank3_enabled
 """
 
 
@@ -170,6 +171,9 @@ def device_config_row_to_model(r) -> DeviceConfig:
         beecounter_night_end_minute=r[15],
         beecounter_night_max_traffic=r[16],
         timezone=r[17],
+        beecounter_bank1_enabled=r[18],
+        beecounter_bank2_enabled=r[19],
+        beecounter_bank3_enabled=r[20],
     )
 
 
@@ -191,6 +195,44 @@ def get_device_config(device_id: str):
     return fetch_device_config(device_id)
 
 
+BEECOUNTER_BANK_FIELDS = (
+    "beecounter_bank1_enabled",
+    "beecounter_bank2_enabled",
+    "beecounter_bank3_enabled",
+)
+
+
+def reject_all_banks_off(device_id: str, fields: dict) -> None:
+    """Refuse a config patch that would leave a counter with no emitter bank on.
+
+    A PATCH carries only what changed, so this needs the stored row as well as
+    the patch: turning bank 3 off is fine on its own and fatal if 1 and 2 are
+    already off. Merge, then check.
+
+    Rejected rather than stored, because storing it accomplishes nothing. The
+    counter refuses a mask of 0 outright (HiveTraffic's bank_state.h keeps the
+    previous mask rather than blinding itself on one byte), so the row and the
+    hardware would simply disagree forever, with the dashboard showing three
+    unticked boxes next to a counter cheerfully counting all 24 gates. A
+    beekeeper who wants a counter to count nothing unpairs it.
+    """
+    if not any(f in fields for f in BEECOUNTER_BANK_FIELDS):
+        return
+    current = fetch_device_config(device_id)
+    merged = [
+        fields.get(f, getattr(current, f)) for f in BEECOUNTER_BANK_FIELDS
+    ]
+    if not any(merged):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "At least one HiveTraffic emitter bank must stay enabled — a "
+                "counter with all three off would count nothing. Unpair the "
+                "counter instead."
+            ),
+        )
+
+
 @router.patch("/api/v1/devices/{device_id}/config", dependencies=[Depends(require_device_key)])
 def update_device_config(device_id: str, patch: DeviceConfigUpdate):
     ensure_device_config(device_id)
@@ -201,6 +243,7 @@ def update_device_config(device_id: str, patch: DeviceConfigUpdate):
     hive_scales = fields.pop("hive_scales", None)
     if not fields and not hive_scales:
         return get_device_config(device_id)
+    reject_all_banks_off(device_id, fields)
     with get_conn() as conn:
         with conn.cursor() as cur:
             if hive_scales:

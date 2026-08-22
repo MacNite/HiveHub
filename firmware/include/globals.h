@@ -153,6 +153,24 @@ extern uint32_t nightMaxTraffic;
 // tzset() so localtime() honours it. Empty means UTC.
 extern String   nightTimezone;
 
+// ---- HiveTraffic emitter banks -------------------------------------------
+// Which of a paired counter's three emitter MOSFETs may light. Bit 0 = bank 1
+// (gates 00..07), bit 1 = bank 2 (10..17), bit 2 = bank 3 (20..27). Delivered
+// by /api/v1/devices/{id}/config as three booleans and assembled into this mask;
+// persisted in NVS alongside the night window, and written to each paired
+// counter once per upload cycle.
+//
+// The counter itself never persists it, so this re-assert is not belt and
+// braces — it is the mechanism. A counter that reset comes back running all 24
+// gates and stays that way until we tell it otherwise, which costs at most one
+// cycle of extra current and never a counter blind on eight gates for reasons
+// nobody can reconstruct.
+//
+// BEECOUNTER_BANK_MASK_ALL (all three on) unless the dashboard says otherwise.
+// A mask of 0 is never sent: the dashboard refuses to store it and the counter
+// refuses to apply it.
+extern uint8_t  beeBankMask;
+
 // ---- Scale calibration ----------------------------------------------------
 extern long scale1Offset;
 extern long scale2Offset;

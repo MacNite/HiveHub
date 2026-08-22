@@ -2033,6 +2033,89 @@ function renderDevice(root, state) {
     } catch (err) { state.toast(err.message, "error"); nmSaveBtn.disabled = false; }
   });
 
+  // ── HiveTraffic emitter banks ───────────────────────────────────────────
+  // The counter's 48 IR emitters sit behind three MOSFETs, one per MCP23017, so
+  // each third of the entrance can be switched off independently. This is the
+  // coarsest power control the counter has and the one that applies around the
+  // clock, where night mode only applies at night.
+  const BANK_FIELDS = [
+    ["beecounter_bank1_enabled", "Bank 1 — gates 00–07"],
+    ["beecounter_bank2_enabled", "Bank 2 — gates 10–17"],
+    ["beecounter_bank3_enabled", "Bank 3 — gates 20–27"],
+  ];
+  const bankInputs = BANK_FIELDS.map(([key, label]) => {
+    const input = el("input", { type: "checkbox" });
+    // ?? true, not || true: a stored false must survive. The default is on,
+    // which is also what a server too old to know these keys implies.
+    input.checked = cfg[key] ?? true;
+    return { key, label, input };
+  });
+  const bankSaveBtn = el("button", { class: "btn", type: "submit" }, "Save emitter banks");
+  const bankForm = el("form", {},
+    el("div", { class: "config-grid" },
+      el("div", { class: "config-block" },
+        el("h3", {}, "Emitter banks"),
+        el("p", { class: "note" },
+          "A HiveTraffic counter's 48 IR emitters are driven by three MOSFETs, " +
+          "one per group of eight gates, and they are the largest item in its " +
+          "power budget by an order of magnitude. Switching a group off is " +
+          "purely about current draw — measured on the counter's 3.3 V rail:"),
+        el("div", { class: "rows" },
+          el("div", { class: "row" },
+            el("span", { class: "k" }, "1 bank — 8 gates"),
+            el("span", { class: "v" }, "~0.14 A")),
+          el("div", { class: "row" },
+            el("span", { class: "k" }, "2 banks — 16 gates"),
+            el("span", { class: "v" }, "~0.22 A")),
+          el("div", { class: "row" },
+            el("span", { class: "k" }, "3 banks — 24 gates"),
+            el("span", { class: "v" }, "~0.30 A"))),
+        el("p", { class: "note" },
+          "That is roughly 80 mA per bank. Turn one off when the hive entrance " +
+          "is narrower than 24 gates, when part of it is closed, or when an " +
+          "off-grid supply will not carry the whole board. This stacks with " +
+          "night mode above rather than replacing it: night mode decides when " +
+          "the counter stops, this decides how much of it runs at all."),
+        ...bankInputs.map(({ label, input }) =>
+          el("div", { class: "form-row" },
+            el("label", {}, el("span", {}, label + " "), input))),
+        el("p", { class: "note" },
+          "A switched-off bank stops counting its eight gates entirely, so " +
+          "their crossings are not missing from the data — they are not " +
+          "happening. Expect the totals to drop roughly in proportion, and do " +
+          "not compare a narrowed counter's numbers with its own history. At " +
+          "least one bank must stay on; a counter that should count nothing is " +
+          "unpaired instead."))),
+    el("p", { class: "note" },
+      "Applies to every HiveTraffic counter paired to this device, and needs " +
+      "counter firmware 0.3.0 or newer. Saving bumps the config version; the " +
+      "counter is told on the next upload cycle, and is re-told after any " +
+      "reset — the setting is deliberately not stored on the counter itself."),
+    el("div", { class: "form-actions" }, bankSaveBtn));
+
+  bankForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const patch = {};
+    for (const { key, input } of bankInputs) {
+      if (input.checked !== (cfg[key] ?? true)) patch[key] = input.checked;
+    }
+    // Caught here as well as by the API, because this is the only place a human
+    // is looking. The counter refuses an all-off mask outright — it keeps the
+    // mask it had — so storing one would leave three unticked boxes next to a
+    // counter cheerfully counting all 24 gates, with nothing saying why.
+    if (!bankInputs.some(({ input }) => input.checked)) {
+      state.toast("At least one emitter bank must stay enabled — unpair the counter instead", "error");
+      return;
+    }
+    if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
+    bankSaveBtn.disabled = true;
+    try {
+      await state.actions.updateConfig(patch);
+      state.toast("Emitter banks saved", "success");
+      state.reload({ full: true });
+    } catch (err) { state.toast(err.message, "error"); bankSaveBtn.disabled = false; }
+  });
+
   const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
   const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
   const cfgForm = el("form", {},
@@ -2719,7 +2802,7 @@ function renderDevice(root, state) {
   node.append(
     topGrid,
     collapsible("Configuration", false, cfgForm, calCard),
-    collapsible("HiveTraffic setup", false, nmForm),
+    collapsible("HiveTraffic setup", false, nmForm, bankForm),
     // Publishing is optional server-side (ENABLE_PUBLIC_EMBEDS): when it is off,
     // every /publish endpoint 404s, so the panel is not built at all rather than
     // offered and then failing on open. state.features comes from the auth

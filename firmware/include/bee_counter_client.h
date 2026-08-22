@@ -62,6 +62,16 @@ struct Snapshot {
     // to report it. Non-zero says the flat interval that follows is deliberate
     // — we asked for it — rather than a failed emitter bank.
     uint32_t idle_s           = 0;
+    // Which of the counter's three emitter MOSFETs are enabled ("banks", wire
+    // revision 5+): bit 0 = gates 00..07, bit 1 = 10..17, bit 2 = 20..27.
+    //
+    // BEECOUNTER_BANK_MASK_ALL for any counter too old to report it, which is
+    // the truth — a pre-v5 counter has no way to switch a bank off. A cleared
+    // bit means eight gates are dark and not being counted, so their share of
+    // the totals is permanently flat; without this field that is
+    // indistinguishable from the FET having failed, which is the same problem
+    // idle_s solves for the whole counter.
+    uint8_t  bank_mask        = BEECOUNTER_BANK_MASK_ALL;
     // 32-bit as of revision 3, saturating on the device rather than wrapping.
     uint32_t glitch_count     = 0;
 };

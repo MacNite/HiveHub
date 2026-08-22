@@ -633,6 +633,20 @@
 #ifndef BEECOUNTER_CTRL_OP_SET_IDLE
 #define BEECOUNTER_CTRL_OP_SET_IDLE 0x01
 #endif
+// Emitter-bank enables (HiveTraffic protocol v5 and later). The counter's 48 IR
+// LEDs sit behind three MOSFETs, one per MCP23017 — bank 1 = gates 00..07,
+// bank 2 = 10..17, bank 3 = 20..27 — and each draws roughly 80 mA at 3.3 V, on
+// top of a ~60 mA floor: one bank ~0.14 A, two ~0.22 A, three ~0.30 A. We write
+// the configured mask once per cycle, gated on the counter reporting fw >= 5
+// (wire::REV_LED_BANKS) so an older one is not sent an opcode it can only log
+// as unknown, every cycle, forever.
+#ifndef BEECOUNTER_CTRL_OP_SET_BANKS
+#define BEECOUNTER_CTRL_OP_SET_BANKS 0x03
+#endif
+// All three banks on: the default, and what a counter runs after any reset.
+#ifndef BEECOUNTER_BANK_MASK_ALL
+#define BEECOUNTER_BANK_MASK_ALL 0x07
+#endif
 
 // OTA characteristics. Unlike HiveInside these live in the SAME service as the
 // measurement characteristic above — HiveTraffic has only one service.
