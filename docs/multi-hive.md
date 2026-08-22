@@ -1,9 +1,9 @@
 # Multi-hive support (up to 16 hives per ESP32)
 
 Firmware **v0.20.0** generalises HiveHub from a fixed two-hive device into a
-dynamic registry of **up to 16 hives**, each with one scale source and at most
-one in-hive sensor. This page covers the new hardware paths, the hive-centric provisioning
-portal, the BLE budget, and the data model.
+dynamic registry of **up to 16 hives**, each with one scale source and up to
+three in-hive BLE sensors. This page covers the new hardware paths, the
+hive-centric provisioning portal, the BLE budget, and the data model.
 
 ---
 
@@ -13,7 +13,7 @@ portal, the BLE budget, and the data model.
 | --- | --- | --- |
 | Scales | **16** | One scale source per hive: NAU7802 channels (main bus **or** mux — not both, see topology note), HX711 (1) / HX711 (2) on the legacy 30-pin board, or a paired beehivemonitoring.com BLE HiveScale. All-NAU7802 wired reaches **16** (8 chips behind the TCA9548A mux) |
 | Wired temperature | **16** | One DS18B20 probe per hive on the single 1-Wire bus, mapped by ROM address |
-| In-hive BLE/GATT | **16** | One non-scale BLE/GATT sensor per hive. Passive beacons share one scan window; connection-based GATT reads remain cycle-capped |
+| In-hive BLE/GATT | **3 per hive** | One sensor per **lane**: one beacon (HolyIot / RuuviTag / HiveInside), one HiveTraffic bee counter, one HiveHeart. A wired DS18B20 occupies the beacon lane. Passive beacons share one scan window; connection-based GATT reads remain cycle-capped |
 
 > **Registry footnote:** the firmware's registry (`MAX_HIVES`) technically holds
 > **18** hives — 16 muxed NAU7802 channels plus the 2 HX711 pin channels of the
@@ -102,8 +102,12 @@ The setup portal (AP mode → `http://192.168.4.1/`) is now organised **by hive*
    portal offers HX711 (1), HX711 (2), detected NAU7802 channels, and **BLE
    HiveScale from Beehivemonitoring**; when the BLE HiveScale option is selected,
    a MAC-address field (with the same device dropdown) appears for pairing. The
-   **In-hive sensor** section allows exactly one non-scale sensor per hive:
-   **➕ Add BLE sensor** or **➕ Add DS18B20**.
+   **In-hive sensors** section offers one add button per lane:
+   **➕ Add BLE in-hive sensor** (HolyIot / RuuviTag / HiveInside),
+   **➕ Add DS18B20**, **➕ Add HiveTraffic counter** and **➕ Add HiveHeart**.
+   Each button disables itself once its lane is filled. A beacon and a DS18B20
+   share one lane — both supply `hives[].temp_c` — so a hive takes one or the
+   other; the counter and HiveHeart are independent of that choice.
 4. **Save and reboot** writes one compact JSON blob per hive to NVS
    (`h0_cfg`..`h17_cfg` + `hive_count`).
 
@@ -145,7 +149,13 @@ any remaining paired GATT sensors are skipped that cycle and retried next wake.
 **Recommendation:** prefer **beacon** in-hive sensors for multi-hive setups. Use
 GATT sparingly, raise the send interval, or raise the cap only if you accept the
 extra awake time. A BLE HiveScale selected as the **Scale** source is separate
-from the one non-scale in-hive sensor, but both are persisted as BLE pairings.
+from the in-hive sensors, but all of them are persisted as BLE pairings.
+
+Note the cap is **device-wide, not per hive**. Since a hive may now pair a
+HiveTraffic counter *and* a HiveHeart alongside its beacon, it is easy to exceed
+`MAX_GATT_READS_PER_CYCLE` (default 4) across an apiary: five paired counters
+means one is skipped each wake and picked up on the next. Beacons — including
+HiveInside — never count against it.
 
 ---
 

@@ -39,9 +39,13 @@ lives in `test-data/` (`python3 hiveinside_nrf54_beacon.py`).
    flag is needed. (`HIVEINSIDE_OTA_ENABLED`, default 1, compiles in the BLE OTA
    relay described below.)
 2. **Pair from the setup portal.** Open the provisioning portal (short-press the
-   setup button, join the `HiveHub-Setup-XXXX` AP), scan for BLE devices, and add
-   the node's MAC to a hive. Choose the sensor type
-   **HiveInside (nRF54LM20A) — beacon**.
+   setup button, join the `HiveHub-Setup-XXXX` AP), scan for BLE devices, and
+   press **➕ Add BLE in-hive sensor** on the hive. Choose the sensor type
+   **HiveInside (nRF54LM20A) — beacon** and enter/copy the node's MAC — picking
+   the node from the scan dropdown selects the type for you. This is the hive's
+   beacon lane, so it does not block a HiveTraffic bee counter or a HiveHeart on
+   the same hive; it is exclusive only with the other beacon formats and with a
+   wired DS18B20.
 
 > The nRF54 node has **no pairing window** — it is always discoverable, so there
 > is nothing to long-press before scanning. Its button just forces an immediate
