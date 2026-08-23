@@ -12,8 +12,9 @@ String wifiPassKey(int index);
 void seedPrefsFromSecretsIfNeeded();
 void loadConfigFromPrefs();
 void saveScaleConfig();
-// Persist the HiveTraffic night-mode window from the last /config fetch, so an
-// offline boot still honours it. Called from fetchRemoteConfig().
+// Persist the HiveTraffic power settings from the last /config fetch — the
+// night-mode window and the emitter-bank mask — so an offline boot still
+// honours them. Called from fetchRemoteConfig().
 void saveNightModePrefs();
 // Latch "the server has this device's claim" so the claim code stops riding
 // along on every upload.

@@ -67,6 +67,12 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
     // the same absence in stored history, and the whole reason the field
     // exists is to tell a deliberate flat interval from a broken one.
     bc["idle_s"]           = snap.idle_s;
+    // Same argument as idle_s: emitted unconditionally, including the 0x07 of a
+    // counter nobody has narrowed and the 0x07 implied by a pre-v5 counter.
+    // A field that appeared only when a bank was off would make "all banks on"
+    // and "counter too old to say" the same absence in stored history, and the
+    // whole point is to tell a deliberately dark bank from a dead FET.
+    bc["banks"]            = snap.bank_mask;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +109,7 @@ bool parseTrafficJson(const char* json, size_t len, Snapshot& out) {
     out.total_out     = m.total_out;
     out.glitch_count  = m.glitch_count;
     out.idle_s        = m.idle_s;
+    out.bank_mask     = m.bank_mask;
     return true;
 }
 
@@ -133,6 +140,38 @@ bool writeIdleGrant(NimBLERemoteService* svc, uint32_t duration_s) {
     // With response: the counter's reply is the only confirmation that the
     // grant landed, and there is exactly one small write per cycle, so there is
     // nothing to gain from the unacknowledged variant.
+    return chr->writeValue(frame, sizeof(frame), true);
+}
+
+// Write the configured emitter-bank mask to an already-connected counter.
+//
+// Gated by the caller on the counter reporting wire revision 5 or later: an
+// older firmware has the control characteristic but not this opcode, and would
+// log an "unknown opcode" line every cycle for the rest of its deployment.
+//
+// The caller writes whenever the mask the counter just REPORTED differs from
+// the configured one — never against a HiveHub-side memory of what it last
+// sent. That distinction is the whole self-healing property: the counter does
+// not persist the mask, so one that browned out, watchdogged or rebooted out of
+// an OTA comes back reporting all three banks, and the next cycle's read shows
+// the disagreement and fixes it. A HiveHub that instead remembered "I already
+// configured this one" would leave that counter wide open indefinitely, and a
+// HiveHub that wrote unconditionally would spend a GATT write every ten minutes
+// to change nothing.
+//
+// Fire-and-forget beyond the return value, like writeIdleGrant: a failed write
+// costs one cycle of a wider entrance than asked for, never a reading.
+bool writeBankMask(NimBLERemoteService* svc, uint8_t mask) {
+    if (!svc) return false;
+    NimBLERemoteCharacteristic* chr =
+        svc->getCharacteristic(NimBLEUUID(BEECOUNTER_GATT_CONTROL_UUID));
+    if (!chr || !chr->canWrite()) return false;
+
+    uint8_t frame[2];
+    frame[0] = BEECOUNTER_CTRL_OP_SET_BANKS;
+    frame[1] = mask;
+    // With response, for the same reason the idle grant is: one small write per
+    // cycle, and the reply is the only confirmation it landed.
     return chr->writeValue(frame, sizeof(frame), true);
 }
 
@@ -256,7 +295,8 @@ bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
                     // is one the OTA relay has not reached yet, and that is the
                     // difference between "old firmware" and "broken link".
                     Serial.printf("[TRAFFIC] %s: fw=%s wire=v%u in=%lu out=%lu "
-                                  "uptime=%lus mcps=%u/3 status=0x%02X\n",
+                                  "uptime=%lus mcps=%u/3 status=0x%02X "
+                                  "banks=0x%02X\n",
                                   mac.c_str(),
                                   out.version[0] ? out.version : "?",
                                   (unsigned)out.fw_version,
@@ -264,8 +304,30 @@ bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
                                   (unsigned long)out.total_out,
                                   (unsigned long)out.uptime_s,
                                   (unsigned)out.mcps_healthy,
-                                  out.status_flags);
+                                  out.status_flags,
+                                  (unsigned)out.bank_mask);
                 }
+            }
+        }
+
+        // Re-assert the emitter-bank mask on the connection we already have.
+        // Ordered before the night-mode grant only because it is the cheaper
+        // failure: the two are independent, and a counter can perfectly well be
+        // running one bank AND suspended.
+        //
+        // Gated on the counter having reported a revision that understands the
+        // opcode. A failed read leaves out.fw_version at 0, which correctly
+        // skips the write — we have no idea what we are talking to.
+        if (out.present && out.fw_version >= wire::REV_LED_BANKS &&
+            out.bank_mask != beeBankMask) {
+            if (writeBankMask(svc, beeBankMask)) {
+                Serial.printf("[TRAFFIC] %s: emitter banks 0x%02X -> 0x%02X\n",
+                              mac.c_str(), (unsigned)out.bank_mask,
+                              (unsigned)beeBankMask);
+            } else {
+                Serial.printf("[TRAFFIC] %s: emitter bank write refused "
+                              "(wanted 0x%02X)\n",
+                              mac.c_str(), (unsigned)beeBankMask);
             }
         }
 

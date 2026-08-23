@@ -187,6 +187,13 @@ void loadConfigFromPrefs() {
   nightEndMinute   = (uint16_t)prefs.getUShort("nm_end", 6 * 60);
   nightMaxTraffic  = prefs.getUInt("nm_maxtraf", 0);
   nightTimezone    = prefs.getString("nm_tz", "");
+  // HiveTraffic emitter banks. Same reason as the window above: a hub that
+  // boots without WiFi must still narrow its counters to what the beekeeper
+  // configured, rather than running the full 24 gates until it can reach the
+  // server. Defaults to all three on, matching globals.cpp and the counter's
+  // own power-on state.
+  beeBankMask      = (uint8_t)prefs.getUChar("bc_banks",
+                                             BEECOUNTER_BANK_MASK_ALL);
 
   // HiveTraffic (wireless bee counter) MACs live in the hive registry
   // (gHives[].ble "beecounter" pairings) and are read there by
@@ -208,6 +215,7 @@ void loadConfigFromPrefs() {
                 (unsigned)(nightEndMinute / 60), (unsigned)(nightEndMinute % 60),
                 nightTimezone.length() ? nightTimezone.c_str() : "UTC",
                 (unsigned long)nightMaxTraffic);
+  Serial.printf("[PREFS] bee counter banks: 0x%02X\n", (unsigned)beeBankMask);
 }
 
 void markClaimRegistered() {
@@ -239,6 +247,10 @@ void saveNightModePrefs() {
   prefs.putUShort("nm_end", nightEndMinute);
   prefs.putUInt("nm_maxtraf", nightMaxTraffic);
   prefs.putString("nm_tz", nightTimezone);
+  // The emitter-bank mask rides along: both are HiveTraffic power settings
+  // delivered by the same /config fetch, and splitting them across two NVS
+  // writes would buy nothing but a second flash erase cycle.
+  prefs.putUChar("bc_banks", beeBankMask);
   prefs.end();
 }
 

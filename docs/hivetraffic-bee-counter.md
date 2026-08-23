@@ -114,12 +114,14 @@ All HiveTraffic devices share one service/characteristic (overridable via
 | --- | --- |
 | Service | `8e8b0101-7a1c-4b9e-9a2f-1d6e0b9c1a01` |
 | Measurement characteristic (READ) | `8e8b0102-7a1c-4b9e-9a2f-1d6e0b9c1a01` |
+| Control characteristic (READ/WRITE) | `8e8b0103-7a1c-4b9e-9a2f-1d6e0b9c1a01` |
 
 The characteristic returns a compact JSON document — **totals only**:
 
 ```json
-{ "fw":4, "ver":"0.2.0", "uptime_s":1234, "status":15, "num_gates":24,
-  "mcps_healthy":3, "total_in":100, "total_out":95, "glitches":2, "idle_s":0 }
+{ "fw":5, "ver":"0.3.0", "uptime_s":1234, "status":15, "num_gates":24,
+  "mcps_healthy":3, "total_in":100, "total_out":95, "glitches":2, "idle_s":0,
+  "banks":7 }
 ```
 
 `fw` is the wire-protocol revision; `ver` is the counter's own image version,
@@ -130,21 +132,26 @@ HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects.
 The wire format is totals-only by design: no latch/reset command exists over
 BLE, so a missed connection can never lose counts.
 
-### Three wire revisions, all supported
+### Four wire revisions, all supported
 
 `firmware/include/bee_counter_wire.h` reads `fw` **first** and branches on it.
 Every revision parses, and they produce the same record:
 
-| | `fw:2` | `fw:3` | `fw:4` |
-| --- | --- | --- | --- |
-| Expander health field | `gates_healthy` | `mcps_healthy` | `mcps_healthy` |
-| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit | 32-bit |
-| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating | 32-bit, saturating |
-| `idle_s` + status bit `0x80` | — | — | night-mode countdown |
+| | `fw:2` | `fw:3` | `fw:4` | `fw:5` |
+| --- | --- | --- | --- | --- |
+| Expander health field | `gates_healthy` | `mcps_healthy` | `mcps_healthy` | `mcps_healthy` |
+| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit | 32-bit | 32-bit |
+| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating | 32-bit, saturating | 32-bit, saturating |
+| `idle_s` + status bit `0x80` | — | — | night-mode countdown | night-mode countdown |
+| `banks` | — | — | — | enabled emitter MOSFETs |
 
-`fw:4` is purely additive, so the parser read those documents correctly before
-it knew `idle_s` existed — it skips unknown keys. What it could not do is tell a
-*suspended* counter from a broken one, which is the whole reason for reading it.
+`fw:4` and `fw:5` are purely additive, so the parser read those documents
+correctly before it knew `idle_s` or `banks` existed — it skips unknown keys.
+What it could not do is tell a *suspended* or *narrowed* counter from a broken
+one, which is the whole reason for reading them. A counter too old to report
+`banks` is running all three, so the field defaults to `7` rather than `0`;
+reading its absence as "everything is off" would misrepresent every counter the
+OTA relay has not reached yet.
 
 This is not politeness toward old firmware. **A counter keeps reporting `fw:2`
 until the OTA relay updates it, and the relay reads this very characteristic
@@ -249,6 +256,95 @@ row. It is stored on every reading as `hives[].bee_counter.idle_s`.
 Counters running firmware older than `fw:4` have no control characteristic. The
 write is skipped and they keep counting; the OTA relay will bring them up to a
 firmware that can be suspended in the normal course of things.
+
+## Emitter banks
+
+Night mode decides *when* a counter stops. This decides *how much of it runs at
+all*, and it applies around the clock.
+
+The counter's 48 IR emitters sit behind three IRLB8721 MOSFETs, one per
+MCP23017, so each third of the entrance is independently switchable:
+
+| Bank | Gates | Expander |
+| --- | --- | --- |
+| 1 | 00–07 | U2 @ 0x20 |
+| 2 | 10–17 | U3 @ 0x21 |
+| 3 | 20–27 | U4 @ 0x22 |
+
+Measured on the counter's 3.3 V rail:
+
+| Banks enabled | Gates counted | Draw |
+| --- | --- | --- |
+| 1 | 8 | ~0.14 A |
+| 2 | 16 | ~0.22 A |
+| 3 (default) | 24 | ~0.30 A |
+
+Roughly 80 mA per bank on top of a ~60 mA floor. Dropping one saves about as
+much current as a quarter of a night of night mode, except it saves it all day,
+which makes it the coarsest and most effective power control the counter has.
+The two compose rather than compete: a counter can be running one bank *and* be
+suspended.
+
+Turn a bank off when the hive entrance is physically narrower than 24 gates,
+when part of it is closed for the season, or when an off-grid supply will not
+carry the whole board.
+
+### Setup
+
+Dashboard → **HiveTraffic setup** → *Emitter banks*: three checkboxes, all
+ticked by default. The setting is per **device** (every counter paired to one
+hub shares it) and applies to every paired counter, exactly like the night
+window above it.
+
+| Field | Notes |
+| --- | --- |
+| Bank 1 / 2 / 3 | One checkbox per MOSFET. All three enabled unless you say otherwise |
+
+At least one must stay enabled. The dashboard refuses to save all three off and
+the API rejects it with `400`, because the counter refuses a mask of zero
+outright — it keeps whatever mask it had — so storing one would leave three
+unticked boxes next to a counter cheerfully counting all 24 gates, with nothing
+saying why. A counter that should count nothing is unpaired instead.
+
+### How it works
+
+1. `/api/v1/devices/{id}/config` delivers the three booleans; `fetchRemoteConfig`
+   assembles them into a bitmask (`beeBankMask`) and persists it in NVS, so a
+   hub that boots without WiFi still narrows its counters.
+2. `bee_counter_client.cpp` reads the measurement characteristic as usual, and
+   compares the `banks` value the counter just **reported** with the configured
+   mask.
+3. If they differ, a 2-byte `SET_BANKS` frame (`0x03` + mask) goes out on the
+   same connection — no extra scan, no extra connect.
+4. The counter applies it, darkens the MOSFETs of the disabled banks, and skips
+   those gates entirely rather than reading them as "clear".
+
+Comparing against what the counter *reported* — rather than against a
+HiveHub-side memory of what it last sent — is the whole self-healing property.
+The counter deliberately does not persist the mask, so one that browned out,
+watchdogged or rebooted out of an OTA comes back running all 24 gates; the next
+cycle's read shows the disagreement and fixes it. A HiveHub that remembered "I
+already configured this one" would leave that counter wide open indefinitely.
+
+Counters running firmware older than `fw:5` do not understand the opcode. The
+write is gated on the reported revision and simply skipped, so they keep running
+all three banks; the OTA relay will bring them up in the normal course of things.
+
+### Reading the data
+
+A switched-off bank's eight gates stop contributing to `total_in` / `total_out`
+permanently, which is character for character what a dead emitter FET produces.
+`banks` is the only thing that separates them, which is why it is stored on
+every reading as `hives[].bee_counter.banks` — including the `7` of a counter
+nobody has narrowed. A field that appeared only when it was interesting would
+make "all banks on" and "counter too old to say" the same absence.
+
+`num_gates` keeps reporting **24**: it describes what is wired, which has not
+changed. Active gates are `popcount(banks) * 8`.
+
+Expect the totals to drop roughly in proportion when a bank is switched off, and
+do not compare a narrowed counter's numbers against its own earlier history —
+the interval charts will show a step, and it is real.
 
 ## Intervals are differenced server-side
 
