@@ -796,11 +796,16 @@ void buildMeasurementDoc(JsonDocument& doc) {
     // when the read succeeded, ok:false when the paired counter was
     // unreachable this cycle. Hives without a pairing report nothing (there is
     // no wired path and no implicit hive-1/2 counter anymore).
-    bool counterPaired = false;
+    // The paired MAC comes from the registry rather than the snapshot: it is
+    // configuration, it is known whether or not the counter answered, and
+    // keeping it out of beecnt::Snapshot keeps that MAX_HIVES-sized stack array
+    // from growing for something this loop already has in hand.
+    const char* counterMac = nullptr;
     for (uint8_t b = 0; b < hive.bleCount; b++)
-      if (hive.ble[b].type == "beecounter" && hive.ble[b].mac.length()) counterPaired = true;
-    if (h < MAX_HIVES && (beeSnaps[h].present || counterPaired))
-      beecnt::writeSnapshotToHive(ho, beeSnaps[h]);
+      if (hive.ble[b].type == "beecounter" && hive.ble[b].mac.length())
+        counterMac = hive.ble[b].mac.c_str();
+    if (h < MAX_HIVES && (beeSnaps[h].present || counterMac != nullptr))
+      beecnt::writeSnapshotToHive(ho, beeSnaps[h], counterMac);
   }
 }
 

@@ -56,6 +56,11 @@ To update a counter:
 The HiveHub picks the command up on its next upload cycle and streams the image;
 the counter reboots and the following measurement read reports the new version.
 
+Each row under **Firmware → HiveTraffic counters** is headed by the *hive* name.
+The **?** beside it names the counter itself — its reported local name, if it
+sends one, and the BLE address it is paired on — which is what tells two
+counters apart when both show, say, a failed relay.
+
 **The counter stops counting for the whole transfer.** It parks the IR emitters
 and pauses gate polling while writing flash, so every bee crossing during those
 minutes is lost. Relay at night or in poor flying weather.
@@ -127,6 +132,14 @@ The characteristic returns a compact JSON document — **totals only**:
 `fw` is the wire-protocol revision; `ver` is the counter's own image version,
 which is what the OTA version gate compares and what confirms an update took.
 They move independently, and `ver` is absent on firmware that predates it.
+
+An optional `"name"` string is read too and forwarded as
+`hives[].bee_counter.device_name`: the local name the counter calls itself, so
+a HiveHub running several of them can say which row is which. No counter
+firmware sends it yet — the decoder accepts it whenever one starts to, and a
+document without it parses exactly as before. Until then the dashboard falls
+back to `hives[].bee_counter.mac`, the paired address, which HiveHub records
+before it dials and therefore reports even for a counter that never answered.
 
 HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects.
 The wire format is totals-only by design: no latch/reset command exists over

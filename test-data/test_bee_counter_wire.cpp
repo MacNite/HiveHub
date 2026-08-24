@@ -367,6 +367,42 @@ static void test_long_version_is_truncated_not_overrun() {
   eqs("version", m.version, "0.1.0-verylongs");   // 15 chars + NUL
 }
 
+static void test_device_name_is_read_and_bounded() {
+  // "name" is what tells two counters on one HiveHub apart, and it is a second
+  // string field in a decoder that had exactly one — so it gets the same three
+  // guarantees "ver" has: read when present, empty when absent (rather than
+  // whatever the previous document left behind), and truncated rather than
+  // overrun when a counter sends something longer than the buffer.
+  g_case = "device name";
+  std::printf("the counter's local name is read and bounded:\n");
+
+  const Measurement named = parseOrDie(
+      "{\"fw\":5,\"ver\":\"0.3.0\",\"name\":\"HiveTraffic-8A3F\","
+      "\"total_in\":3,\"total_out\":4}");
+  eqs("name", named.device_name, "HiveTraffic-8A3F");
+  eqs("version still read", named.version, "0.3.0");
+  eqi("total_in still read", named.total_in, 3);
+
+  // A counter old enough not to report one: absent, not garbage.
+  const Measurement unnamed = parseOrDie("{\"fw\":3,\"ver\":\"0.2.0\"}");
+  eqs("absent name", unnamed.device_name, "");
+
+  const Measurement longName = parseOrDie(
+      "{\"fw\":5,\"name\":\"HiveTraffic-with-a-name-nobody-would-type\"}");
+  check("fits the buffer",
+        std::strlen(longName.device_name) == sizeof(longName.device_name) - 1);
+  eqs("name", longName.device_name, "HiveTraffic-with-a-name");  // 23 + NUL
+
+  // The name must not shadow a key it merely shares a prefix with, and an
+  // unterminated one must be refused like an unterminated "ver".
+  const Measurement gates = parseOrDie("{\"fw\":3,\"num_gates\":24}");
+  eqi("num_gates still read", gates.num_gates, 24);
+  Measurement m;
+  const char* truncated = "{\"fw\":5,\"name\":\"HiveTraffic";
+  check("unterminated name refused",
+        !parseMeasurement(truncated, std::strlen(truncated), m));
+}
+
 static void test_malformed_documents_are_refused() {
   // Returning defaults for a document we did not understand would report a
   // healthy counter that has never seen a bee. Refusing lets the caller mark
@@ -431,6 +467,7 @@ int main() {
   test_unknown_fields_are_skipped();
   test_whitespace_is_tolerated();
   test_long_version_is_truncated_not_overrun();
+  test_device_name_is_read_and_bounded();
   test_malformed_documents_are_refused();
   test_mismatched_revision_and_field_name();
 

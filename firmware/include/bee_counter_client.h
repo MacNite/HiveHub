@@ -41,6 +41,16 @@ struct Snapshot {
     // String()): ArduinoJson links a const char* by pointer, and the document
     // outlives this struct.
     char     version[16]      = {0};
+    // Local name the counter reports ("name"), e.g. "HiveTraffic-8A3F". With the
+    // paired MAC (which is configuration, so writeSnapshotToHive takes it as an
+    // argument rather than carrying it here) it answers "which of my counters is
+    // this row?" — nothing else in a reading does, and a HiveHub carries up to
+    // MAX_HIVES of them. Empty on any counter firmware that does not report a
+    // name, which is currently all of them.
+    //
+    // Fixed buffer for the same reason as version above, and copied into a
+    // JsonDocument under the same rule — see writeSnapshotToHive.
+    char     device_name[24]  = {0};
     uint8_t  status_flags     = 0;
     // 32-bit as of wire revision 3. A uint16_t here would re-impose the exact
     // ceiling the counter was widened to escape: it clamped at 65535 s
@@ -79,7 +89,12 @@ struct Snapshot {
 // Per-hive form for the hives[] array: writes a nested "bee_counter" object.
 // Interval/per-gate fields are never written — the wire format is totals-only
 // and the backend derives intervals by differencing.
-void writeSnapshotToHive(JsonObject hive, const Snapshot& snap);
+// `mac` is the address this hive's counter is paired on, or nullptr/"" when the
+// caller has none. It is written whether or not the read succeeded — a
+// dashboard listing two counters with a failed relay needs to say which is
+// which, and that is exactly the case where the counter reported nothing.
+void writeSnapshotToHive(JsonObject hive, const Snapshot& snap,
+                         const char* mac = nullptr);
 
 #if ENABLE_WIRELESS_BEECOUNTER
 // Registry-driven GATT read: brings the BLE stack up once, then for every hive

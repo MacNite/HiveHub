@@ -64,6 +64,18 @@ class HiveBleIn(BaseModel):
     # Board/architecture a HiveInside node advertises in its beacon identity
     # record (currently only "nrf54lm20a"), forwarded by the HiveHub.
     board: Optional[str] = None
+    # Which physical node this is. device_name is the BLE local name the node
+    # advertises — "HiveInside-8A3F" as of HiveInside 0.5.0, where the four hex
+    # digits are the last two bytes of its address; mac is the paired address
+    # the HiveHub scanned for, which is known even for a node that reported no
+    # name (older firmware, or a HolyIot/Ruuvi beacon).
+    #
+    # Both ride in hive_readings.raw_json rather than a column, like the
+    # HiveTraffic image version: they change only when a node is re-paired and
+    # nothing charts or alerts on them. Declared here rather than left to
+    # extra="allow" so the field is documented and typed at the boundary.
+    device_name: Optional[str] = None
+    mac: Optional[str] = None
 
 
 class HiveMicIn(BaseModel):
@@ -82,6 +94,15 @@ class HiveBeeCounterIn(BaseModel):
     # column — reported_beecounter_version reads it from there — because it
     # changes only across an OTA and nothing charts it.
     version: Optional[str] = None
+    # Which physical counter this is, on the same terms as HiveBleIn above:
+    # device_name is the local name the counter reports ("name" in its
+    # measurement JSON, absent on every firmware that does not send one yet),
+    # mac is the paired address HiveHub dialled. The HiveHub emits both before
+    # it knows whether the read succeeded, so a counter that never answered is
+    # still identifiable — which is exactly when a dashboard listing two failed
+    # relays needs to say which counter is which.
+    device_name: Optional[str] = None
+    mac: Optional[str] = None
     total_in: Optional[int] = None
     total_out: Optional[int] = None
     interval_in: Optional[int] = None

@@ -378,6 +378,9 @@ struct Accumulator {
   // HiveInside identity (from the scan-response record, not the measurement).
   String  board;        // "nrf54lm20a"
   String  fw_version;   // "major.minor.patch"
+  // Advertised local name ("HiveInside-8A3F"). Like the identity record it
+  // rides in the scan response, so it only arrives on an active scan.
+  String  device_name;
 };
 
 namespace {
@@ -461,6 +464,21 @@ class ScanCallbacks : public NimBLEScanCallbacks {
         if (g_slot[s].mac.length() == 0 || g_slot[s].mac != mac) continue;
         if (ident.board.length())      g_slot[s].board = ident.board;
         if (ident.fw_version.length()) g_slot[s].fw_version = ident.fw_version;
+      }
+    }
+
+    // Local name, captured on the same terms and for the same reason: it comes
+    // from the scan response, it can arrive on a report that carries no
+    // measurement, and it is the only thing on the air that distinguishes two
+    // otherwise identical nodes. Every beacon type may carry one, so this is not
+    // gated on the HiveInside identity record.
+    if (dev->haveName()) {
+      String advName = String(dev->getName().c_str());
+      if (advName.length()) {
+        for (size_t s = 0; s < g_slot.size(); s++) {
+          if (g_slot[s].mac.length() == 0 || g_slot[s].mac != mac) continue;
+          g_slot[s].device_name = advName;
+        }
       }
     }
 
@@ -551,6 +569,11 @@ static void finalizeAccel(const Accumulator& a, Snapshot& s) {
 static void copyToSnapshot(const Accumulator& a, Snapshot& s) {
   s.present      = a.present;
   s.type         = a.type;
+  // Identity, not measurement: set before the HiveInside early-return below so
+  // HolyIot and Ruuvi carry it too — a beekeeper telling two beacons apart has
+  // the same problem whichever kind they are.
+  s.mac          = a.mac;
+  s.device_name  = a.device_name;
   s.rssi_dbm     = a.rssi_dbm;
   s.battery_pct  = a.battery_pct;
   s.battery_mv   = a.battery_mv;
@@ -807,6 +830,19 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
   ble["rssi_dbm"] = snap.rssi_dbm;
   if (snap.fw_version.length())  ble["firmware_version"] = snap.fw_version;
   if (snap.board.length())       ble["board"]            = snap.board;
+  // Which physical node this is. Both are nested-only: they never change
+  // between readings and nothing charts them, so they ride in
+  // hive_readings.raw_json rather than earning a column or a flat ble_{n}_*
+  // alias (the same treatment the HiveTraffic image version gets).
+  //
+  // Unlike the HiveTraffic counter's pair, these sit AFTER the !present return
+  // above: a hive with no beacon heard emits no "ble" object at all, and
+  // creating one just to carry an address would change what the presence of
+  // that object means for every reader of hive_readings. The dashboard reads
+  // the newest reading that HAS the field, so a node that missed one scan
+  // window keeps its identity anyway.
+  if (snap.device_name.length()) ble["device_name"]      = snap.device_name;
+  if (snap.mac.length())         ble["mac"]              = snap.mac;
 
   if (snap.sample_count > 0) {
     accel["sample_count"]   = snap.sample_count;

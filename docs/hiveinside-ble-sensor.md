@@ -178,6 +178,16 @@ node has actually reported, and it keeps the last known identity when a node
 misses a scan window, so it reads as "what this node is running", not "what was
 in the last packet".
 
+Each row in **Firmware → HiveInside nodes** is headed by the *hive* name, which
+says where the node sits and nothing about which unit it is. The **?** beside
+that name names the node itself: the local name it advertises and the BLE
+address it is paired on. HiveInside firmware from **0.5.0** advertises
+`HiveInside-XXXX`, where the four hex digits are the last two bytes of the
+node's address — earlier firmware advertised a bare `HiveInside` on every node,
+so for those the address is all there is to tell two of them apart. Both fields
+ride in `hives[].ble.device_name` and `hives[].ble.mac` (raw JSON, no column),
+and the HiveHub sends the address whether or not the node answered a scan.
+
 ### Diagnosing a failed relay
 
 Watch the HiveHub's serial console at 115200 across an attempt. A healthy relay
