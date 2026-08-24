@@ -52,15 +52,22 @@ class _Recorder:
         self.messages.append((topic, payload))
 
 
-def announce(readings):
+def announce(readings, hive=None):
     """Publish each reading through a fresh publisher; return the discovery
-    configs for hive 1's BLE beacon, oldest first, as (key, config) pairs."""
+    configs for hive 1's BLE beacon, oldest first, as (key, config) pairs.
+
+    A config of ``None`` is a *retraction* — the empty retained payload that
+    deletes the entity in Home Assistant. ``hive`` adds fields to the hive entry
+    around the beacon (e.g. the arbitrated temperature and its source).
+    """
     pub = mqtt_publisher.MqttPublisher()
     pub._client = _Recorder()
     for ble in readings:
+        entry = {"index": 1, "ble": dict(ble, present=True)}
+        entry.update(hive or {})
         pub.publish_measurement(
             "hive-test",
-            {"hives": [{"index": 1, "ble": dict(ble, present=True)}]},
+            {"hives": [entry]},
             datetime.now(timezone.utc),
             "hive-test",
         )
@@ -68,12 +75,13 @@ def announce(readings):
     for topic, payload in pub._client.messages:
         parts = topic.split("/")
         if parts[-1] == "config" and parts[-2].startswith("ble_1_"):
-            configs.append((parts[-2], json.loads(payload)))
+            configs.append((parts[-2], json.loads(payload) if payload else None))
     return configs
 
 
 def latest(configs, key):
-    """The most recent discovery config published for one entity key."""
+    """The most recent discovery config published for one entity key (``None``
+    when the last thing published for it was a retraction)."""
     for k, cfg in reversed(configs):
         if k == key:
             return cfg
@@ -147,6 +155,63 @@ configs = announce([dict(BATTERY, sensor_type="HiveInside"), HIVEINSIDE])
 check("a field seen later still gets an entity",
       latest(configs, "ble_1_battery_mv") is not None)
 check("no entity is announced for a field the beacon never reports",
+      latest(configs, "ble_1_pressure_hpa") is None)
+
+
+# ── the beacon's own temperature ─────────────────────────────────────────────
+# The firmware keeps temperature out of the hive's `ble` object: it arbitrates
+# one hive temperature between the wired probe, the beacon and a HiveHeart, and
+# names the winner in temp_source. When the beacon won, that reading is the
+# beacon's and belongs on its device too — otherwise a beacon measuring both
+# with one SHT4x showed a humidity but no temperature.
+configs = announce([HIVEINSIDE], hive={"temp_c": 21.5, "temp_source": "ble"})
+cfg = latest(configs, "ble_1_temp_c")
+check("a beacon that won the temperature arbitration gets a temperature entity",
+      cfg is not None and cfg["name"] == "Hive 1 HiveInside temperature"
+      and cfg["device_class"] == "temperature" and cfg["unit_of_measurement"] == "°C")
+
+configs = announce([HIVEINSIDE], hive={"temp_c": 21.5, "temp_source": "ds18b20"})
+check("a hive whose temperature came from a wired probe gets no beacon temperature",
+      latest(configs, "ble_1_temp_c") is None)
+
+configs = announce([dict(HIVEINSIDE, temp_c=21.5)])
+check("a beacon that reports temp_c itself is announced from that field",
+      latest(configs, "ble_1_temp_c") is not None)
+
+
+# ── stale entities left behind by a different beacon ─────────────────────────
+# A hive slot keeps the same HA device identifiers whichever beacon sits in it,
+# so a slot that used to hold a HolyIot leaves its retained pressure config
+# attached to the HiveInside that replaced it — reading "Unknown" forever, since
+# the HiveInside has no barometer. The empty retained payload deletes it.
+configs = announce([HIVEINSIDE])
+check("a HiveInside retracts the pressure entity it can never populate",
+      ("ble_1_pressure_hpa", None) in configs)
+check("it also retracts the hub-derived vibration peak it cannot populate",
+      ("ble_1_accel_peak_mg", None) in configs)
+check("it does not retract entities it does report",
+      not any(k in ("ble_1_battery_mv", "ble_1_rssi_dbm", "ble_1_temp_c")
+              and cfg is None for k, cfg in configs))
+
+configs = announce([HOLYIOT])
+check("a HolyIot keeps its pressure entity",
+      not any(k == "ble_1_pressure_hpa" and cfg is None for k, cfg in configs))
+check("a HolyIot retracts the HiveInside-only band entities",
+      ("ble_1_mic_rms_dbfs", None) in configs
+      and ("ble_1_accel_band_swarm_mg", None) in configs)
+
+configs = announce([BATTERY])
+check("nothing is retracted for a beacon whose type is unknown",
+      not any(cfg is None for _, cfg in configs))
+
+configs = announce([HIVEINSIDE, HIVEINSIDE, HIVEINSIDE])
+check("the retraction is published once, not on every reading",
+      [k for k, cfg in configs if cfg is None].count("ble_1_pressure_hpa") == 1)
+
+# A beacon first seen untyped may already have entities the resolved type cannot
+# populate; retracting them must not be undone by the re-announce that follows.
+configs = announce([dict(BATTERY, pressure_hpa=1013.0), HIVEINSIDE])
+check("an entity retracted on the resolved type is not re-announced with it",
       latest(configs, "ble_1_pressure_hpa") is None)
 
 

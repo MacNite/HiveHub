@@ -96,9 +96,9 @@ its entity then.
 |---|---|---|
 | **Hive N HiveHeart** | beehivemonitoring.com / HiveHeart | temperature, humidity, sound frequency, sound energy, sound peak, battery, signal |
 | **Hive N scale** | beehivemonitoring.com / HiveScale | weight, temperature, humidity, pressure, battery, signal |
-| **Hive N HolyIOT** | HolyIOT / In-hive BLE sensor | humidity, pressure, battery, signal, vibration, vibration peak |
-| **Hive N RuuviTag** | Ruuvi / RuuviTag | humidity, pressure, battery, signal, vibration, vibration peak |
-| **Hive N HiveInside** | HiveHub / HiveInside (nRF54LM20A) | humidity, battery, battery voltage, signal, firmware version, vibration + swarm/fanning/activity bands, sound level + sub-bass/hum/piping/stress/high bands |
+| **Hive N HolyIOT** | HolyIOT / In-hive BLE sensor | temperature, humidity, pressure, battery, signal, vibration, vibration peak |
+| **Hive N RuuviTag** | Ruuvi / RuuviTag | temperature, humidity, pressure, battery, signal, vibration, vibration peak |
+| **Hive N HiveInside** | HiveHub / HiveInside (nRF54LM20A) | temperature, humidity, battery, battery voltage, signal, firmware version, vibration + swarm/fanning/activity bands, sound level + sub-bass/hum/piping/stress/high bands |
 
 Each module exposes its **own** temperature/humidity, even though the hive's
 resolved temperature/humidity also appears on the hub device. This is
@@ -131,8 +131,28 @@ the single value the hive resolves to.
 > firmware version. Since entities are announced per field, each beacon gets
 > exactly what it can populate.
 
-> No in-hive BLE beacon has a dedicated temperature entity here — its temperature
-> is promoted to the hive-level reading (`hive_<n>_temp_c` on the hub device).
+> A BLE beacon's **temperature** is a special case. The firmware does not put it
+> in the hive's `ble` object at all: the hive arbitrates a single temperature
+> between the wired DS18B20, the beacon and a HiveHeart, and records the winner
+> in `temp_source`. When the beacon won (`temp_source == "ble"`, the default
+> whenever a beacon reports one), the bridge mirrors that value onto
+> `ble_<n>_temp_c` so it also appears on the beacon's own device — a beacon that
+> measures temperature and humidity with one SHT4x otherwise showed only the
+> humidity there. A hive whose temperature came from a wired probe or a
+> HiveHeart gets no beacon temperature entity: the reading then belongs to
+> another sensor. The hive-level `hive_<n>_temp_c` entity on the hub device is
+> unaffected either way.
+
+> **Entities left behind by a previous beacon are deleted.** A hive slot keeps
+> the same Home Assistant device identifiers whichever beacon sits in it, so a
+> slot that used to hold a HolyIOT and now holds a HiveInside inherits the
+> HolyIOT's retained discovery configs — its *pressure* entity survives on the
+> HiveInside device and reads *Unknown* forever, because a retained config is
+> never removed by simply not re-publishing it. Each known beacon type therefore
+> declares what it can report at all, and anything outside that set is retracted
+> with an empty retained payload on the discovery topic, which removes the entity
+> from Home Assistant and clears it from the broker. A beacon whose type is
+> unknown declares nothing and never has entities deleted.
 
 > The HiveScale's **pressure** commonly reads a flat **1000 hPa**: on most units
 > the barometer is not activated by the manufacturer, so this is the sensor's
