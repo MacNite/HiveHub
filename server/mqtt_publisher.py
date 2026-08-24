@@ -121,13 +121,18 @@ _HIVE_SUBDEVICES: list[tuple[str, str, str, str, list]] = [
     # arrives (see publish_measurement), so each beacon ends up with exactly the
     # entities it can populate instead of a stack of permanently-Unknown ones.
     #
-    # None of them gets a temperature entity here: their temperature is promoted
-    # to the hive-level reading (hive_<n>_temp_c on the hub device).
+    # Temperature is listed even though the firmware does not put it in the hive's
+    # `ble` object: the beacon's reading is arbitrated into the hive-level
+    # temperature (hive_<n>_temp_c on the hub device), so _flatten_hives mirrors it
+    # back onto ble_<n>_temp_c whenever the hive resolved its temperature FROM the
+    # beacon (temp_source == "ble"). Without that the beacon device showed a
+    # humidity but no temperature, even though the same sensor measures both.
     #
     # The manufacturer/model/label below are only the fallback for a beacon that
     # reports no type; the real ones are resolved per hive from the reported
     # sensor type (see _BLE_IDENTITIES).
     ("ble", "HiveHub", "In-hive BLE sensor", "BLE sensor", [
+        ("temp_c",                 "temperature",             "°C",   "temperature",     "measurement", None),
         ("humidity_percent",       "humidity",                "%",    "humidity",        "measurement", None),
         ("pressure_hpa",           "pressure",                "hPa",  "pressure",        "measurement", None),
         ("battery_percent",        "battery",                 "%",    "battery",         "measurement", None),
@@ -185,11 +190,48 @@ _BLE_NESTED_FIELDS: list[tuple[str, str, str]] = [
 # stripped) so type strings that carry a part number or board suffix — "HolyIot
 # 25015", "hiveinside_nrf54" — still match.
 #
-# prefix -> (manufacturer, model, label)
-_BLE_IDENTITIES: list[tuple[str, tuple[str, str, str]]] = [
-    ("holyiot",    ("HolyIOT", "In-hive BLE sensor",     "HolyIOT")),
-    ("hiveinside", ("HiveHub", "HiveInside (nRF54LM20A)", "HiveInside")),
-    ("ruuvitag",   ("Ruuvi",   "RuuviTag",                "RuuviTag")),
+# The union catalogue above is deliberately wider than any single beacon, and a
+# hive slot keeps the same HA device identifiers whichever beacon sits in it —
+# so a slot that used to hold a HolyIot and now holds a HiveInside inherits the
+# HolyIot's retained discovery configs: its pressure entity survives on the
+# HiveInside device and sits at "Unknown" forever, because nothing ever removes
+# a retained config that was once published. The per-field announce guard cannot
+# help there: it only decides what to ADD.
+#
+# So each known beacon type also declares what it can report at all, taken from
+# the firmware's parsers (firmware/src/ble_sensor.cpp):
+#
+#   HolyIot 25015 / RuuviTag — SHT temp+humidity, barometer, battery percent and
+#     raw axes the hub turns into a vibration RMS + peak. No on-board FFT bands,
+#     no cell voltage, no firmware version.
+#   HiveInside — SHT temp+humidity, battery percent AND cell voltage, firmware
+#     version, on-board vibration RMS + three bands and acoustic RMS + five
+#     bands. No barometer, and no vibration peak (the hub only derives a peak
+#     from raw axes, which this node does not send).
+#
+# Anything outside that set is retracted once the type is known (see
+# _ble_stale_keys / _retract_sensor_configs), which is what finally clears an
+# inherited entity out of Home Assistant. An unknown type declares no capability
+# set and nothing is ever retracted for it — a beacon added to the firmware
+# before this table is updated must not have its entities deleted.
+_BLE_COMMON = {"temp_c", "humidity_percent", "battery_percent", "rssi_dbm"}
+_BLE_RAW_AXIS_BEACON = _BLE_COMMON | {"pressure_hpa", "accel_rms_mg", "accel_peak_mg"}
+_BLE_HIVEINSIDE = _BLE_COMMON | {
+    "battery_mv", "firmware_version",
+    "accel_rms_mg", "accel_band_swarm_mg", "accel_band_fanning_mg",
+    "accel_band_activity_mg",
+    "mic_rms_dbfs", "mic_band_sub_bass_dbfs", "mic_band_hum_dbfs",
+    "mic_band_piping_dbfs", "mic_band_stress_dbfs", "mic_band_high_dbfs",
+}
+
+# prefix -> (manufacturer, model, label), fields the beacon can ever report
+_BLE_IDENTITIES: list[tuple[str, tuple[str, str, str], frozenset[str]]] = [
+    ("holyiot",    ("HolyIOT", "In-hive BLE sensor",      "HolyIOT"),
+     frozenset(_BLE_RAW_AXIS_BEACON)),
+    ("hiveinside", ("HiveHub", "HiveInside (nRF54LM20A)", "HiveInside"),
+     frozenset(_BLE_HIVEINSIDE)),
+    ("ruuvitag",   ("Ruuvi",   "RuuviTag",                "RuuviTag"),
+     frozenset(_BLE_RAW_AXIS_BEACON)),
 ]
 
 
@@ -204,11 +246,38 @@ def _ble_identity(sensor_type: Optional[str],
     """
     if not sensor_type:
         return fallback
-    norm = "".join(c for c in sensor_type.lower() if c.isalnum())
-    for prefix, identity in _BLE_IDENTITIES:
+    norm = _ble_type_key(sensor_type)
+    for prefix, identity, _caps in _BLE_IDENTITIES:
         if norm.startswith(prefix):
             return identity
     return fallback
+
+
+def _ble_type_key(sensor_type: str) -> str:
+    """Normalised match key for a reported beacon type ("HolyIot 25015" ->
+    "holyiot25015"), so type strings carrying a part number or board suffix still
+    match their table prefix."""
+    return "".join(c for c in sensor_type.lower() if c.isalnum())
+
+
+def _ble_stale_keys(n: int, sensor_type: Optional[str]) -> list[str]:
+    """Flat keys of catalogue entities this beacon type can never populate.
+
+    Their retained discovery configs are left over from a different beacon that
+    sat in the same hive slot (the HA device identifiers do not depend on the
+    type), so they must be retracted rather than merely not re-announced.
+    Returns nothing for a beacon whose type is unknown: without a capability set
+    there is no basis for deleting anything.
+    """
+    if not sensor_type:
+        return []
+    norm = _ble_type_key(sensor_type)
+    for prefix, _identity, caps in _BLE_IDENTITIES:
+        if norm.startswith(prefix):
+            return [f"ble_{n}_{field}" for field in _SUBDEVICE_FIELDS["ble"]
+                    if field not in caps]
+    return []
+
 
 # source -> flat field names, derived from the catalogue above (used by the
 # flattener and the present-hive detection).
@@ -320,6 +389,18 @@ def _flatten_hives(payload: dict) -> None:
                 val = (h.get(obj) or {}).get(field)
                 if val is not None:
                     payload[f"ble_{n}_{flat}"] = val
+            # Same for temperature, which the firmware keeps out of the `ble`
+            # object entirely: the hive arbitrates one temperature between the
+            # wired DS18B20, the beacon and a HiveHeart, and records which sensor
+            # won in temp_source. When the beacon won, that value IS the beacon's
+            # reading, so mirror it onto its sub-device — otherwise a beacon that
+            # measures temperature and humidity with the same SHT4x would show
+            # only the humidity on its own device. A hive whose temperature came
+            # from a wired probe or a HiveHeart gets no beacon temperature: the
+            # payload then carries no reading that belongs to the beacon.
+            if payload.get(f"ble_{n}_temp_c") is None and h.get("temp_source") == "ble" \
+                    and h.get("temp_c") is not None:
+                payload[f"ble_{n}_temp_c"] = h["temp_c"]
 
 
 def _present_hive_indices(payload: dict) -> set[int]:
@@ -398,6 +479,10 @@ class MqttPublisher:
         self._discovered_subdevices: dict[
             str, dict[str, tuple[tuple[str, str, str], set[str]]]
         ] = {}
+        # Per-device set of "<hive>:<source>:<sensor_type>" slots whose stale
+        # entities have already been retracted this process, so the retraction
+        # is published once per beacon type rather than on every reading.
+        self._retracted_subdevices: dict[str, set[str]] = {}
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -492,6 +577,7 @@ class MqttPublisher:
         self._discovered.clear()
         self._discovered_hives.clear()
         self._discovered_subdevices.clear()
+        self._retracted_subdevices.clear()
 
     def _on_disconnect(self, client, userdata, *args) -> None:
         self._connected = False
@@ -552,6 +638,7 @@ class MqttPublisher:
                 # Publish per-hive discovery for any hive index not yet seen.
                 seen = self._discovered_hives.setdefault(device_id, set())
                 seen_sub = self._discovered_subdevices.setdefault(device_id, {})
+                retracted = self._retracted_subdevices.setdefault(device_id, set())
                 for n in sorted(_present_hive_indices(payload)):
                     if n not in seen:
                         self._publish_sensor_configs(client, device_id, display_name, _hive_sensors(n))
@@ -574,6 +661,27 @@ class MqttPublisher:
                         # to a HolyIOT.
                         identity = (manufacturer, model, label)
                         announced_identity, announced = seen_sub.get(key, (identity, set()))
+                        if source == "ble":
+                            # Clear entities inherited from a different beacon that
+                            # previously sat in this hive slot: their retained
+                            # configs outlive it, because the slot's HA device
+                            # identifiers do not depend on which beacon is in it.
+                            # Done once per reported type, and never for a field
+                            # this reading actually carries. Retracted keys also
+                            # leave `announced`, so an entity announced under the
+                            # generic fallback earlier in this process is not
+                            # re-published by the identity-change branch below
+                            # right after being deleted.
+                            sensor_type = payload.get(f"ble_{n}_sensor_type")
+                            slot = f"{key}:{sensor_type}"
+                            if slot not in retracted:
+                                stale = [k for k in _ble_stale_keys(n, sensor_type)
+                                         if payload.get(k) is None]
+                                if stale:
+                                    self._retract_sensor_configs(client, device_id, stale)
+                                    announced = announced - set(stale)
+                                    seen_sub[key] = (announced_identity, announced)
+                                retracted.add(slot)
                         if announced_identity != identity:
                             # The BLE beacon's type became known, or it was swapped
                             # for a different brand: re-announce everything it
@@ -628,6 +736,26 @@ class MqttPublisher:
             "model": model,
             "via_device": f"hivescale_{device_id}",
         }
+
+    def _retract_sensor_configs(self, client, device_id: str, keys) -> None:
+        """Delete discovery configs for entities that no longer belong to a device.
+
+        An empty retained payload on a discovery topic is how MQTT discovery
+        removes an entity: Home Assistant drops it and the broker forgets the
+        config, so it does not come back on the next restart. Publishing to a
+        topic that carries no retained config is harmless — it is the same no-op
+        for both HA and the broker.
+        """
+        node = device_id.replace("/", "_").replace("+", "_").replace("#", "_")
+        for key in keys:
+            client.publish(
+                f"{MQTT_HA_DISCOVERY_PREFIX}/sensor/{node}/{key}/config",
+                "", qos=MQTT_QOS, retain=True,
+            )
+        logger.info(
+            "Retracted stale Home Assistant discovery configs for device %s: %s",
+            device_id, ", ".join(keys),
+        )
 
     def _publish_sensor_configs(self, client, device_id: str, display_name: Optional[str],
                                 sensors, device_block: Optional[dict[str, Any]] = None) -> None:
