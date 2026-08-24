@@ -16,7 +16,7 @@
 
 namespace beecnt {
 
-void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
+void writeSnapshotToHive(JsonObject hive, const Snapshot& snap, const char* mac) {
     // Nested per-hive form for the hives[] array (server maps it onto the
     // hive_readings bee_counter_* columns). Only hives with a configured
     // counter get this object at all; ok:false means "paired but unreachable
@@ -24,6 +24,15 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
     // into intervals, so interval_*/per_gate_* fields are never emitted.
     JsonObject bc = hive["bee_counter"].to<JsonObject>();
     bc["ok"] = snap.present;
+    // Which counter this row belongs to. Written BEFORE the !present return:
+    // identity is pairing state, not a measurement, so it is known — and most
+    // worth having — precisely when the counter did not answer. Both are
+    // String()-wrapped so the document owns a copy, for the reason spelt out on
+    // the version field below (the MAC does point into the hive registry, which
+    // outlives the document — but that is not a thing this function should have
+    // to know about its caller).
+    if (snap.device_name[0]) bc["device_name"] = String(snap.device_name);
+    if (mac && mac[0])       bc["mac"]         = String(mac);
     if (!snap.present) return;
 
     bc["protocol_version"] = snap.fw_version;   // key kept for server compat
@@ -101,6 +110,7 @@ bool parseTrafficJson(const char* json, size_t len, Snapshot& out) {
     out.present       = true;
     out.fw_version    = m.protocol_version;
     strlcpy(out.version, m.version, sizeof(out.version));
+    strlcpy(out.device_name, m.device_name, sizeof(out.device_name));
     out.status_flags  = m.status_flags;
     out.uptime_s      = m.uptime_s;
     out.num_gates     = m.num_gates;

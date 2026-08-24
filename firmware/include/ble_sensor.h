@@ -91,6 +91,19 @@ struct Snapshot {
   // the nRF54 HiveInside image. Empty for HolyIot/Ruuvi beacons.
   String   board;
 
+  // Local name the node advertises, e.g. "HiveInside-8A3F" — the last two bytes
+  // of its BLE address, which is what tells two nodes in the same yard apart.
+  // It rides in the scan response, so it is only captured when the scan is
+  // active (HOLYIOT_BLE_ACTIVE_SCAN, on by default); a passive scan leaves it
+  // empty, as does a node running firmware older than the suffix, which
+  // advertises the bare "HiveInside" every other node also uses.
+  String   device_name;
+
+  // The paired MAC this snapshot was taken for, normalized. Always known —
+  // it is the address HiveHub scanned for — so it is the identity fallback for
+  // a node that reports no distinguishing name of its own.
+  String   mac;
+
   // Capability helpers used by the wired/BLE arbitration in sensors.cpp.
   bool providesTemp()  const { return present && !isnan(temp_c); }
   bool providesAccel() const { return present && !isnan(accel_rms_mg); }

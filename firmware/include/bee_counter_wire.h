@@ -100,6 +100,14 @@ constexpr uint8_t STATUS_NIGHT_IDLE = 0x80;
 struct Measurement {
     uint8_t  protocol_version = 0;   // "fw"
     char     version[16]      = {0}; // "ver", empty when the counter is too old
+    // Local name the counter calls itself ("name"), e.g. "HiveTraffic-8A3F".
+    // Empty on every counter firmware that does not report one, which is what
+    // makes it worth having: two counters on one HiveHub are otherwise
+    // indistinguishable in the dashboard. Truncated rather than rejected if a
+    // counter ever sends something longer than this buffer — a shortened name
+    // still tells two counters apart, and dropping the reading over it would
+    // not.
+    char     device_name[24]  = {0};
     uint8_t  status_flags     = 0;   // "status"
     uint32_t uptime_s         = 0;
     uint8_t  num_gates        = 0;
@@ -292,9 +300,19 @@ inline bool parseMeasurement(const char* json, size_t len, Measurement& out) {
         const size_t klen = ke - kb;
         const char* key = json + kb;
 
-        // "ver" is the only string field; everything else is an unsigned
-        // integer. A key we do not know is skipped whole, nesting included.
+        // "ver" and "name" are the string fields; everything else is an
+        // unsigned integer. A key we do not know is skipped whole, nesting
+        // included.
+        char*  strField = nullptr;
+        size_t strCap   = 0;
         if (klen == 3 && memcmp(key, "ver", 3) == 0) {
+            strField = out.version;
+            strCap   = sizeof(out.version);
+        } else if (klen == 4 && memcmp(key, "name", 4) == 0) {
+            strField = out.device_name;
+            strCap   = sizeof(out.device_name);
+        }
+        if (strField != nullptr) {
             size_t sb = 0, se = 0;
             const size_t after = detail::scanString(json, len, i, sb, se);
             // scanString returns len on malformed input, and a well-formed
@@ -302,9 +320,9 @@ inline bool parseMeasurement(const char* json, size_t len, Measurement& out) {
             // '}' has to follow it.
             if (after >= len) return false;
             size_t n = se - sb;
-            if (n >= sizeof(out.version)) n = sizeof(out.version) - 1;
-            memcpy(out.version, json + sb, n);
-            out.version[n] = '\0';
+            if (n >= strCap) n = strCap - 1;
+            memcpy(strField, json + sb, n);
+            strField[n] = '\0';
             i = after;
             continue;
         }

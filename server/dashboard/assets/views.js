@@ -1727,7 +1727,14 @@ function hiveInsideNodes(state) {
     const board = bleFieldLatest(state, n, "board");
     const type = String(bleFieldLatest(state, n, "sensor_type") || "");
     if (!fw && !board && !/hiveinside/i.test(type)) continue;
-    nodes.push({ n, label: hiveLabel(state, n), fw, board });
+    nodes.push({
+      n, label: hiveLabel(state, n), fw, board,
+      // Which physical node this is, as opposed to which hive it sits in. Both
+      // come from the HiveHub's nested hives[].ble object: the name is what the
+      // node advertises for itself, the MAC is the address it was paired on.
+      deviceName: bleFieldLatest(state, n, "device_name"),
+      mac: bleFieldLatest(state, n, "mac"),
+    });
   }
   return nodes;
 }
@@ -1760,7 +1767,14 @@ function beeCounterNodes(state) {
     const seen = beeCounterFieldLatest(state, n, "ok") != null;
     const fw = beeCounterFieldLatest(state, n, "version");
     if (!seen && !fw) continue;
-    nodes.push({ n, label: hiveLabel(state, n), fw, board: null });
+    nodes.push({
+      n, label: hiveLabel(state, n), fw, board: null,
+      // Same pair as hiveInsideNodes, from hives[].bee_counter. The HiveHub
+      // writes them before it knows whether the counter answered, so they are
+      // present on a failed read too.
+      deviceName: beeCounterFieldLatest(state, n, "device_name"),
+      mac: beeCounterFieldLatest(state, n, "mac"),
+    });
   }
   return nodes;
 }
@@ -2331,6 +2345,31 @@ function renderDevice(root, state) {
     // while the version simply never changed.
     const relays = cfg.relays || {};
     const relayOf = (n) => relays[String(n)] || null;
+    // Which physical node a row is about. Every row is headed by its HIVE name
+    // ("shire-01"), which says where the node sits and nothing about which unit
+    // it is — so a beekeeper re-pairing one of several identical nodes, or
+    // reading "relay failed" on two rows, had no way to tell them apart without
+    // walking to the hive. The node's own advertised name carries the last four
+    // hex digits of its address, which is the thing that differs, and the full
+    // address is the fallback for a node too old to advertise a name (and the
+    // way to confirm a pairing against what the device portal shows).
+    //
+    // Returned as a "?" beside the label rather than text in the row: it is
+    // reference detail wanted twice a season, and the row already has to fit a
+    // version, a release flag, a relay badge and a button on a phone.
+    const identityTip = (node) => {
+      // Nothing known about this node beyond the hive it sits in: a "?" that
+      // opens onto nothing is worse than no "?" at all. The note about a node
+      // that advertises no name only makes sense next to an address, which is
+      // then the only identifier left.
+      if (!node.deviceName && !node.mac) return null;
+      const parts = [];
+      if (node.deviceName) parts.push(`Advertises itself as “${node.deviceName}”.`);
+      if (node.mac) parts.push(`BLE address ${node.mac}.`);
+      if (!node.deviceName && cfg.unnamedTip) parts.push(cfg.unnamedTip);
+      return infoTip(
+        `${cfg.name} ${cfg.nodeWord} for ${node.label}. ${parts.join(" ")}`);
+    };
     const RELAY_BADGE = {
       pending: ["info", "relay queued"],
       claimed: ["info", "relaying…"],
@@ -2401,7 +2440,11 @@ function renderDevice(root, state) {
           }
           const cell = el("span", { class: "v fw-node-v" }, version,
             meta.some(Boolean) ? el("span", { class: "fw-node-meta" }, ...meta) : null);
-          return el("div", { class: "row" }, el("span", { class: "k" }, d.label), cell);
+          const tip = identityTip(d);
+          const label = tip
+            ? el("span", { class: "k" }, `${d.label} `, tip)
+            : el("span", { class: "k" }, d.label);
+          return el("div", { class: "row" }, label, cell);
         })),
       // Spell the failure out in full. The badge's tooltip is easy to miss,
       // and the message names the exact stage that failed — which is the
@@ -2421,9 +2464,16 @@ function renderDevice(root, state) {
     name: "HiveInside",
     heading: "HiveInside nodes",
     buttonLabel: "Relay to node",
+    nodeWord: "node",
     latestVersion: fw.hiveinside_latest_version,
     relays: fw.hiveinside_relays,
     queue: (n) => state.actions.queueHiveInsideUpdate(n),
+    // Said explicitly, because the alternative reading is "this node is
+    // broken": before HiveInside 0.5.0 every node advertised the same bare
+    // "HiveInside", so there is nothing HiveHub could have shown.
+    unnamedTip: "It advertises no name of its own — HiveInside firmware from " +
+      "0.5.0 onwards advertises “HiveInside-XXXX”, the last two bytes of its " +
+      "address. Relay a newer image to give this node a distinguishable name.",
     // What the version column means and how an image actually reaches a node. It
     // explains the section rather than reporting anything, so it hangs off a "?"
     // next to the heading instead of taking a paragraph under the node list —
@@ -2440,9 +2490,12 @@ function renderDevice(root, state) {
     name: "HiveTraffic",
     heading: "HiveTraffic counters",
     buttonLabel: "Relay to counter",
+    nodeWord: "counter",
     latestVersion: fw.beecounter_latest_version,
     relays: fw.beecounter_relays,
     queue: (n) => state.actions.queueBeeCounterUpdate(n),
+    unnamedTip: "It reports no name of its own — no HiveTraffic firmware sends " +
+      "one yet — so the address is all there is to tell two counters apart.",
     // Worth stating outright rather than burying: unlike a HiveInside relay,
     // this one costs data. The counter parks its IR emitters and stops polling
     // its gates while it writes flash, so every bee that passes during the
