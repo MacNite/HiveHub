@@ -732,6 +732,14 @@
 // Short press: start WiFi provisioning AP.
 // Long press: reset Preferences and reboot.
 // GPIO27 is RTC-capable so it can wake the ESP32 from deep sleep via EXT0.
+//
+// Deliberately NOT remapped when the C6 moved its setup button to the on-board
+// USER button (firmware 0.25.0). This board's only spare button is BOOT on
+// GPIO0, a strapping pin whose failure mode — "held at reset" lands you in the
+// serial bootloader, not in AP mode — is a bad thing to hand a beekeeper in a
+// bee suit. So the 30-pin board keeps one button doing what it always did and
+// simply has no inspection button; inspection mode still works here through the
+// dashboard/API commands.
 #define SETUP_BUTTON_PIN 27
 #endif // !(HIVEHUB_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6)
 
@@ -753,9 +761,72 @@
 #define SD_SCK          19   // D8 (XIAO SCK label)
 #define SD_MISO         20   // D9 (XIAO MISO label)
 #define SD_MOSI         18   // D10 (XIAO MOSI label)
-// D2 is the setup button; button-to-GND, INPUT_PULLUP.
-#define SETUP_BUTTON_PIN 2   // D2
+// Button map, as of firmware 0.25.0 (see docs/inspection-mode.md):
+//   GPIO9  — the XIAO's own BOOT/USER button. Short press starts the
+//            provisioning AP, long press factory-resets Preferences. It is only
+//            reached during installation and recovery, so it does not need to
+//            be brought out of the enclosure; everything a beekeeper does in
+//            the apiary is a `start_provisioning` command from the dashboard.
+//   D2     — the external inspection button (see INSPECTION_BUTTON_PIN below).
+//            This pin used to be the setup button; the swap frees the one
+//            external, weatherproofable button for the thing a beekeeper
+//            actually presses at the hive stand.
+// Both are button-to-GND with INPUT_PULLUP, and both wake the hub from deep
+// sleep. GPIO9 is the ESP32-C6 boot-mode strapping pin: holding it down across
+// a hardware RESET or a power-up puts the chip in the serial bootloader (that
+// is what the button is for). Deep-sleep wake does not re-latch strapping, so a
+// press that wakes the hub runs the firmware as normal — but "press USER, then
+// press RESET" is a flash command, not an AP-mode command.
+#define SETUP_BUTTON_PIN 9   // on-board BOOT/USER button
+
+// External inspection button — momentary, button-to-GND, INPUT_PULLUP. Each
+// press toggles inspection mode (see inspection.h). Any normally-open switch
+// works: a plain pushbutton, or a keyed one if the apiary is public.
+#define INSPECTION_BUTTON_PIN 2   // D2
 #endif // HIVEHUB_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
+
+// ==============================
+// INSPECTION MODE
+// ==============================
+// While a beekeeper has the hive open, every hive-specific reading is noise: a
+// scale with two supers lifted off it reads tens of kilos light, and the brood
+// nest temperature falls off a cliff. Inspection mode marks that window so the
+// backend can keep the readings (nothing is thrown away) while charts, insights
+// and alert rules skip them — see docs/inspection-mode.md.
+//
+// Hub-level sensors (ambient temp/humidity, battery, solar, RSSI) are NOT
+// affected: they measure the box on the post, not the colony, and they are what
+// tells you the hub was alive throughout.
+//
+// The feature only needs the flag, so it is compiled on every board. The
+// physical button is C6-only (the 30-pin DevKit has no spare button — its
+// GPIO27 stays the setup button), but the API/dashboard commands work anywhere.
+#if defined(INSPECTION_BUTTON_PIN)
+#define HAS_INSPECTION_BUTTON 1
+#else
+#define HAS_INSPECTION_BUTTON 0
+#endif
+
+// A press shorter than this is contact bounce, not a beekeeper.
+#ifndef INSPECTION_DEBOUNCE_MS
+#define INSPECTION_DEBOUNCE_MS 50
+#endif
+// Minimum gap between two accepted toggles. Long enough that one firm press can
+// never register as "on" and "off" again, short enough to correct a misfire.
+#ifndef INSPECTION_TOGGLE_COOLDOWN_MS
+#define INSPECTION_TOGGLE_COOLDOWN_MS 2000
+#endif
+// Safety net for an inspection nobody switched off. Without it one forgotten
+// press means an indefinite hive-data blackout that looks exactly like a dead
+// sensor. Overridable per device from the dashboard (device_configs.
+// inspection_timeout_minutes), which is what INSPECTION_TIMEOUT_MAX_MINUTES
+// bounds; the default matches the server's.
+#ifndef INSPECTION_DEFAULT_TIMEOUT_MINUTES
+#define INSPECTION_DEFAULT_TIMEOUT_MINUTES 60UL
+#endif
+#ifndef INSPECTION_TIMEOUT_MAX_MINUTES
+#define INSPECTION_TIMEOUT_MAX_MINUTES 1440UL
+#endif
 
 // ==============================
 // XIAO ESP32-C6 ANTENNA SELECTION

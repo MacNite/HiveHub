@@ -98,12 +98,45 @@ let cursorBandByGroup = Object.create(null);
 let sendIntervalMs = null;
 const DEFAULT_SEND_INTERVAL_S = 600;
 
+// Inspection windows shaded behind every line chart on the current view, as
+// { start, end } epoch millis (end null = still open). See drawInspectionBands.
+//
+// Only populated while ONE device is charted. A comparison spanning several
+// hubs would have to shade each hub's windows across a plot whose series come
+// from all of them, and a band that means "hive 3 on the other hub was open"
+// drawn under this hub's weight trace is worse than no band at all — it invites
+// exactly the wrong conclusion about the step it sits next to.
+let chartInspections = [];
+
 // Called by app.js before rendering a view so charts know the active device's
-// send interval (see the "Send interval (s)" field on the device/admin page).
+// send interval (see the "Send interval (s)" field on the device/admin page)
+// and which stretches of the range were inspections.
 export function configureCharts(state) {
   const raw = Number(state?.config?.send_interval_seconds);
   const seconds = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SEND_INTERVAL_S;
   sendIntervalMs = seconds * 1000;
+  chartInspections = state?.multiDevice ? [] : inspectionWindows(state?.inspections);
+}
+
+// Map the API's inspection records onto the { start, end } pairs the chart
+// draws. Unparseable timestamps are dropped rather than drawn at the epoch,
+// where they would shade the entire chart.
+export function inspectionWindows(rows) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  for (const r of rows) {
+    const start = Date.parse(r?.started_at);
+    if (!Number.isFinite(start)) continue;
+    const end = r?.ended_at ? Date.parse(r.ended_at) : null;
+    out.push({
+      start,
+      end: Number.isFinite(end) ? end : null,
+      id: r?.id ?? null,
+      note: r?.note || "",
+      hives: Array.isArray(r?.hives) ? r.hives : null,
+    });
+  }
+  return out;
 }
 
 export function clearCharts() { activeCharts = []; }
@@ -450,8 +483,21 @@ function chartCard(title, sub, series, opts = {}) {
   // Dash segments that span a data gap (see drawLineChart). sendIntervalMs is
   // only a fallback cadence; the test adapts to each series' own spacing, so
   // even coarse charts (e.g. daily-max) flag only genuinely missing stretches.
-  const chart = { canvas, series, opts: { ...opts, sendIntervalMs }, legendItems, hint, prefs };
+  // inspections default to the view's windows; a caller may override (or pass
+  // [] to opt a chart out — the hub-level power/network charts, whose sensors an
+  // inspection does not touch, have nothing to shade).
+  const chart = {
+    canvas, series, legendItems, hint, prefs,
+    opts: { inspections: chartInspections, ...opts, sendIntervalMs },
+  };
+  // A shaded band with nothing naming it is just an unexplained smudge, so a
+  // chart that has any inspection window to draw says so in its legend.
+  const inspLegend = chart.opts.inspections && chart.opts.inspections.length
+    ? el("span", { class: "lg lg-static", title: "Readings taken while the hive was open are not charted" },
+        el("span", { class: "swatch swatch-inspection" }), "Inspection")
+    : null;
   const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item),
+    inspLegend,
     series.length ? chartTools(chart, title, hint) : null);
   activeCharts.push(chart);
   if (series.length) attachChartCursor(chart);
@@ -738,8 +784,12 @@ function renderOverview(root, state) {
   const statusCard = el("div", { class: "card" },
     el("div", { class: "spread" },
       el("h2", {}, "Status"),
-      el("span", { class: `badge ${m.calibration_mode ? "warn" : "good"}` },
-        m.calibration_mode ? "Calibration mode" : "Live")),
+      // Inspection outranks calibration in the badge: it is the one that
+      // explains why this device's hive readings are missing right now, which
+      // is the question someone looking at a blank tile is asking.
+      el("span", { class: `badge ${m.inspection || m.calibration_mode ? "warn" : "good"}` },
+        m.inspection ? "Inspection in progress"
+          : m.calibration_mode ? "Calibration mode" : "Live")),
     el("p", { class: "card-sub" },
       ins ? `${ins.alert_count || 0} active insight${(ins.alert_count || 0) === 1 ? "" : "s"}` : ""),
     el("div", { class: "rows" },
@@ -1379,12 +1429,15 @@ function renderBattery(root, state) {
   }
   if (m.battery_alert) cards.push(metricCard("Battery alert", "Active", "", "Low battery warning"));
   const charts = [
+    // No inspection shading on the hub's own power and network charts: these
+    // sensors keep measuring through an inspection and are exactly how you tell
+    // "the beekeeper had the hive open" from "the hub went dark".
     chartCard("Battery", "State of charge and voltage",
-      [socSeries, battVoltSeries], { yDigits: 1, y2Digits: 2 }),
+      [socSeries, battVoltSeries], { yDigits: 1, y2Digits: 2, inspections: [] }),
   ];
   if (hasSolar) {
     charts.push(chartCard("Solar", "Solar power input",
-      [solarPowerSeries, solarCurrentSeries], { yDigits: 0 }));
+      [solarPowerSeries, solarCurrentSeries], { yDigits: 0, inspections: [] }));
   }
 
   const node = el("div", {});
@@ -1433,7 +1486,8 @@ function renderConnectivity(root, state) {
   ];
   const charts = [
     chartCard("Signal strength", "RSSI over the selected range",
-      [seriesFrom(state.measurements, "rssi_dbm", "RSSI", PALETTE[1])], { unit: "dBm", yDigits: 0 }),
+      [seriesFrom(state.measurements, "rssi_dbm", "RSSI", PALETTE[1])],
+      { unit: "dBm", yDigits: 0, inspections: [] }),
   ];
   const node = tsView("Connectivity", "Network and timing health", state, { cards, charts });
   const note = deviceContextNote(state, "Connectivity is per device and is");
@@ -1777,6 +1831,92 @@ function beeCounterNodes(state) {
     });
   }
   return nodes;
+}
+
+// ── Inspection panel (Device & admin → Configuration) ────────────────────────
+// Start/stop an inspection remotely, see whether the hub has picked the request
+// up yet, and annotate the windows already recorded. The note is the half that
+// pays off later: "removed 2 supers" beside a 40 kg step turns an alarming
+// trace into a harvest record.
+function inspectionCard(state) {
+  const rows = Array.isArray(state.inspections) ? state.inspections : [];
+  const open = rows.find((r) => !r.ended_at) || null;
+  // Requested but not yet acknowledged. A hub deep-sleeps between cycles, so
+  // this state lasts up to a whole send interval and showing it as "active"
+  // would claim something that has not happened yet.
+  const pending = !!open && !open.acknowledged_at;
+
+  const badge = el("span", { class: `badge ${open ? (pending ? "muted" : "warn") : "muted"}` },
+    open ? (pending ? "Requested — waiting for the device" : "Inspection active") : "Not inspecting");
+
+  const startBtn = el("button", { class: "btn", type: "button" }, "Start inspection");
+  const stopBtn = el("button", { class: "btn ghost", type: "button" }, "End inspection");
+  startBtn.disabled = !!open;
+  stopBtn.disabled = !open;
+
+  const noteInput = el("input", { type: "text", placeholder: "e.g. removed 2 supers" });
+
+  startBtn.addEventListener("click", async () => {
+    startBtn.disabled = true;
+    try {
+      await state.actions.startInspection({ note: noteInput.value.trim() || null });
+      state.toast("Inspection started — the device applies it on its next check-in", "success");
+      noteInput.value = "";
+      await state.reload({ full: true });
+    } catch (e) { state.toast(e.message, "error"); startBtn.disabled = false; }
+  });
+  stopBtn.addEventListener("click", async () => {
+    stopBtn.disabled = true;
+    try {
+      await state.actions.stopInspection({ note: noteInput.value.trim() || null });
+      state.toast("Inspection ended", "success");
+      noteInput.value = "";
+      await state.reload({ full: true });
+    } catch (e) { state.toast(e.message, "error"); stopBtn.disabled = false; }
+  });
+
+  // The recorded windows, newest first. Capped: this is a control panel, not the
+  // inspection log, and the charts are where a beekeeper actually reads them.
+  const history = rows.slice(0, 8).map((r) => {
+    const when = r.ended_at
+      ? `${fmtDateTime(r.started_at)} → ${fmtDateTime(r.ended_at)}`
+      : `${fmtDateTime(r.started_at)} → now`;
+    const how = r.end_reason === "timeout" ? " · auto-ended (timeout)" : "";
+    const scope = r.hives && r.hives.length
+      ? ` · ${r.hives.map((n) => hiveLabel(state, n)).join(", ")}`
+      : "";
+    const note = el("input", {
+      type: "text", value: r.note || "", placeholder: "Add a note…", class: "insp-note",
+    });
+    // Saved on blur rather than behind a button: a row per inspection with its
+    // own Save would double the panel's controls for a one-field edit.
+    note.addEventListener("change", async () => {
+      try {
+        await state.actions.updateInspection(r.id, { note: note.value.trim() || null });
+        state.toast("Note saved", "success");
+      } catch (e) { state.toast(e.message, "error"); }
+    });
+    return el("div", { class: "insp-row" },
+      el("span", { class: "meta" }, when + scope + how), note);
+  });
+
+  return el("div", { class: "card" },
+    el("div", { class: "spread" }, el("h2", {}, "Inspection"), badge),
+    el("p", { class: "note" },
+      "While an inspection is running the hive's own readings are kept out of the " +
+      "charts, insights and alert rules — a scale with two supers lifted off it is " +
+      "not measuring the colony. Nothing is deleted: the readings stay in the " +
+      "database and in every export. Ambient temperature, battery and signal keep " +
+      "reporting throughout, so you can still see the hub is alive."),
+    el("p", { class: "note" },
+      "The external button on the device does the same thing, and is what a " +
+      "beekeeper standing at the hive should use. This panel is for starting one " +
+      "from indoors — or for ending one somebody forgot."),
+    el("div", { class: "form-row" }, el("label", {}, "Note"), noteInput),
+    el("div", { class: "form-actions" }, startBtn, stopBtn),
+    history.length
+      ? el("div", { class: "insp-history" }, el("h3", {}, "Recent inspections"), ...history)
+      : null);
 }
 
 function renderDevice(root, state) {
@@ -2139,7 +2279,13 @@ function renderDevice(root, state) {
         el("div", { class: "rows" },
           metaRow("Device ID", state.device?.device_id || DASH),
           metaRow("Config version", cfg.config_version ?? DASH)),
-        fieldRow("Send interval (s)", numInput("send_interval_seconds", true))),
+        fieldRow("Send interval (s)", numInput("send_interval_seconds", true)),
+        fieldRow("Inspection timeout (min)", numInput("inspection_timeout_minutes", true)),
+        el("p", { class: "note" },
+          "How long an inspection may run before the device ends it by itself. " +
+          "A safety net, not a schedule: without it one forgotten button press " +
+          "blanks this hive's charts indefinitely, which looks exactly like a " +
+          "dead sensor. Raise it for a long session rather than working around it.")),
       el("div", { class: "config-block" },
         el("h3", {}, "Scale calibration & compensation"),
         fieldRow("Scale", scaleSelect),
@@ -2828,6 +2974,8 @@ function renderDevice(root, state) {
     el("p", { class: "note" }, "Calibration mode samples the load cell more frequently so you can place known weights and fit a temperature coefficient."),
     el("div", { class: "form-actions" }, startBtn, stopBtn));
 
+  const inspCard = inspectionCard(state);
+
   // ── Layout ────────────────────────────────────────────────────────────────
   // Top: three columns — Status (per-sensor health) · Hive names + Import SD card
   // data · Firmware (status/approve + upload). Each panel sizes to its own
@@ -2854,7 +3002,7 @@ function renderDevice(root, state) {
 
   node.append(
     topGrid,
-    collapsible("Configuration", false, cfgForm, calCard),
+    collapsible("Configuration", false, cfgForm, calCard, inspCard),
     collapsible("HiveTraffic setup", false, nmForm, bankForm),
     // Publishing is optional server-side (ENABLE_PUBLIC_EMBEDS): when it is off,
     // every /publish endpoint 404s, so the panel is not built at all rather than

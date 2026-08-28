@@ -20,6 +20,11 @@
 // Handles retina scaling, auto y-range, light gridlines, time x-axis ticks and
 // an empty state. Colours come from the caller (see PALETTE below).
 //
+// opts.inspections is a list of { start, end, label } windows (epoch millis;
+// end null = still open) drawn as a shaded band behind the series, with a
+// marker on the x-axis at each edge — the stretches where a beekeeper had the
+// hive open and the readings say more about the inspection than the colony.
+//
 // When opts.cursorT (epoch millis) is set, draws a vertical guide at that time
 // plus a marker on each series at its nearest point, and stashes the pixel<->
 // time mapping on canvas._xScale so callers can turn a pointer x back into a
@@ -116,6 +121,70 @@ function gapThreshold(points, sendIntervalMs, factor) {
   return sendIntervalMs != null ? sendIntervalMs * factor : null;
 }
 
+// Shade the inspection windows overlapping a chart's time range.
+//
+// Drawn behind the gridlines and the series: an inspection is context for the
+// data, not data. The fill is deliberately weak (the theme's --chart-inspection)
+// because on a week-long range there can be a dozen of them and a strong tint
+// would read as the subject of the chart.
+//
+// A very short inspection — ten minutes inside a month-wide range — is under a
+// pixel wide, so every band is floored at MIN_BAND_PX and each edge also gets a
+// solid rule and an axis tick. That is what keeps "the hive was open here" from
+// vanishing at exactly the zoom level where an unexplained step is most
+// puzzling. An open inspection (end == null) runs to the right edge.
+const MIN_BAND_PX = 3;
+
+function drawInspectionBands(ctx, windows, geom) {
+  const { padL, padT, plotW, plotH, xOf, tMin, tMax } = geom;
+  // Clipped to the plot area plus the few pixels of axis the edge ticks reach
+  // into, so a band floored at MIN_BAND_PX at the right-hand edge cannot paint
+  // over the secondary axis labels.
+  ctx.beginPath();
+  ctx.rect(padL, padT, plotW, plotH + 5);
+  ctx.clip();
+  const fill = themeColor("--chart-inspection", "rgba(123,63,176,0.10)");
+  const edge = themeColor("--chart-inspection-edge", "rgba(123,63,176,0.55)");
+
+  for (const w of windows) {
+    const start = w.start;
+    // An inspection with no end is still running: shade to the right edge
+    // rather than dropping it, which is the case a beekeeper standing at the
+    // hive is most likely to be looking at.
+    const end = w.end == null ? tMax : w.end;
+    if (end < tMin || start > tMax) continue;
+
+    const x0 = xOf(Math.max(tMin, start));
+    const x1 = xOf(Math.min(tMax, end));
+    const w0 = Math.max(MIN_BAND_PX, x1 - x0);
+
+    ctx.fillStyle = fill;
+    ctx.fillRect(x0, padT, w0, plotH);
+
+    // Edge rules + axis ticks. Only for an edge that is actually inside the
+    // range: a band clipped at the left of the chart has no start to mark, and
+    // drawing one there would claim an inspection began at the range boundary.
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    for (const [t, inRange] of [[start, start >= tMin && start <= tMax],
+                                [w.end, w.end != null && w.end >= tMin && w.end <= tMax]]) {
+      if (!inRange) continue;
+      const x = xOf(t);
+      ctx.beginPath();
+      ctx.moveTo(x, padT);
+      ctx.lineTo(x, padT + plotH);
+      ctx.stroke();
+      // A short tick below the plot, on the time axis, so the window is still
+      // findable when the band itself is a sliver.
+      ctx.beginPath();
+      ctx.moveTo(x, padT + plotH);
+      ctx.lineTo(x, padT + plotH + 4);
+      ctx.stroke();
+    }
+  }
+}
+
 export function drawLineChart(canvas, series, opts = {}) {
   const wrap = canvas.parentElement;
   let empty = wrap.querySelector(".chart-empty");
@@ -208,6 +277,16 @@ export function drawLineChart(canvas, series, opts = {}) {
 
   const axis = themeColor("--chart-axis", AXIS);
   const grid = themeColor("--chart-grid", GRID);
+
+  // Inspection windows first: they are the backdrop the rest of the chart is
+  // drawn on, so gridlines, series and cursor all read over them.
+  if (opts.inspections && opts.inspections.length) {
+    ctx.save();
+    drawInspectionBands(ctx, opts.inspections, {
+      padL, padT, plotW, plotH, xOf, tMin, tMax,
+    });
+    ctx.restore();
+  }
 
   ctx.font = FONT;
   ctx.textBaseline = "middle";

@@ -39,6 +39,13 @@
   --chart-cursor-strong: rgba(31, 36, 33, .5);
   --chart-latest: #111111;
   --chart-marker-ring: #ffffff;
+  /* Inspection windows — the stretches a beekeeper had the hive open. Purple
+     rather than a warning colour: an inspection is normal beekeeping, not a
+     fault, and it must not read like an alert band. Weak enough that a week
+     with a dozen of them still shows the data as the subject; the edge rule is
+     what makes a ten-minute inspection findable on a month-wide chart. */
+  --chart-inspection: rgba(123, 63, 176, .10);
+  --chart-inspection-edge: rgba(123, 63, 176, .55);
 
   /* Ordinal ramp for ordered series — the microphone and vibration frequency
      bands, drawn low → high. One hue in monotone lightness steps so the colour
@@ -89,6 +96,10 @@
   --chart-cursor-strong: rgba(243, 238, 225, .55);
   --chart-latest: #f3eee1;
   --chart-marker-ring: #211f18;   /* == --card, so markers punch out on lines */
+  /* Lifted and slightly warmed for the dark card: the light-theme tint is
+     invisible on #211f18, and the edge rule needs to clear the gridlines. */
+  --chart-inspection: rgba(167, 122, 214, .14);
+  --chart-inspection-edge: rgba(167, 122, 214, .60);
   /* Re-stepped, not inverted: still low → high, but dim → bright so the weak
      end clears the dark card instead of disappearing into it. */
   --band-1: #33598a;
@@ -383,6 +394,23 @@ select:disabled { opacity: .7; cursor: not-allowed; }
 .chart-legend .lg.clickable { cursor: pointer; user-select: none; }
 .chart-legend .lg.clickable:hover { color: var(--ink); }
 .chart-legend .lg.off { opacity: .45; text-decoration: line-through; }
+/* The inspection key: not a series, so it is never a toggle and never dims. */
+.chart-legend .lg-static { cursor: default; }
+.chart-legend .swatch-inspection {
+  background: var(--chart-inspection);
+  border: 1px solid var(--chart-inspection-edge);
+}
+
+/* Inspection panel (Device & admin → Configuration → Inspection). One row per
+   recorded window: when it ran, and a note field saved on blur. */
+.insp-history { margin-top: 1rem; }
+.insp-history h3 { margin: 0 0 .4rem; font-size: .9rem; }
+.insp-row {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  padding: .3rem 0; border-top: 1px solid var(--line);
+}
+.insp-row .meta { flex: 1 1 14rem; }
+.insp-row .insp-note { flex: 1 1 12rem; min-width: 0; }
 
 /* Per-chart toolbox on the legend row: CSV export, reset-y-axis, drag hint */
 .chart-tools { margin-left: auto; display: inline-flex; align-items: center; gap: .55rem; }

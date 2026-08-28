@@ -30,6 +30,7 @@ import commands
 import devices
 import firmware
 import insights_api
+import inspections
 import local_dashboard
 import measurements
 import publish
@@ -126,6 +127,7 @@ app.include_router(measurements.router)
 app.include_router(devices.router)
 app.include_router(firmware.router)
 app.include_router(commands.router)
+app.include_router(inspections.router)
 app.include_router(app_api.router)
 app.include_router(insights_api.router)
 app.include_router(local_dashboard.router)

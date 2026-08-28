@@ -168,6 +168,8 @@ without this field remain supported but cannot get this delivery guarantee.
 | `solar_power_mw` | number | No | Solar/load power |
 | `network_transport` | string | No | `wifi` (current firmware), `sim7080g`, or another future transport label |
 | `calibration_mode` | boolean | No | Whether firmware was in calibration mode for this reading |
+| `inspection` | boolean | No | The hub believes a beekeeper has the hive open. The hive readings in the same payload are still stored; the flag opens/closes a window that keeps them out of charts, insights and alerts. See [inspection-mode.md](inspection-mode.md) |
+| `inspection_started_at` | int | No | Unix seconds at which the hub started the inspection, so the window is back-dated to the button press rather than to the first upload reporting it |
 | `boot_count` | integer | No | ESP32 RTC boot counter |
 | `time_source` | string | No | Time source such as `rtc`, `server`, `cellular`, or `compile` |
 | `rssi_dbm` | integer | No | Wi-Fi RSSI or CSQ-derived approximate RSSI |
@@ -385,9 +387,18 @@ Returns the current config for a device. A default config is created if none exi
   "timezone": "",
   "beecounter_bank1_enabled": true,
   "beecounter_bank2_enabled": true,
-  "beecounter_bank3_enabled": true
+  "beecounter_bank3_enabled": true,
+  "inspection_timeout_minutes": 60
 }
 ```
+
+`inspection_timeout_minutes` (1–1440, default 60) caps how long an inspection
+may run before the device ends it by itself — see
+[inspection-mode.md](inspection-mode.md#auto-end). Applied on every config fetch
+and persisted in NVS, so a hub that boots without WiFi still ends its
+inspections. It is a safety net, not a schedule: without it one forgotten button
+press blanks a hive's charts indefinitely, which looks exactly like a dead
+sensor.
 
 The `beecounter_night_*` fields configure **HiveTraffic night mode** — see
 [hivetraffic-bee-counter.md](hivetraffic-bee-counter.md#night-mode). Unlike the
@@ -694,6 +705,8 @@ permanent "relaying…". The attempt counter lives in `device_commands.attempts`
 | `calibrate_scale_2` | `{"known_weight_kg": 10.0}` | Set scale 2 calibration factor using a known weight |
 | `start_calibration_mode` | `{"interval_seconds": 5, "timeout_seconds": 600}` | Temporarily use fast cycles for calibration |
 | `stop_calibration_mode` | `{}` | Return to the normal configured interval |
+| `start_inspection` | `{}` | Flag hive readings as taken with the hive open — see [inspection-mode.md](inspection-mode.md). Prefer the `/inspections/start` endpoints below, which also record the window |
+| `stop_inspection` | `{}` | End inspection mode |
 | `reboot` | `{}` | Restart ESP32 |
 | `reset_preferences` | `{}` | Clear stored preferences and reboot |
 | `factory_reset` | `{}` | Factory reset stored preferences and reboot |
@@ -967,6 +980,103 @@ Queues a `stop_calibration_mode` command. Requires `owner` or `admin`. No body.
 
 ```json
 { "status": "pending", "id": 43, "command_type": "stop_calibration_mode", "payload": {} }
+```
+
+<a id="inspections"></a>
+
+## Inspections
+
+The window while a beekeeper has a hive open, during which its own readings
+measure the inspection rather than the colony. The hub keeps measuring and
+uploading throughout; the backend records the window and keeps the readings
+inside it out of charts, insights and alert rules. **Nothing is deleted** — the
+export and each row's `raw_json` still carry the raw numbers. Full behaviour:
+[inspection-mode.md](inspection-mode.md).
+
+Each endpoint exists twice: under `/api/v1/devices/...` with the master
+`X-API-Key`, and under `/api/v1/app/devices/...` with the HivePal service key
+plus a user with the right role. The bodies and responses are identical.
+
+Inspections are also readable and controllable from the local dashboard at
+`/api/v1/local/devices/{device_id}/inspections[...]` (reads: any dashboard
+session; start/stop/patch: admin).
+
+### `POST /api/v1/devices/{device_id}/inspections/start`
+
+**Auth:** `X-API-Key` · app variant requires `owner` or `admin`.
+Body optional.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `hives` | int[] | all hives | Scope the inspection to these hive indexes (1–18). Omit for the whole hub, which is what the physical button always means |
+| `note` | string | – | Free text, e.g. `"removed 2 supers"` |
+| `started_at` | ISO-8601 | now | Back-date the start. HivePal knows when the beekeeper actually opened the hive; the request may arrive minutes later over a bad rural connection |
+
+Opens the window **and** queues a `start_inspection` command for the device.
+Idempotent: calling it while an inspection is already open returns that
+inspection and queues nothing.
+
+```json
+{
+  "id": 17, "device_id": "hive_scale_dual_01", "hives": null,
+  "started_at": "2026-06-01T12:00:00Z", "ended_at": null, "active": true,
+  "source": "api", "end_reason": null,
+  "requested_at": "2026-06-01T12:00:00Z", "acknowledged_at": null,
+  "note": "removed 2 supers", "created_by": "user-123"
+}
+```
+
+`acknowledged_at` is `null` until the hub picks the command up. **That
+distinction matters:** the hub deep-sleeps between cycles, so an inspection is
+*requested* for up to a whole send interval before it is *running*. A UI that
+renders the two the same is claiming something that has not happened yet.
+
+### `POST /api/v1/devices/{device_id}/inspections/stop`
+
+**Auth:** `X-API-Key` · app variant requires `owner` or `admin`.
+Body optional: `note` (string), `ended_at` (ISO-8601, back-dates the end).
+
+Closes the open window and queues a `stop_inspection` command. Returns the
+closed inspection, or `null` if none was open — the command is queued either
+way, because a hub still flagging its readings with no matching record is the
+one failure mode that silently blanks a hive.
+
+### `GET /api/v1/devices/{device_id}/inspections/status`
+
+Is this hub inspecting, and does it know it yet?
+
+```json
+{
+  "device_id": "hive_scale_dual_01",
+  "active": false,
+  "pending": true,
+  "inspection": { "id": 17, "...": "as above" },
+  "timeout_minutes": 60
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `active` | The hub has confirmed it: readings are being masked right now |
+| `pending` | Requested, not yet picked up by the hub |
+| `timeout_minutes` | After this long, hub and server both end the inspection (`end_reason: "timeout"`). Configured per device as `inspection_timeout_minutes` |
+
+### `GET /api/v1/devices/{device_id}/inspections`
+
+Inspections **overlapping** a time range — what a chart shades.
+
+| Query | Default | Meaning |
+|---|---|---|
+| `start_at` / `end_at` | unbounded | ISO-8601 range. Overlap, not containment: an inspection that started before the window is exactly the one explaining the step at its left edge |
+| `limit` | 200 | 1–2000 |
+
+### `PATCH /api/v1/devices/{device_id}/inspections/{inspection_id}`
+
+Sets the `note` on a recorded inspection. Requires `owner` or `admin` on the app
+variant.
+
+```json
+{ "note": "removed 2 supers, replaced queen excluder" }
 ```
 
 ### `POST /api/v1/app/devices/{device_id}/firmware`

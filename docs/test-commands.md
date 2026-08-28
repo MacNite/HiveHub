@@ -162,6 +162,56 @@ curl -X POST http://HOST:31115/api/v1/devices/DEVICE_ID/commands \
   -d '{"command_type": "stop_calibration_mode", "payload": {}}'
 ```
 
+### Inspections
+
+Prefer the `/inspections/*` endpoints over queueing the raw `start_inspection` /
+`stop_inspection` commands: they record the window *and* queue the command, so
+the charts have something to shade. See
+[inspection-mode.md](inspection-mode.md).
+
+```bash
+# Start one for the whole hub, with a note
+curl -X POST http://HOST:31115/api/v1/devices/DEVICE_ID/inspections/start \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"note": "removed 2 supers"}'
+```
+
+```bash
+# Start one scoped to specific hives (HivePal's per-hive button)
+curl -X POST http://HOST:31115/api/v1/devices/DEVICE_ID/inspections/start \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"hives": [2, 3]}'
+```
+
+```bash
+# Has the device picked it up yet? active=false + pending=true means "requested"
+curl "http://HOST:31115/api/v1/devices/DEVICE_ID/inspections/status" \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+```bash
+curl -X POST http://HOST:31115/api/v1/devices/DEVICE_ID/inspections/stop \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{}'
+```
+
+```bash
+# The windows a chart would shade
+curl "http://HOST:31115/api/v1/devices/DEVICE_ID/inspections?start_at=2026-06-01T00:00:00Z" \
+  -H "X-API-Key: YOUR_API_KEY"
+```
+
+```bash
+# Annotate one afterwards
+curl -X PATCH http://HOST:31115/api/v1/devices/DEVICE_ID/inspections/17 \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"note": "removed 2 supers, replaced queen excluder"}'
+```
+
 ### Reset / provisioning / OTA commands
 
 ```bash

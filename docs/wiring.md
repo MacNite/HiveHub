@@ -34,8 +34,21 @@ pio run -e xiao_esp32c6
 | SD SCK | D8 | 19 | SPI clock (XIAO default SCK) |
 | SD MISO | D9 | 20 | SPI MISO (XIAO default MISO) |
 | SD MOSI | D10 | 18 | SPI MOSI (XIAO default MOSI) |
-| Setup button | D2 | 2 | Button to GND, INPUT_PULLUP |
+| Inspection button | D2 | 2 | Button to GND, INPUT_PULLUP. One press toggles [inspection mode](inspection-mode.md) |
+| Setup button | — | 9 | The XIAO's **on-board USER/BOOT button**. Short press opens the provisioning AP, long press factory-resets |
 | (unused) | D0 | 0 | Free |
+
+> **The buttons swapped in firmware 0.25.0.** D2 used to be the setup button.
+> The one external, weatherproofable button on a hub sealed in an enclosure
+> should be the thing a beekeeper actually presses at the hive stand; AP mode
+> and factory reset are installation and recovery actions, and the portal can
+> now also be opened remotely with a `start_provisioning` command. See
+> [inspection-mode.md](inspection-mode.md#the-button).
+>
+> GPIO9 is the ESP32-C6 boot strapping pin: holding it across a hardware RESET
+> or a power-up enters the serial bootloader (that is what the BOOT button is
+> for). Deep-sleep wake does not re-latch strapping, so a press that wakes the
+> hub runs the firmware normally.
 
 Power the board from its USB-C connector (programming + serial via native USB-CDC)
 or from the 5 V / 3 V3 header pins. All sensors connect to 3 V3.
@@ -82,7 +95,7 @@ The firmware logs the active antenna selection on every boot:
 | Optional MAX17048 fuel gauge | ✅ (I2C) |
 | INMP441 wired microphones | ❌ no pins available — pair a BLE sensor for acoustics |
 | Deep-sleep timer wake | ✅ |
-| Deep-sleep button wake | ✅ (GPIO wake, D2) |
+| Deep-sleep button wake | ✅ (GPIO wake, D2 inspection + on-board USER button) |
 
 ---
 
@@ -103,7 +116,7 @@ The firmware pin definitions live in `firmware/include/config.h` (with optional 
 | SD SCK | 18 | Output | SPI clock |
 | SD MISO | 23 | Input | SD card SPI MISO |
 | SD MOSI | 19 | Output | SD card SPI MOSI |
-| Setup button | 27 | Input | `INPUT_PULLUP`, button to GND |
+| Setup button | 27 | Input | `INPUT_PULLUP`, button to GND. **Unchanged in 0.25.0** — this board's only spare button is BOOT on GPIO0, a strapping pin, so it keeps one button doing what it always did and has no inspection button |
 | INMP441 BCLK | 14 | Output | I2S bit clock, shared by both mics (`ENABLE_INMP441_MICS`) |
 | INMP441 WS | 13 | Output | I2S word select (LRCLK), shared by both mics |
 | INMP441 SD | 34 | Input | I2S data from both mics; GPIO34 is input-only |

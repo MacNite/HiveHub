@@ -24,6 +24,23 @@ check is in `firmware/src/main.cpp`.
 
 The setup button is connected to GPIO27 and should pull the pin to GND when pressed. The pin uses `INPUT_PULLUP`, so the button is considered pressed when the input reads `LOW`.
 
+> **On the XIAO ESP32-C6 the setup button moved in firmware 0.25.0.** It is now
+> the board's **on-board USER/BOOT button (GPIO9)**, and the external D2 button
+> it used to occupy is the [inspection button](inspection-mode.md). Everything
+> below still describes the behaviour exactly — short press opens the AP, long
+> press factory-resets — only the button you press changed. The 30-pin ESP32
+> DevKit is unaffected and keeps GPIO27.
+>
+> Two consequences worth knowing:
+>
+> * A hub sealed in an enclosure no longer has the setup button brought out. Use
+>   the `start_provisioning` command (dashboard or API) to open the portal
+>   remotely instead of opening the box — that is exactly what it is for.
+> * GPIO9 is the ESP32-C6 boot strapping pin, so **holding it across a hardware
+>   RESET or a power-up enters the serial bootloader**, not AP mode. Deep-sleep
+>   wake does not re-latch strapping, so the "press and hold, wait for the
+>   device to wake" flow below works normally.
+
 ## Entering AP mode
 
 ### When the device is awake
