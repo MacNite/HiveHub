@@ -224,8 +224,15 @@ async function loadData(opts = {}) {
   // Fetch measurements + latest for every device we chart, in parallel. allSettled
   // keeps one device's failure from blanking the others, while still surfacing it.
   const perDeviceP = ids.map((id) =>
-    Promise.allSettled([api.measurements(id, { start, limit }), api.latest(id, 1)])
-      .then(([m, l]) => ({ id, m, l })));
+    Promise.allSettled([
+      api.measurements(id, { start, limit }),
+      api.latest(id, 1),
+      // Inspection windows overlapping the same range. Fetched per device
+      // rather than for the active one only, because a comparison view charts
+      // several hubs at once and each shades its own windows. A failure here is
+      // survivable — allSettled leaves the chart unshaded rather than blank.
+      api.inspections(id, { start }),
+    ]).then(([m, l, insp]) => ({ id, m, l, insp })));
 
   // Device-scoped panels follow the active device only.
   const insightsP = api.insightsSummary(activeId);
@@ -237,19 +244,23 @@ async function loadData(opts = {}) {
   const perDevice = await Promise.all(perDeviceP);
   if (seq !== loadSeq) return; // superseded by a newer load
 
-  const measurements = {}, latest = {}, chartErrors = [];
-  for (const { id, m, l } of perDevice) {
+  const measurements = {}, latest = {}, inspections = {}, chartErrors = [];
+  for (const { id, m, l, insp } of perDevice) {
     measurements[id] = (m.status === "fulfilled" ? m.value : []) || [];
     const row = l.status === "fulfilled" ? ((l.value || [])[0] || null) : null;
     latest[id] = row;
     if (row) state.deviceLatest[id] = row; // keep the picker's hive list fresh
+    // Not folded into chartErrors: an unshaded chart is a cosmetic loss, and
+    // reporting it as "chart data failed" next to a chart full of data would
+    // send someone looking for a problem with their measurements.
+    inspections[id] = (insp.status === "fulfilled" ? insp.value : []) || [];
     const e = errOf(m, `chart data (${deviceName(id)})`);
     if (e) chartErrors.push(e);
   }
 
   state.data = {
     deviceId: activeId,
-    measurements, latest,
+    measurements, latest, inspections,
     config: prev?.config ?? null,
     channels: prev?.channels ?? null,
     insights: prev?.insights ?? null,
@@ -348,6 +359,8 @@ function buildState() {
     deviceName,
     deviceLatest: (id) => (d.latest && d.latest[id]) || state.deviceLatest[id] || null,
     deviceMeasurements: (id) => (d.measurements && d.measurements[id]) || [],
+    deviceInspections: (id) => (d.inspections && d.inspections[id]) || [],
+    inspections: (d.inspections && d.inspections[activeId]) || [],
     deviceChannels: (id) => (id === activeId && d.deviceId === activeId ? d.channels : null),
     authUser: state.authUser,
     features: state.features,
@@ -365,6 +378,11 @@ function buildState() {
       queueBeeCounterUpdate: (slot, force) => api.queueBeeCounterUpdate(activeId, slot, force),
       startCalibration: (p) => api.startCalibration(activeId, p),
       stopCalibration: () => api.stopCalibration(activeId),
+      inspectionStatus: () => api.inspectionStatus(activeId),
+      startInspection: (p) => api.startInspection(activeId, p),
+      stopInspection: (p) => api.stopInspection(activeId, p),
+      updateInspection: (id, p) => api.updateInspection(activeId, id, p),
+      listInspections: (opts) => api.inspections(activeId, opts),
       fitTempComp: (p) => api.fitTempCompensation(activeId, p),
       updateConfig: (p) => api.updateConfig(activeId, p),
       updateChannels: (p) => api.updateChannels(activeId, p),

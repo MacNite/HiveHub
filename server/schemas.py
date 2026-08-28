@@ -236,6 +236,17 @@ class MeasurementIn(BaseModel):
     solar_power_mw: Optional[float] = None
     network_transport: Optional[str] = None
     calibration_mode: Optional[bool] = None
+    # Inspection mode: true while the hub believes a beekeeper has the hive
+    # open. The hive readings in this payload are still real and still stored —
+    # the flag is what lets the backend open/close a device_inspections window,
+    # which is in turn what keeps the readings out of charts, insights and
+    # alerts. Never persisted as a per-row column: the interval is the record.
+    inspection: Optional[bool] = None
+    # Unix seconds at which the hub started the inspection, when it had a
+    # trustworthy clock then. Used to back-date the window's start to the press
+    # rather than to the first upload that reported it, which on a 10-minute
+    # send interval is up to ten minutes of un-shaded spike.
+    inspection_started_at: Optional[int] = None
     boot_count: Optional[int] = None
     time_source: Optional[str] = None
     rssi_dbm: Optional[int] = None
@@ -562,6 +573,14 @@ class DeviceConfig(BaseModel):
     beecounter_bank1_enabled: bool = True
     beecounter_bank2_enabled: bool = True
     beecounter_bank3_enabled: bool = True
+    # ── Inspection mode (see firmware/include/inspection.h) ──────────────────
+    # How long an inspection may run before the hub and the server both end it.
+    # This is a safety net, not a schedule: one forgotten button press would
+    # otherwise blank a hive's data indefinitely, and a blank hive looks exactly
+    # like a dead sensor. An hour covers a normal full inspection of a stand;
+    # raise it here for a longer session (queen rearing, a comb swap) rather
+    # than working around it.
+    inspection_timeout_minutes: int = 60
 
 
 class DeviceConfigUpdate(BaseModel):
@@ -594,6 +613,10 @@ class DeviceConfigUpdate(BaseModel):
     beecounter_bank1_enabled: Optional[bool] = None
     beecounter_bank2_enabled: Optional[bool] = None
     beecounter_bank3_enabled: Optional[bool] = None
+    # Bounded here as well as by the database CHECK, and for the same reason as
+    # the night window above: the firmware clamps a nonsense value rather than
+    # refusing it, so the write is where a human finds out.
+    inspection_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
 
 
 # The project was renamed HiveScale -> HiveHub, but the canonical OTA target
@@ -661,8 +684,85 @@ class DeviceCommandIn(BaseModel):
         "start_provisioning",
         "start_calibration_mode",
         "stop_calibration_mode",
+        # Inspection mode, the remote equivalent of the external button. Queued
+        # like any other command, so a deep-sleeping hub picks it up on its next
+        # wake — see DeviceInspection.acknowledged_at for how a caller tells
+        # "requested" from "the hub is actually doing it".
+        "start_inspection",
+        "stop_inspection",
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class InspectionStartIn(BaseModel):
+    """Open an inspection from the API (HivePal's in-app button, or the dashboard).
+
+    ``hives`` scopes the inspection to specific hive indexes; omitted (or empty)
+    means the whole hub, which is what the physical button always means — a
+    beekeeper is standing at the stand, not at one box.
+    """
+    hives: Optional[list[int]] = None
+    note: Optional[str] = Field(default=None, max_length=1000)
+    # Back-date the start. HivePal knows when the beekeeper actually opened the
+    # hive; the request may arrive minutes later over a bad rural connection,
+    # and the spike belongs inside the window either way.
+    started_at: Optional[datetime] = None
+
+    @field_validator("hives")
+    @classmethod
+    def _check_hives(cls, v):
+        if v is None:
+            return v
+        for h in v:
+            if not (1 <= h <= MAX_HIVES):
+                raise ValueError(f"hive index {h} out of range 1..{MAX_HIVES}")
+        # Sorted + de-duplicated so two requests naming the same hives in a
+        # different order produce the same stored array.
+        return sorted(set(v))
+
+
+class InspectionStopIn(BaseModel):
+    """Close the open inspection. ``ended_at`` back-dates it, like started_at."""
+    note: Optional[str] = Field(default=None, max_length=1000)
+    ended_at: Optional[datetime] = None
+
+
+class InspectionUpdateIn(BaseModel):
+    """Edit a recorded inspection — in practice, add or correct its note.
+
+    The note is the half of this feature that pays off months later: "removed 2
+    supers" next to a 40 kg step turns an alarming trace into a harvest record.
+    """
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class DeviceInspection(BaseModel):
+    id: int
+    device_id: str
+    # None = every hive on the hub.
+    hives: Optional[list[int]] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    active: bool
+    source: str
+    end_reason: Optional[str] = None
+    # For an API-started inspection: when the request was queued, and when the
+    # hub actually picked the command up. A hub deep-sleeps between cycles, so
+    # these are minutes apart by design and a caller showing "inspection on"
+    # before acknowledged_at is showing something that has not happened yet.
+    requested_at: Optional[datetime] = None
+    acknowledged_at: Optional[datetime] = None
+    note: Optional[str] = None
+    created_by: Optional[str] = None
+
+
+class DeviceInspectionStatus(BaseModel):
+    """Answer to "is this hub inspecting, and does it know it yet?"."""
+    device_id: str
+    active: bool
+    pending: bool
+    inspection: Optional[DeviceInspection] = None
+    timeout_minutes: int = 60
 
 
 class DeviceCommandResult(BaseModel):

@@ -1,5 +1,7 @@
 // network.cpp — WiFi, HTTP, upload, OTA and command-queue implementation.
 #include "hivehub_network.h"
+
+#include "inspection.h"
 #include "globals.h"
 #include "config.h"
 #include "device_prefs.h"
@@ -485,6 +487,12 @@ void fetchRemoteConfig() {
   }
   nightMaxTraffic = doc["beecounter_night_max_traffic"] | 0;
   nightTimezone   = doc["timezone"] | "";
+
+  // How long an inspection may run before the hub ends it itself. Applied
+  // unconditionally for the same reason night mode is: the dashboard is its only
+  // source, so there is no local edit for a config_version gate to protect. A
+  // server too old to send the key leaves the compiled default in place.
+  inspection::setTimeoutMinutes(doc["inspection_timeout_minutes"] | 0U);
 
   // HiveTraffic emitter banks, delivered as three booleans and assembled into
   // the bitmask the counter's SET_BANKS opcode takes. Applied unconditionally
@@ -1320,6 +1328,15 @@ void checkCommands() {
   } else if (type == "stop_calibration_mode") {
     stopCalibrationMode("command received");
     postCommandResult(commandId, true, "Calibration mode stopped");
+  } else if (type == "start_inspection") {
+    // How HivePal's in-app "start inspection" button reaches a hub. The result
+    // POST is what the backend shows as "the hub has picked this up" — until it
+    // arrives the inspection is only requested, not running.
+    inspection::setActive(true, "command");
+    postCommandResult(commandId, true, "Inspection mode started");
+  } else if (type == "stop_inspection") {
+    inspection::setActive(false, "command");
+    postCommandResult(commandId, true, "Inspection mode stopped");
   } else {
     postCommandResult(commandId, false, String("Unknown command: ") + type);
   }

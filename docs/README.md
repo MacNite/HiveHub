@@ -40,6 +40,7 @@ hardware list, firmware/server setup, and API summary, start with the
 
 - [offgrid-firmware-notes.md](offgrid-firmware-notes.md) — LiPo (MAX17048) power telemetry and the wake/deep-sleep cycle.
 - [calibration-mode.md](calibration-mode.md) — fast-cycle calibration mode (firmware + backend).
+- [inspection-mode.md](inspection-mode.md) — **inspection mode**: the external button, the API, and how a window with the hive open is kept out of the charts, insights and alerts without deleting anything.
 - [ap-mode-sd-download.md](ap-mode-sd-download.md) — AP/setup mode, the setup button, and the SD-card download + HivePal re-import.
 
 ## Backend, API & insights

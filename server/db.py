@@ -466,6 +466,18 @@ def init_db():
                 ALTER TABLE device_configs ADD CONSTRAINT device_configs_night_max_traffic_check
                     CHECK (beecounter_night_max_traffic >= 0);
 
+                -- Inspection timeout (migration 027). The safety net for an
+                -- inspection nobody switched off: without it one forgotten
+                -- button press means an indefinite hive-data blackout that
+                -- looks exactly like a dead sensor. Per device and editable
+                -- from the dashboard; the hub picks it up with the rest of
+                -- /config and persists it, so an offline boot still ends its
+                -- inspections.
+                ALTER TABLE device_configs ADD COLUMN IF NOT EXISTS inspection_timeout_minutes INTEGER NOT NULL DEFAULT 60;
+                ALTER TABLE device_configs DROP CONSTRAINT IF EXISTS device_configs_inspection_timeout_check;
+                ALTER TABLE device_configs ADD CONSTRAINT device_configs_inspection_timeout_check
+                    CHECK (inspection_timeout_minutes BETWEEN 1 AND 1440);
+
                 -- HiveTraffic emitter-bank enables (migration 026). One
                 -- IRLB8721 MOSFET per MCP23017 since the 2026-08 board, so each
                 -- third of the entrance is independently switchable: bank 1 =
@@ -549,6 +561,41 @@ def init_db():
                 -- 020_drop_hiveinside_c6.sql.
                 UPDATE firmware_releases SET active = false
                     WHERE target = 'hiveinside' AND board = 'esp32-c6';
+
+                -- Hive inspections (migration 027). Recorded as intervals
+                -- rather than as a flag on each reading: one row per inspection
+                -- is what lets a chart shade the window, the insight engine
+                -- skip it, and every raw reading stay exactly as the hub sent
+                -- it — an inspection hides data from the interpreters, it never
+                -- deletes it. See migrations/027_inspections.sql for the column
+                -- semantics.
+                CREATE TABLE IF NOT EXISTS device_inspections (
+                    id BIGSERIAL PRIMARY KEY,
+                    device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+                    hive_indexes SMALLINT[],
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    ended_at TIMESTAMPTZ,
+                    source TEXT NOT NULL DEFAULT 'device',
+                    end_reason TEXT,
+                    requested_at TIMESTAMPTZ,
+                    acknowledged_at TIMESTAMPTZ,
+                    note TEXT,
+                    created_by TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+
+                -- At most one OPEN inspection per device. This is the constraint
+                -- that makes every trigger a toggle: the button, HivePal's
+                -- button and the timeout all need exactly one unambiguous row
+                -- to close when the hive is shut again.
+                CREATE UNIQUE INDEX IF NOT EXISTS device_inspections_open_idx
+                    ON device_inspections (device_id)
+                    WHERE ended_at IS NULL;
+
+                -- Every read is "which inspections overlap this time range".
+                CREATE INDEX IF NOT EXISTS device_inspections_device_time_idx
+                    ON device_inspections (device_id, started_at DESC);
 
                 CREATE TABLE IF NOT EXISTS device_commands (
                     id BIGSERIAL PRIMARY KEY,

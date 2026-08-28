@@ -1,5 +1,7 @@
 // sensors.cpp — time sync, scale reads and measurement JSON assembly.
 #include "sensors.h"
+
+#include "inspection.h"
 #include <esp_system.h>
 #include "globals.h"
 #include "config.h"
@@ -633,6 +635,15 @@ void buildMeasurementDoc(JsonDocument& doc) {
   doc["rssi_dbm"] = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
   doc["firmware_version"] = FIRMWARE_VERSION;
   doc["calibration_mode"] = calibrationModeActive;
+  // Inspection mode. The hive readings below are still measured and still
+  // uploaded — this flag is what lets the backend keep them out of charts,
+  // insights and alert rules without throwing the data away. Hub-level fields
+  // above (ambient, battery, solar, RSSI) are unaffected on purpose: they are
+  // how you tell "the beekeeper had the hive open" from "the hub died".
+  doc["inspection"] = inspection::active();
+  if (inspection::active() && inspection::startedAt() != 0) {
+    doc["inspection_started_at"] = inspection::startedAt();
+  }
   doc["boot_count"] = rtcBootCount;
   doc["time_source"] = timeSource;
   doc["hive_count"] = hivecfg::gHiveCount;

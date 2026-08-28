@@ -13,6 +13,7 @@
 #include "scale_bus.h"
 #include "i2c_bus.h"
 #include "status_led.h"
+#include "inspection.h"
 
 #if ENABLE_INMP441_MICS
 #include "mics.h"
@@ -51,6 +52,7 @@ void releaseSleepPinHolds() {
 #ifdef CONFIG_IDF_TARGET_ESP32C6
   // On C6 the button pull-up is held via gpio_hold_en(); release it normally.
   gpio_hold_dis((gpio_num_t)SETUP_BUTTON_PIN);
+  inspection::releaseWakeHold();
 #else
   // EXT0 wake config turns the button into an RTC IO. Return it to normal GPIO.
   rtc_gpio_deinit((gpio_num_t)SETUP_BUTTON_PIN);
@@ -185,7 +187,16 @@ void configureButtonWake() {
   // state across the sleep boundary (C6 does not power-cycle GPIOs in deep sleep).
   gpio_pullup_en((gpio_num_t)SETUP_BUTTON_PIN);
   gpio_hold_en((gpio_num_t)SETUP_BUTTON_PIN);
-  esp_deep_sleep_enable_gpio_wakeup(1ULL << SETUP_BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+  // The external inspection button wakes the hub too, so a press at the hive
+  // stand takes effect immediately instead of at the next scheduled cycle. Both
+  // buttons are active-low and go into ONE call: a second
+  // esp_deep_sleep_enable_gpio_wakeup() may replace the mask rather than extend
+  // it, and a button that silently stopped waking the hub would present as
+  // "inspection mode only works sometimes". main.cpp tells the two apart on the
+  // way back up with esp_sleep_get_gpio_wakeup_status().
+  inspection::prepareWakePin();
+  esp_deep_sleep_enable_gpio_wakeup((1ULL << SETUP_BUTTON_PIN) | inspection::wakePinMask(),
+                                    ESP_GPIO_WAKEUP_GPIO_LOW);
 #else
   // GPIO27 is an RTC-capable pin on ESP32. The RTC pull-up lets the existing
   // button-to-GND wiring wake the device without an external pull-up. For the

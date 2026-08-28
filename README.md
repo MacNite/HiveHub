@@ -67,7 +67,8 @@ Every sensor is optional and compiled in per device — start with weight and ad
 - **Claim-code pairing** — claim devices from HivePal without manual database setup.
 - **Remote configuration & commands** — sampling interval, scale offsets/factors, calibration, OTA checks, provisioning, reboot, Wi-Fi reset, and factory reset.
 - **OTA firmware updates** — owner-scoped releases with an accept-to-apply gate; the device also relays firmware over BLE GATT to a HiveInside sensor or a HiveTraffic counter. Both relays are version-gated and explicit: publishing a release never pushes it to a sub-device on its own.
-- **Wi-Fi provisioning portal** — opened by the setup button for field configuration, including pairing wireless sensors.
+- **Wi-Fi provisioning portal** — opened by the setup button (or remotely with a `start_provisioning` command) for field configuration, including pairing wireless sensors.
+- **[Inspection mode](docs/inspection-mode.md)** — one press of the external button, a dashboard switch or a HivePal API call marks the window while a hive is open, so the 40 kg step from lifting two supers stays out of the charts, insights and alert rules. Nothing is deleted: the readings remain in the database and in every export.
 - **Multi-network Wi-Fi** — up to three saved networks.
 - **Insights** — backend auto-evaluation of weight, temperature, sound, vibration, and entrance traffic per hive, based on [these publications](docs/insights-sources-tldr.md).
 - **Insight alert notifications (optional)** — get swarm / robbing / winter-risk alerts by **e-mail (SMTP)** and/or **Web Push** to your phone or an installable dashboard PWA (Android, iOS 16.4+, desktop) when an insight first fires or escalates. Off by default; see [Insight alert notifications](docs/notifications.md).
@@ -157,6 +158,8 @@ The table below is the **legacy 30-pin ESP32** map. The recommended **XIAO ESP32
 | I2C SDA / SCL | 21 / 22 | RTC, SHT4x, NAU7802/TCA9548A, optional MAX17048 — shared bus at an explicit **100 kHz** |
 | SD CS / SCK / MISO / MOSI | 5 / 18 / 23 / 19 | MicroSD over SPI |
 | Setup button | 27 | `INPUT_PULLUP`; short press opens provisioning AP, long press factory resets |
+
+> On the **XIAO ESP32-C6** (firmware 0.25.0+) the setup button is the board's on-board USER/BOOT button, and the external D2 button is the [inspection button](docs/inspection-mode.md). The 30-pin board above is unchanged.
 | INMP441 BCLK / WS / SD | 14 / 13 / 34 | I2S, shared by both mics; GPIO34 is input-only (`ENABLE_INMP441_MICS`) |
 
 > See [docs/wiring.md](docs/wiring.md) for detailed wiring and [pcb-design/README.md](pcb-design/README.md) for the KiCad breakout PCB pinout.
@@ -298,7 +301,7 @@ Optional libraries:
 
 ## Wi-Fi provisioning portal
 
-Press the setup button (D2 on the XIAO ESP32-C6, GPIO27 on the legacy 30-pin board) to manage field configuration without reflashing.
+Press the setup button (the on-board USER button on the XIAO ESP32-C6, GPIO27 on the legacy 30-pin board) to manage field configuration without reflashing. A hub already sealed in an enclosure can open the same portal remotely with a `start_provisioning` command from the dashboard or API.
 
 | Action | Result |
 |---|---|

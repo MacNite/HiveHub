@@ -109,7 +109,12 @@ from schemas import (
     DeviceCommandIn,
     DeviceConfigUpdate,
     DeviceDeleteIn,
+    DeviceInspection,
+    DeviceInspectionStatus,
     DeviceVisibilityUpdateIn,
+    InspectionStartIn,
+    InspectionStopIn,
+    InspectionUpdateIn,
     MAX_HIVES,
     MEASUREMENT_IMPORT_MAX,
     MeasurementDeleteIn,
@@ -117,6 +122,14 @@ from schemas import (
     PushSubscriptionIn,
     PushUnsubscribeIn,
     TempCoefficientFitIn,
+)
+from inspections import (
+    expire_timed_out_inspections,
+    inspection_status,
+    list_inspections,
+    start_inspection_for_device,
+    stop_inspection_for_device,
+    update_inspection,
 )
 from sd_import import (
     distinct_source_device_ids,
@@ -1188,6 +1201,71 @@ def local_stop_calibration(device_id: str):
         "command_type": "stop_calibration_mode",
         "payload": {},
     }
+
+
+# ── Inspections ───────────────────────────────────────────────────────────────
+# Reading them is open to every dashboard session, because the charts shade the
+# windows and a viewer who cannot fetch them would see unexplained gaps instead.
+# Starting and stopping is an admin action, like every other device command.
+
+
+@router.get(
+    "/api/v1/local/devices/{device_id}/inspections",
+    response_model=list[DeviceInspection],
+    dependencies=LOCAL_DASHBOARD_DEP,
+)
+def local_list_inspections(
+    device_id: str,
+    start_at: Optional[datetime] = None,
+    end_at: Optional[datetime] = None,
+    limit: int = Query(default=200, ge=1, le=2000),
+):
+    """Inspections overlapping a time range — what the charts shade."""
+    expire_timed_out_inspections(device_id)
+    return list_inspections([device_id], start_at, end_at, limit)
+
+
+@router.get(
+    "/api/v1/local/devices/{device_id}/inspections/status",
+    response_model=DeviceInspectionStatus,
+    dependencies=LOCAL_DASHBOARD_DEP,
+)
+def local_inspection_status(device_id: str):
+    """Is this hub inspecting, and has it picked the request up yet?"""
+    return inspection_status(device_id)
+
+
+@router.post(
+    "/api/v1/local/devices/{device_id}/inspections/start",
+    response_model=DeviceInspection,
+    dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+)
+def local_start_inspection(device_id: str, body: Optional[InspectionStartIn] = None):
+    """Open an inspection and queue the matching command for the device."""
+    return start_inspection_for_device(
+        device_id, body or InspectionStartIn(), source="dashboard"
+    )
+
+
+@router.post(
+    "/api/v1/local/devices/{device_id}/inspections/stop",
+    response_model=Optional[DeviceInspection],
+    dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+)
+def local_stop_inspection(device_id: str, body: Optional[InspectionStopIn] = None):
+    return stop_inspection_for_device(
+        device_id, body or InspectionStopIn(), source="dashboard"
+    )
+
+
+@router.patch(
+    "/api/v1/local/devices/{device_id}/inspections/{inspection_id}",
+    response_model=DeviceInspection,
+    dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+)
+def local_update_inspection(device_id: str, inspection_id: int, body: InspectionUpdateIn):
+    """Annotate a recorded inspection ("removed 2 supers")."""
+    return update_inspection(device_id, inspection_id, body.note)
 
 
 @router.post("/api/v1/local/devices/{device_id}/temp-compensation/fit", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)

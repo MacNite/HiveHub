@@ -91,7 +91,8 @@ DEVICE_CONFIG_SELECT_COLUMNS = """
     scale_offsets_by_hive,
     beecounter_night_mode_enabled, beecounter_night_start_minute,
     beecounter_night_end_minute, beecounter_night_max_traffic, timezone,
-    beecounter_bank1_enabled, beecounter_bank2_enabled, beecounter_bank3_enabled
+    beecounter_bank1_enabled, beecounter_bank2_enabled, beecounter_bank3_enabled,
+    inspection_timeout_minutes
 """
 
 
@@ -174,6 +175,7 @@ def device_config_row_to_model(r) -> DeviceConfig:
         beecounter_bank1_enabled=r[18],
         beecounter_bank2_enabled=r[19],
         beecounter_bank3_enabled=r[20],
+        inspection_timeout_minutes=r[21],
     )
 
 

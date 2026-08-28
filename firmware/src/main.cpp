@@ -14,6 +14,7 @@
 #include "i2c_bus.h"
 #include "status_led.h"
 #include "heap_diag.h"
+#include "inspection.h"
 
 #if ENABLE_INMP441_MICS
 #include "mics.h"
@@ -29,6 +30,11 @@ void runUploadCycle() {
   // that faulted was damaged well before the relay touched it; whichever stage
   // reports the first failure below is the one that did it. See heap_diag.h.
   heapdiag::probe("cycle-start");
+
+  // Before anything is measured: an inspection nobody switched off ends here,
+  // so this cycle's readings already count again rather than being flagged for
+  // one more interval.
+  inspection::enforceTimeout();
 
   // WiFi is required for upload and must be associated before JSON assembly so
   // rssi_dbm reflects the live connection.
@@ -121,9 +127,38 @@ void setup() {
 #endif
       ;
 
+  // Which pin woke us, on the boards where more than one can. The setup button
+  // and the inspection button mean completely different things, and by the time
+  // this runs a press is often already released, so the wake status — not a
+  // digitalRead — is what tells them apart. Read BEFORE the pin holds are
+  // released, so nothing downstream can disturb the latched status.
+  uint64_t gpioWakeMask = 0;
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+  const bool gpioWake = (wakeReason & BIT(ESP_SLEEP_WAKEUP_GPIO)) != 0;
+  if (gpioWake) gpioWakeMask = esp_sleep_get_gpio_wakeup_status();
+#endif
+
   releaseSleepPinHolds();
   configureC6Antenna();
   pinMode(SETUP_BUTTON_PIN, INPUT_PULLUP);
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+  // Fallback for the case where the status register comes back empty on a wake
+  // we know was a GPIO wake: read the pins instead. A firm press is often still
+  // held this early in the boot, and an empty mask would otherwise mean neither
+  // button did anything — the button "working sometimes" is a far worse failure
+  // than acting on a press that has already been released.
+#if HAS_INSPECTION_BUTTON
+  pinMode(INSPECTION_BUTTON_PIN, INPUT_PULLUP);
+#endif
+  if (gpioWake && gpioWakeMask == 0) {
+    if (digitalRead(SETUP_BUTTON_PIN) == LOW) gpioWakeMask |= 1ULL << SETUP_BUTTON_PIN;
+#if HAS_INSPECTION_BUTTON
+    if (digitalRead(INSPECTION_BUTTON_PIN) == LOW) gpioWakeMask |= 1ULL << INSPECTION_BUTTON_PIN;
+#endif
+    Serial.printf("[SETUP] Empty GPIO wake status; inferred mask 0x%llX from pin levels\n",
+                  (unsigned long long)gpioWakeMask);
+  }
+#endif
   statusLedInit();
   statusLedBootBlink();
 
@@ -148,13 +183,22 @@ void setup() {
   loadConfigFromPrefs();
   hivecfg::loadHiveConfig();
 
-  if (digitalRead(SETUP_BUTTON_PIN) == LOW
+  // Before the first measurement is assembled: a press on the inspection button
+  // must be reflected in the cycle it woke, not one cycle later.
+  inspection::begin(wakeReason, gpioWakeMask);
+
+  // Setup button — provisioning AP / factory reset. On the C6 both buttons wake
+  // through the same GPIO cause, so the mask decides; a wake on the inspection
+  // button must NOT open the portal, or every inspection would strand the hub
+  // in AP mode for the portal timeout.
+  const bool setupWake =
 #ifdef CONFIG_IDF_TARGET_ESP32C6
-      || (wakeReason & BIT(ESP_SLEEP_WAKEUP_GPIO))
+      (gpioWakeMask & (1ULL << SETUP_BUTTON_PIN)) != 0;
 #else
-      || (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT0))
+      (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT0)) != 0;
 #endif
-  ) {
+
+  if (digitalRead(SETUP_BUTTON_PIN) == LOW || setupWake) {
     Serial.println("[SETUP] Button wake/press detected; starting provisioning portal");
     initSdCard();
     if (!i2cbus::begin()) {
@@ -283,6 +327,7 @@ void setup() {
 
 void loop() {
   handleButton();
+  inspection::poll();
 
   if (provisioningActive) {
     setupDnsServer.processNextRequest();

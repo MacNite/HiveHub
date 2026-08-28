@@ -20,6 +20,7 @@ from devices import ensure_device_config
 from hiveheart_fft import decode_fft
 from mqtt_publisher import publisher as mqtt_publisher
 from schemas import MAX_HIVES, HiveReadingIn, MeasurementImportIn, MeasurementIn
+from inspections import mask_inspection_readings, sync_from_measurement
 from sd_import import split_new_and_duplicate
 from tempcomp import TEMP_SOURCE_FIELD, apply_compensation
 
@@ -446,6 +447,13 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
                 )
                 new_id, measured_at = cur.fetchone()
             conn.commit()
+    # Reconcile the inspection window with what this upload says the hub's button
+    # is doing. Only for a genuinely new row: a replayed SD-cache line reports the
+    # inspection state as of when it was measured, which is not news about now.
+    if inserted:
+        sync_from_measurement(
+            payload.device_id, payload.inspection, measured_at, payload.inspection_started_at
+        )
     # Mirror the reading to MQTT (Home Assistant etc.) when the bridge is enabled.
     # This is purely additive and fail-soft — it never affects the stored result.
     # Pass the device's temp-compensation config so the live payload carries
@@ -1510,7 +1518,13 @@ def serialize_measurements(rows) -> list[dict]:
     # derived interval counts too.
     measurements = attach_hive_readings([measurement_row_to_dict(r) for r in rows])
     measurements = attach_temperature_compensation(measurements)
-    return difference_bee_counter_intervals(measurements)
+    # Masking LAST, after differencing. It blanks the compensated and derived
+    # values too — a weight corrected for temperature is still a weight measured
+    # with two supers in the beekeeper's hands — and running it first would break
+    # the bee-counter differencing: masked rows look like an unreachable counter,
+    # so the baseline would not advance and the first reading after the hive was
+    # closed would be handed the whole inspection's traffic as one interval.
+    return mask_inspection_readings(difference_bee_counter_intervals(measurements))
 
 
 def serialize_chart_measurements(cur) -> list[dict]:
@@ -1537,7 +1551,8 @@ def serialize_chart_measurements(cur) -> list[dict]:
     # difference so those hives get derived interval counts too.
     measurements = attach_hive_readings(measurements)
     measurements = attach_temperature_compensation(measurements)
-    return difference_bee_counter_intervals(measurements)
+    # Masked after differencing — see serialize_measurements for why.
+    return mask_inspection_readings(difference_bee_counter_intervals(measurements))
 
 
 def execute_measurement_query(cur, columns, where_parts, params, limit, max_points):

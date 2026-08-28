@@ -73,6 +73,48 @@ export const api = {
   latest: (deviceId, limit = 1) =>
     req(`/devices/${encodeURIComponent(deviceId)}/measurements/latest?limit=${limit}`),
 
+  // ── Inspections ──────────────────────────────────────────────────────────
+  // The windows a beekeeper had the hive open. Charts shade them; the readings
+  // inside them come back with their hive fields blanked and inspection: true,
+  // so a gap in a weight trace is explained rather than mysterious.
+  inspections: (deviceId, { start, end, limit } = {}) => {
+    const q = new URLSearchParams();
+    if (start) q.set("start_at", start);
+    if (end) q.set("end_at", end);
+    if (limit) q.set("limit", String(limit));
+    const qs = q.toString();
+    return req(`/devices/${encodeURIComponent(deviceId)}/inspections${qs ? "?" + qs : ""}`);
+  },
+
+  // Is this hub inspecting, and has it picked the request up yet? `pending`
+  // means queued but not yet acknowledged — a sleeping hub can take a whole
+  // send interval to notice, and showing that as "on" would be a lie.
+  inspectionStatus: (deviceId) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/inspections/status`),
+
+  startInspection: (deviceId, payload) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/inspections/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    }),
+
+  stopInspection: (deviceId, payload) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/inspections/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    }),
+
+  // Annotate a recorded inspection — "removed 2 supers" next to the step it
+  // explains is the whole point of keeping the record.
+  updateInspection: (deviceId, inspectionId, payload) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/inspections/${inspectionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    }),
+
   // Upload an SD-card backup (measurements.ndjson or hivescale-sd-data.tar) pulled
   // off the scale in AP mode, or a backup downloaded from the panel below.
   // formData carries the file under the "file" field; the browser sets the
