@@ -88,6 +88,15 @@ def latest(configs, key):
     return None
 
 
+def messages_for_one_reading(reading):
+    pub = mqtt_publisher.MqttPublisher()
+    pub._client = _Recorder()
+    pub.publish_measurement(
+        "hive-test", reading, datetime.now(timezone.utc), "hive-test"
+    )
+    return pub._client.messages
+
+
 BATTERY = {"battery_percent": 80, "rssi_dbm": -60}
 HIVEINSIDE = dict(BATTERY, sensor_type="HiveInside", battery_mv=4018)
 HOLYIOT = dict(BATTERY, sensor_type="HolyIot 25015")
@@ -213,6 +222,27 @@ check("the retraction is published once, not on every reading",
 configs = announce([dict(BATTERY, pressure_hpa=1013.0), HIVEINSIDE])
 check("an entity retracted on the resolved type is not re-announced with it",
       latest(configs, "ble_1_pressure_hpa") is None)
+
+
+# ── inspection discovery ─────────────────────────────────────────────────────
+messages = messages_for_one_reading({
+    "inspection_state": "active",
+    "inspection_active": True,
+    "inspection_remaining_seconds": 2840,
+})
+configs_by_topic = {
+    topic: json.loads(payload) for topic, payload in messages if topic.endswith("/config")
+}
+binary_topic = "homeassistant/binary_sensor/hive-test/inspection_active/config"
+remaining_topic = "homeassistant/sensor/hive-test/inspection_remaining_seconds/config"
+state_topic = "homeassistant/sensor/hive-test/inspection_state/config"
+check("inspection active is announced as an HA binary sensor",
+      configs_by_topic[binary_topic]["state_topic"] == "hivescale/hive-test/state")
+check("inspection remaining time is announced as an HA duration sensor",
+      configs_by_topic[remaining_topic]["device_class"] == "duration"
+      and configs_by_topic[remaining_topic]["unit_of_measurement"] == "s")
+check("the pending/off/active inspection state is announced as an HA sensor",
+      configs_by_topic[state_topic]["value_template"].find("inspection_state") >= 0)
 
 
 def test_mqtt_ha_discovery():

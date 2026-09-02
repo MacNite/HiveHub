@@ -20,7 +20,7 @@ the dashboard), and the timeout that ends one nobody switched off.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -472,6 +472,11 @@ def mask_inspection_readings(measurements: list[dict]) -> list[dict]:
 
     by_device: dict[str, list[DeviceInspection]] = {}
     for w in windows:
+        # An API request is only pending until the sleeping hub reports that it
+        # entered inspection mode.  Do not hide measurements that the device
+        # took before that acknowledgement.
+        if w.acknowledged_at is None:
+            continue
         by_device.setdefault(w.device_id, []).append(w)
 
     for m in measurements:
@@ -491,6 +496,42 @@ def mask_inspection_readings(measurements: list[dict]) -> list[dict]:
         else:
             m.setdefault("inspection", False)
     return measurements
+
+
+def mqtt_inspection_state(
+    device_id: str, *, now: Optional[datetime] = None
+) -> dict[str, Any]:
+    """Return the inspection fields carried by the retained MQTT state.
+
+    Pending is deliberately distinct from active: an API request can sit in the
+    command queue while a hub sleeps, and consumers must not infer that the
+    physical hive is open until the device acknowledges it.
+    """
+    expire_timed_out_inspections(device_id)
+    inspection = get_open_inspection(device_id)
+    if inspection is None:
+        return {
+            "inspection_state": "off",
+            "inspection_active": False,
+            "inspection_remaining_seconds": 0,
+        }
+    if inspection.acknowledged_at is None:
+        return {
+            "inspection_state": "pending",
+            "inspection_active": False,
+            "inspection_remaining_seconds": 0,
+        }
+
+    config = fetch_device_config(device_id)
+    deadline = _aware(inspection.started_at) + timedelta(
+        minutes=config.inspection_timeout_minutes
+    )
+    remaining = max(0, int((deadline - (_aware(now) or _now())).total_seconds()))
+    return {
+        "inspection_state": "active",
+        "inspection_active": True,
+        "inspection_remaining_seconds": remaining,
+    }
 
 
 # ── HTTP API ───────────────────────────────────────────────────────────────────

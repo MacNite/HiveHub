@@ -20,7 +20,11 @@ from devices import ensure_device_config
 from hiveheart_fft import decode_fft
 from mqtt_publisher import publisher as mqtt_publisher
 from schemas import MAX_HIVES, HiveReadingIn, MeasurementImportIn, MeasurementIn
-from inspections import mask_inspection_readings, sync_from_measurement
+from inspections import (
+    mask_inspection_readings,
+    mqtt_inspection_state,
+    sync_from_measurement,
+)
 from sd_import import split_new_and_duplicate
 from tempcomp import TEMP_SOURCE_FIELD, apply_compensation
 
@@ -461,9 +465,19 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
     # skipped entirely when the bridge is disabled.
     if inserted and mqtt_publisher.is_active():
         mqtt_tempco = load_tempco_configs([payload.device_id]).get(payload.device_id)
+        # MQTT is the live/processed interface, so give it the same inspection
+        # masking as charts and insights.  The database insert above has already
+        # stored the untouched payload for exports.
+        mqtt_state = payload.model_dump(
+            mode="python", exclude_none=True, exclude={"claim_code"}
+        )
+        mqtt_state["device_id"] = payload.device_id
+        mqtt_state["measured_at"] = measured_at
+        mqtt_state = mask_inspection_readings([mqtt_state])[0]
+        mqtt_state.update(mqtt_inspection_state(payload.device_id))
         mqtt_publisher.publish_measurement(
             payload.device_id,
-            payload.model_dump(mode="json", exclude_none=True, exclude={"claim_code"}),
+            mqtt_state,
             measured_at,
             tempco=mqtt_tempco,
         )
