@@ -25,6 +25,7 @@ Two things about that are easy to get wrong and expensive to get wrong:
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
@@ -59,6 +60,7 @@ def window(start_min, end_min, hives=None, device="dev-1"):
         ended_at=None if end_min is None else T0 + timedelta(minutes=end_min),
         active=end_min is None,
         source="device",
+        acknowledged_at=T0 + timedelta(minutes=start_min),
     )
 
 
@@ -209,6 +211,45 @@ def test_no_windows_is_a_no_op():
     check("no inspection flag is invented", not m.get("inspection"))
 
 
+def test_pending_inspection_does_not_mask_measurements():
+    pending = window(0, None)
+    pending.acknowledged_at = None
+    install(pending)
+    m = inspections.mask_inspection_readings([reading(30)])[0]
+    check("a pending inspection keeps hive measurements", m["scale_1_weight_kg"] == 42.0)
+    check("a pending inspection is not reported as active", not m.get("inspection"))
+
+
+def test_mqtt_inspection_state_distinguishes_off_pending_and_active():
+    inspections.expire_timed_out_inspections = lambda device_id=None: 0
+    inspections.fetch_device_config = lambda device_id: SimpleNamespace(
+        inspection_timeout_minutes=60
+    )
+
+    inspections.get_open_inspection = lambda device_id: None
+    state = inspections.mqtt_inspection_state("dev-1", now=T0)
+    check("MQTT reports an absent inspection as off",
+          state == {"inspection_state": "off", "inspection_active": False,
+                    "inspection_remaining_seconds": 0})
+
+    pending = window(0, None)
+    pending.acknowledged_at = None
+    inspections.get_open_inspection = lambda device_id: pending
+    state = inspections.mqtt_inspection_state("dev-1", now=T0 + timedelta(minutes=5))
+    check("MQTT preserves the pending state without claiming it is active",
+          state["inspection_state"] == "pending"
+          and state["inspection_active"] is False
+          and state["inspection_remaining_seconds"] == 0)
+
+    active = window(0, None)
+    inspections.get_open_inspection = lambda device_id: active
+    state = inspections.mqtt_inspection_state("dev-1", now=T0 + timedelta(minutes=5))
+    check("MQTT reports active mode and its remaining timeout",
+          state["inspection_state"] == "active"
+          and state["inspection_active"] is True
+          and state["inspection_remaining_seconds"] == 55 * 60)
+
+
 def test_naive_timestamps_are_treated_as_utc():
     # Rows read straight out of some clients arrive without a tzinfo; comparing
     # one against an aware window raises rather than misbehaving, which is a poor
@@ -257,6 +298,8 @@ def main():
     test_a_hive_scoped_inspection_leaves_the_other_hives_alone()
     test_another_device_is_not_masked()
     test_no_windows_is_a_no_op()
+    test_pending_inspection_does_not_mask_measurements()
+    test_mqtt_inspection_state_distinguishes_off_pending_and_active()
     test_naive_timestamps_are_treated_as_utc()
     test_hive_index_classifier()
 

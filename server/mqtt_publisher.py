@@ -320,6 +320,12 @@ _HA_SENSORS: list[tuple[str, str, Optional[str], Optional[str], Optional[str], O
     ("firmware_version",         "Firmware version",      None,   None,              None,          "mdi:chip"),
 ]
 
+_HA_INSPECTION_SENSORS = [
+    ("inspection_state", "Inspection state", None, None, None, "mdi:beehive-outline"),
+    ("inspection_remaining_seconds", "Inspection time remaining", "s", "duration",
+     "measurement", "mdi:timer-outline"),
+]
+
 
 def _hive_sensors(n: int):
     """HA sensor definitions for a single hive (published once per hive index seen)."""
@@ -634,6 +640,10 @@ class MqttPublisher:
             if MQTT_HA_DISCOVERY:
                 if device_id not in self._discovered:
                     self._publish_sensor_configs(client, device_id, display_name, _HA_SENSORS)
+                    self._publish_sensor_configs(
+                        client, device_id, display_name, _HA_INSPECTION_SENSORS
+                    )
+                    self._publish_inspection_binary_sensor(client, device_id, display_name)
                     self._discovered.add(device_id)
                 # Publish per-hive discovery for any hive index not yet seen.
                 seen = self._discovered_hives.setdefault(device_id, set())
@@ -801,6 +811,35 @@ class MqttPublisher:
             client.publish(topic, json.dumps(config), qos=MQTT_QOS, retain=True)
 
         logger.info("Published Home Assistant MQTT discovery for device %s", device_id)
+
+    def _publish_inspection_binary_sensor(
+        self, client, device_id: str, display_name: Optional[str]
+    ) -> None:
+        """Expose acknowledged inspection mode as an HA binary sensor."""
+        node = device_id.replace("/", "_").replace("+", "_").replace("#", "_")
+        unique_id = f"hivescale_{node}_inspection_active"
+        config: dict[str, Any] = {
+            "name": "Inspection active",
+            "unique_id": unique_id,
+            "object_id": unique_id,
+            "state_topic": self._device_state_topic(device_id),
+            "value_template": "{{ 'ON' if value_json.inspection_active else 'OFF' }}",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "icon": "mdi:beehive-outline",
+            "availability": [
+                {"topic": self._device_availability_topic(device_id)},
+                {"topic": self._bridge_availability_topic()},
+            ],
+            "availability_mode": "all",
+            "device": self._device_block(device_id, display_name),
+        }
+        if MQTT_HA_EXPIRE_AFTER > 0:
+            config["expire_after"] = MQTT_HA_EXPIRE_AFTER
+        client.publish(
+            f"{MQTT_HA_DISCOVERY_PREFIX}/binary_sensor/{node}/inspection_active/config",
+            json.dumps(config), qos=MQTT_QOS, retain=True,
+        )
 
 
 # Process-wide singleton used by the FastAPI app.
