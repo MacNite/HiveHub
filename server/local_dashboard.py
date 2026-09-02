@@ -962,7 +962,13 @@ def local_delete_device(device_id: str, body: DeviceDeleteIn):
 @router.get("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_DEP)
 def local_get_config(device_id: str):
     """Read the device's send-interval / calibration / temp-compensation config."""
-    return fetch_device_config(device_id)
+    config = fetch_device_config(device_id).model_dump()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT claim_code FROM devices WHERE device_id = %s;", (device_id,))
+            row = cur.fetchone()
+    config["claim_code"] = row[0] if row else None
+    return config
 
 
 @router.patch("/api/v1/local/devices/{device_id}/config", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)

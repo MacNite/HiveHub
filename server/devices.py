@@ -55,16 +55,17 @@ def ensure_device_config(
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                INSERT INTO devices (device_id, claim_code_hash, api_key_hash, last_seen_at, last_firmware_version)
-                VALUES (%s, %s, %s, {insert_last_seen}, %s)
+                INSERT INTO devices (device_id, claim_code_hash, claim_code, api_key_hash, last_seen_at, last_firmware_version)
+                VALUES (%s, %s, %s, %s, {insert_last_seen}, %s)
                 ON CONFLICT (device_id) DO UPDATE
                     SET {update_last_seen}
                         last_firmware_version = COALESCE(EXCLUDED.last_firmware_version, devices.last_firmware_version),
                         claim_code_hash = COALESCE(devices.claim_code_hash, EXCLUDED.claim_code_hash),
+                        claim_code = COALESCE(devices.claim_code, EXCLUDED.claim_code),
                         api_key_hash = COALESCE(devices.api_key_hash, EXCLUDED.api_key_hash)
                 RETURNING api_key_hash, claimed_at;
                 """,
-                (device_id, claim_hash, key_hash, firmware_version),
+                (device_id, claim_hash, claim_code.strip().upper() if claim_code else None, key_hash, firmware_version),
             )
             row = cur.fetchone()
             if key_hash and row and row[0] and row[0] != key_hash:

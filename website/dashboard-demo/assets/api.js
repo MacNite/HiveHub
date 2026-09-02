@@ -166,6 +166,7 @@ export const api = {
 
   config: (deviceId) => wrap({
     device_id: deviceId, send_interval_seconds: 900,
+    claim_code: "DEMO-1234",
     scale1_offset: 12345, scale1_factor: 21.3,
     scale2_offset: 12010, scale2_factor: 21.7,
     config_version: 4, tempco_enabled: true, tempco_source: "hive_1",
