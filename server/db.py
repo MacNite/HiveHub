@@ -31,6 +31,7 @@ def init_db():
                 CREATE TABLE IF NOT EXISTS devices (
                     device_id TEXT PRIMARY KEY,
                     claim_code_hash TEXT,
+                    claim_code TEXT,
                     claimed_at TIMESTAMPTZ,
                     display_name TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -334,6 +335,7 @@ def init_db():
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS hivescale_2_battery_v        DOUBLE PRECISION;
 
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS claim_code_hash TEXT;
+                ALTER TABLE devices ADD COLUMN IF NOT EXISTS claim_code TEXT;
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS api_key_hash TEXT;
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
                 ALTER TABLE devices ADD COLUMN IF NOT EXISTS display_name TEXT;
