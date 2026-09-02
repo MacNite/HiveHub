@@ -1,6 +1,6 @@
 # Inspection mode
 
-*Firmware **0.25.0** · server **0.4.0** · issue [#173](https://github.com/MacNite/HiveHub/issues/173)*
+*Firmware **0.25.1** · server **0.4.0** · issue [#173](https://github.com/MacNite/HiveHub/issues/173)*
 
 While a beekeeper has a hive open, its own sensors stop measuring the colony and
 start measuring the inspection. A scale with two supers lifted off it reads tens
@@ -56,6 +56,10 @@ considering for an apiary the public can reach.
 * One press **toggles** inspection on or off.
 * The press works while the hub is deep-asleep — D2 is a wake source, so the
   state changes on the press rather than at the next scheduled cycle.
+* Firmware 0.25.1 also checks the live D2 level at boot and safely classifies an
+  otherwise unidentifiable C6 GPIO wake as an inspection press. This covers the
+  0.25.0 failure where both the latched wake mask was empty and a quick tap had
+  ended before the firmware could read the pin.
 * Holding the button does the same as tapping it: one press, one toggle.
 * The state lives in RTC memory and survives the sleeps between cycles. It does
   **not** survive a power cut or a firmware update: a hub that cold-boots comes

@@ -135,17 +135,27 @@ void begin(uint32_t wakeCauses, uint64_t gpioWakeMask) {
   pinMode(INSPECTION_BUTTON_PIN, INPUT_PULLUP);
 
   // A press that woke us from deep sleep is a toggle, exactly like a press while
-  // awake. Which pin did it has to come from the wake status, not from reading
+  // awake. Which pin caused it has to come from the wake status, not from reading
   // the pin: a firm press is over long before this line runs on a hub that took
   // a second to boot.
-  const bool wokeOnInspectionPin =
+  const bool wakeStatusNamesInspectionPin =
       (gpioWakeMask & (1ULL << INSPECTION_BUTTON_PIN)) != 0;
-  if (wokeOnInspectionPin) {
+  const bool inspectionPinIsDown = digitalRead(INSPECTION_BUTTON_PIN) == LOW;
+
+  // esp_sleep_get_gpio_wakeup_status() is the best evidence because it remains
+  // latched after a quick tap has been released.  It is not infallible,
+  // though: some C6 boots report a GPIO wake with an empty/incomplete status
+  // mask.  The old code then silently discarded a perfectly ordinary press.
+  // Accept the live active-low level as a second source of evidence.  This also
+  // covers a press made late in an awake cycle, just before deep sleep starts.
+  const bool inspectionButtonPressed =
+      wakeStatusNamesInspectionPin || inspectionPinIsDown;
+  if (inspectionButtonPressed) {
     setActive(!active(), "button (wake)");
     lastToggleMs = millis();
     // The press that woke us is almost certainly still held. Count it as
     // consumed so loop() waits for a release before accepting the next one.
-    buttonWasDown = digitalRead(INSPECTION_BUTTON_PIN) == LOW;
+    buttonWasDown = inspectionPinIsDown;
     buttonDownMs = millis();
     toggleArmed = false;
   }
