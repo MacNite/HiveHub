@@ -464,6 +464,16 @@ void fetchRemoteConfig() {
     return;
   }
 
+  // Backends predating migration 028 retained only the claim-code hash. After
+  // an upgrade they cannot reconstruct the value shown in Device & admin, so
+  // they request one fresh submission from firmware that had already latched
+  // the device as claimed. The next measurement carries it; the backend then
+  // clears this flag and the normal claim latch suppresses it again.
+  if (doc["claim_code_required"] | false) {
+    Serial.println("[CONFIG] Backend needs claim code; scheduling re-submission");
+    clearClaimRegistered();
+  }
+
   sendIntervalMs = (unsigned long)(doc["send_interval_seconds"] | 600) * 1000UL;
 
   // HiveTraffic night mode. Applied UNCONDITIONALLY, unlike the calibration
