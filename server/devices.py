@@ -195,7 +195,19 @@ def fetch_device_config(device_id: str) -> DeviceConfig:
 
 @router.get("/api/v1/devices/{device_id}/config", dependencies=[Depends(require_device_key)])
 def get_device_config(device_id: str):
-    return fetch_device_config(device_id)
+    config = fetch_device_config(device_id).model_dump()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT claim_code IS NULL FROM devices WHERE device_id = %s;",
+                (device_id,),
+            )
+            row = cur.fetchone()
+    # Firmware used to stop uploading its claim code as soon as the device was
+    # paired. Ask those already-claimed devices to submit it once more so an
+    # upgraded backend can populate migration 028's displayable value.
+    config["claim_code_required"] = bool(row and row[0])
+    return config
 
 
 BEECOUNTER_BANK_FIELDS = (
