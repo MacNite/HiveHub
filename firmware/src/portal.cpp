@@ -1246,6 +1246,21 @@ void startProvisioningPortal() {
   Serial.println("[SETUP] Captive DNS redirect enabled for AP clients");
 }
 
+// Set by a `start_provisioning` command, consumed by the upload cycle that
+// received it. Deliberately not RTC-backed: a request that has not been served
+// by the end of its own cycle was superseded by a reboot, and waking into an AP
+// nobody is standing next to would only drain the battery.
+static bool provisioningRequested = false;
+
+void requestProvisioningPortal() { provisioningRequested = true; }
+
+void startRequestedProvisioningPortal() {
+  if (!provisioningRequested) return;
+  provisioningRequested = false;
+  Serial.println("[SETUP] Provisioning AP requested by command; starting it now");
+  startProvisioningPortal();
+}
+
 void stopProvisioningPortal() {
   if (!provisioningActive) return;
   Serial.println("[SETUP] Stopping provisioning AP");

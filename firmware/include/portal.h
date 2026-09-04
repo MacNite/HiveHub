@@ -33,3 +33,13 @@ void handleSetupReset();
 void startProvisioningPortal();
 void stopProvisioningPortal();
 void handleButton();
+
+// Ask for the portal without opening it here. A `start_provisioning` command is
+// handled in the middle of an upload cycle, where tearing WiFi down for the AP
+// would strand the rest of that cycle (cached-line upload, OTA check) — so the
+// command only sets the request and the cycle opens the AP once it is done,
+// which is exactly what a button press does.
+void requestProvisioningPortal();
+// Open the portal if one was requested; a no-op otherwise. Called right after
+// each upload cycle.
+void startRequestedProvisioningPortal();

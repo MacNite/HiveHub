@@ -331,6 +331,10 @@ void setup() {
 
   Serial.println("[SETUP] Running upload cycle now");
   runUploadCycle();
+  // A `start_provisioning` command picked up by that cycle opens the AP here,
+  // once the uploads and the OTA check are done with the station connection —
+  // the same place in the boot sequence a button press would have opened it.
+  startRequestedProvisioningPortal();
 
   lastCycleMs = millis();
   lastOtaCheckMs = millis();
@@ -383,6 +387,7 @@ void loop() {
     prefetchAmbientSensors();
     prefetchWiredScales();
     runUploadCycle();
+    startRequestedProvisioningPortal();
   }
 
   // Commands are checked once per upload cycle, inside runUploadCycle() above —

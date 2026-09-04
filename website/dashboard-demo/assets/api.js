@@ -253,6 +253,7 @@ export const api = {
   approveFirmware: demoErr,
   queueHiveInsideUpdate: demoErr,
   queueBeeCounterUpdate: demoErr,
+  startProvisioning: demoErr,
   startCalibration: demoErr,
   stopCalibration: demoErr,
   fitTempCompensation: demoErr,

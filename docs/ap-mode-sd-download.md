@@ -94,6 +94,24 @@ http://192.168.4.1
 
 This method is more reliable than a very quick press during deep sleep, because the button is already held when the ESP32 boots and checks the setup button state.
 
+### Without touching the device
+
+**Device & admin → Configuration → Start AP mode** in the built-in dashboard
+(`POST /api/v1/local/devices/{device_id}/provisioning/start`, admin only) queues
+a `start_provisioning` command — the same command the API exposes for HivePal
+and for `curl` (see [api.md](api.md)).
+
+It is queued, not immediate: the hub is asleep between cycles, so it picks the
+command up on its next check-in and opens the AP **at the end of that cycle**,
+once the readings are uploaded and the OTA check is done — the same point in the
+boot sequence a button press reaches. Expect it up to one send interval after
+the button is clicked.
+
+From there it behaves exactly like a button press: the `HiveHub-Setup-XXXX`
+network appears, the device is off WiFi and sending nothing while the portal is
+open, and the portal closes itself on the provisioning timeout if nobody
+connects. So only start it when somebody is at the hive to use it.
+
 ## Important: long hold / factory reset behavior
 
 A long hold of the setup button performs a factory reset of Preferences and reboots the device.
@@ -236,6 +254,8 @@ a move to another server recoverable — see
 | Deep-sleep wake from button | `src/storage_power.cpp` | `configureButtonWake()` |
 | Boot-time AP entry check | `src/main.cpp` | `digitalRead(SETUP_BUTTON_PIN) == LOW \|\| wakeReason == ESP_SLEEP_WAKEUP_EXT0` |
 | Button short/long press handling | `src/portal.cpp` | `handleButton()` |
+| Remote AP entry (`start_provisioning`) | `src/hivehub_network.cpp` | `requestProvisioningPortal()` in `checkCommands()` |
+| Deferred AP start at the end of a cycle | `src/main.cpp`, `src/portal.cpp` | `startRequestedProvisioningPortal()` |
 | SD TAR streaming helpers | `src/portal.cpp` | `tarSafeName()`, `writeTarHeader()`, `streamTarDirectory()` |
 | SD download HTTP handler | `src/portal.cpp` | `handleSdDownloadAll()` |
 | AP-mode download button | `src/portal.cpp` | `handleSetupRoot()` |

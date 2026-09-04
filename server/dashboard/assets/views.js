@@ -1927,17 +1927,21 @@ function renderDevice(root, state) {
   const devNote = deviceContextNote(state, "These settings apply to");
   if (devNote) node.append(devNote);
 
-  // ── Configuration form ──────────────────────────────────────────────────
-  // General settings + per-scale calibration and temperature compensation (the
-  // old standalone "Temperature compensation" panel is folded in here), plus a
-  // Fit tool that writes its result into the compensation fields for review.
+  // ── Configuration forms ─────────────────────────────────────────────────
+  // Two panels are built from the fields below: "Configuration" (general
+  // settings) and "Scale calibration & compensation" (per-scale calibration,
+  // temperature compensation and the Fit tool that writes its result into the
+  // compensation fields for review). Each has its own Save.
+  // `group` says which of the two forms below owns the field ("general" or
+  // "calibration"), so each Save sends only its own fields — a Save on one
+  // panel must not quietly write what somebody typed on the other.
   const cfgInputs = {};
-  const numInput = (key, isInt) => {
+  const numInput = (key, isInt, group = "general") => {
     const input = el("input", {
       type: "number", step: isInt ? "1" : "any",
       value: cfg[key] != null ? String(cfg[key]) : "",
     });
-    cfgInputs[key] = { input, int: !!isInt };
+    cfgInputs[key] = { input, int: !!isInt, group };
     return input;
   };
   const fieldRow = (label, control) => el("div", { class: "form-row" }, el("label", {}, label), control);
@@ -1978,8 +1982,9 @@ function renderDevice(root, state) {
   const scaleGroups = new Map();
   for (const n of scales) {
     const [offset, factor, tempco] = n <= 2
-      ? [numInput(`scale${n}_offset`, true), numInput(`scale${n}_factor`),
-         numInput(`scale${n}_tempco_kg_per_c`)]
+      ? [numInput(`scale${n}_offset`, true, "calibration"),
+         numInput(`scale${n}_factor`, false, "calibration"),
+         numInput(`scale${n}_tempco_kg_per_c`, false, "calibration")]
       : [hiveScaleInput(n, "offset", true), hiveScaleInput(n, "factor"),
          hiveScaleInput(n, "tempco_kg_per_c")];
     scaleGroups.set(n, el("div", { class: "scale-fields" },
@@ -2270,8 +2275,28 @@ function renderDevice(root, state) {
     } catch (err) { state.toast(err.message, "error"); bankSaveBtn.disabled = false; }
   });
 
-  const cfgSaveBtn = el("button", { class: "btn", type: "submit" }, "Save configuration");
+  // Two forms, two save buttons, two drop-downs. General settings live here;
+  // everything to do with a load cell moved into its own "Scale calibration &
+  // compensation" panel below, because a single Save spanning both put the
+  // calibration fields in view — and one Enter away from being written — every
+  // time somebody opened this panel to change the send interval.
   const metaRow = (k, v) => el("div", { class: "row" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v));
+
+  // The changed numeric fields of one group, as a config patch. Unchanged and
+  // unparseable fields are left out entirely rather than sent as they are.
+  const numericPatch = (group) => {
+    const patch = {};
+    for (const [key, { input, int, group: g }] of Object.entries(cfgInputs)) {
+      if (g !== group) continue;
+      const raw = input.value.trim();
+      if (raw === "") continue;
+      const v = int ? parseInt(raw, 10) : parseFloat(raw);
+      if (!Number.isFinite(v) || v === cfg[key]) continue;
+      patch[key] = v;
+    }
+    return patch;
+  };
+
   const cfgForm = el("form", {},
     el("div", { class: "config-grid" },
       el("div", { class: "config-block" },
@@ -2286,14 +2311,48 @@ function renderDevice(root, state) {
           "How long an inspection may run before the device ends it by itself. " +
           "A safety net, not a schedule: without it one forgotten button press " +
           "blanks this hive's charts indefinitely, which looks exactly like a " +
-          "dead sensor. Raise it for a long session rather than working around it.")),
+          "dead sensor. Raise it for a long session rather than working around it."))));
+
+  // Save sits at the very bottom of the Configuration panel, under the AP,
+  // Calibration and Inspection cards, so the panel ends with its own action
+  // instead of leaving three cards stranded below a button they have nothing to
+  // do with. It is outside the <form> in the DOM, so it submits it explicitly.
+  const cfgSaveBtn = el("button", { class: "btn", type: "button" }, "Save configuration");
+  cfgSaveBtn.addEventListener("click", () => {
+    if (cfgForm.requestSubmit) cfgForm.requestSubmit();
+    else cfgForm.dispatchEvent(new Event("submit", { cancelable: true }));
+  });
+  const cfgFooter = el("div", {},
+    el("p", { class: "note" }, "Saving bumps the config version; the device applies it on its next check-in."),
+    el("div", { class: "form-actions" }, cfgSaveBtn));
+
+  cfgForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const patch = numericPatch("general");
+    if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
+    cfgSaveBtn.disabled = true;
+    // full: true — a light reload carries the *previous* config over instead of
+    // refetching it, which repainted the form with the pre-save values and left
+    // the config version stale, as if the save had been dropped.
+    try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload({ full: true }); }
+    catch (err) { state.toast(err.message, "error"); cfgSaveBtn.disabled = false; }
+  });
+
+  // ── Scale calibration & compensation ────────────────────────────────────
+  // Its own top-level drop-down and its own Save, in one column like every
+  // other panel: the per-scale editor is the longest form on this page and the
+  // one a beekeeper touches least often.
+  const calSaveBtn = el("button", { class: "btn", type: "submit" }, "Save calibration");
+  const calForm = el("form", {},
+    el("div", { class: "config-grid" },
+      // No <h3> here: the drop-down's own summary already names this panel, and
+      // repeating it directly underneath reads as a second, nested section.
       el("div", { class: "config-block" },
-        el("h3", {}, "Scale calibration & compensation"),
         fieldRow("Scale", scaleSelect),
         ...scaleGroups.values(),
         el("div", { class: "form-row" }, el("label", {}, el("span", {}, "Enable temperature compensation "), tcEnabled)),
         fieldRow("Tempco source", tcSource),
-        fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c")),
+        fieldRow("Tempco ref temp (°C)", numInput("tempco_ref_temp_c", false, "calibration")),
         el("p", { class: "note" },
           "The temperature at which this scale reads true — the one it was tared and " +
           "spanned at. The correction is zero there and grows as the temperature moves " +
@@ -2303,19 +2362,12 @@ function renderDevice(root, state) {
           el("div", { class: "form-actions" }, fitBtn)),
         fitOut)),
     el("p", { class: "note" }, "Saving bumps the config version; the device applies it on its next check-in."),
-    el("div", { class: "form-actions" }, cfgSaveBtn));
+    el("div", { class: "form-actions" }, calSaveBtn));
   showScale();
 
-  cfgForm.addEventListener("submit", async (e) => {
+  calForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const patch = {};
-    for (const [key, { input, int }] of Object.entries(cfgInputs)) {
-      const raw = input.value.trim();
-      if (raw === "") continue;
-      const v = int ? parseInt(raw, 10) : parseFloat(raw);
-      if (!Number.isFinite(v) || v === cfg[key]) continue;
-      patch[key] = v;
-    }
+    const patch = numericPatch("calibration");
     // Hives 3+ patch through hive_scales instead of columns. Send an entry only
     // for a hive whose fields actually changed, with all three values, so the
     // server-side merge keeps the rest of that entry intact.
@@ -2338,14 +2390,14 @@ function renderDevice(root, state) {
     if (tcSource.value !== cfg.tempco_source) patch.tempco_source = tcSource.value;
 
     if (!Object.keys(patch).length) { state.toast("No changes to save"); return; }
-    cfgSaveBtn.disabled = true;
+    calSaveBtn.disabled = true;
     // full: true — a light reload carries the *previous* config over instead of
     // refetching it, which repainted the form with the pre-save values (a fitted
     // coefficient snapping back to 0, the reference temperature back to its
     // stored value) and left the config version stale, as if the save had been
     // dropped.
-    try { await state.actions.updateConfig(patch); state.toast("Configuration saved", "success"); state.reload({ full: true }); }
-    catch (err) { state.toast(err.message, "error"); cfgSaveBtn.disabled = false; }
+    try { await state.actions.updateConfig(patch); state.toast("Calibration saved", "success"); state.reload({ full: true }); }
+    catch (err) { state.toast(err.message, "error"); calSaveBtn.disabled = false; }
   });
 
   // Hive (scale-channel) names — one input per hive the device reports (up to 18).
@@ -2975,15 +3027,49 @@ function renderDevice(root, state) {
     el("p", { class: "note" }, "Calibration mode samples the load cell more frequently so you can place known weights and fit a temperature coefficient."),
     el("div", { class: "form-actions" }, startBtn, stopBtn));
 
+  // ── Setup access point ────────────────────────────────────────────────────
+  // The remote equivalent of a short press on the setup button, queued as a
+  // command like every other. It matters most on the boards where that button
+  // is not reachable: on the XIAO C6 it is the on-board USER button, so a hub
+  // sealed in its enclosure or up a pole has nothing to press.
+  const apBtn = el("button", { class: "btn ghost", type: "button" }, "Start AP mode");
+  apBtn.addEventListener("click", async () => {
+    if (!window.confirm(
+      "Start AP mode on this device?\n\n" +
+      "On its next check-in the device opens its own \"HiveHub-Setup-…\" WiFi " +
+      "network instead of measuring, and stays there until the setup portal is " +
+      "closed or it times out. It is off the network and sending nothing " +
+      "meanwhile, so start it only when somebody is at the hive to use it.")) return;
+    apBtn.disabled = true;
+    try {
+      await state.actions.startProvisioning();
+      state.toast("AP mode requested — the device opens it on its next check-in", "success");
+    } catch (e) { state.toast(e.message, "error"); } finally { apBtn.disabled = false; }
+  });
+  const apCard = el("div", { class: "card" },
+    el("h2", {}, "Setup access point"),
+    el("p", { class: "note" },
+      "Opens the on-device setup portal — WiFi and backend settings, hive and " +
+      "sensor pairing, scale tare/span and the SD-card download — exactly as a " +
+      "short press on the setup button does."),
+    el("p", { class: "note" },
+      "The device is asleep between cycles, so the AP appears on its next " +
+      "check-in (up to one send interval away), not now. Connect to " +
+      "\"HiveHub-Setup-…\" and open http://192.168.4.1; if nobody does, the " +
+      "portal times out by itself and the device goes back to measuring."),
+    el("div", { class: "form-actions" }, apBtn));
+
   const inspCard = inspectionCard(state);
 
   // ── Layout ────────────────────────────────────────────────────────────────
   // Top: three columns — Status (per-sensor health) · Hive names + Import SD card
   // data · Firmware (status/approve + upload). Each panel sizes to its own
-  // content rather than stretching. Below: a full-width collapsible
-  // "Configuration" (general + per-scale calibration/compensation + fit, plus the
-  // Calibration-mode controls), collapsed by default; and at the very bottom a
-  // full-width collapsible "Admin" grouping the account and admin-only panels.
+  // content rather than stretching. Below, full-width collapsibles, all
+  // collapsed by default: "Configuration" (general settings, the setup-AP,
+  // Calibration-mode and Inspection controls, and its Save at the bottom),
+  // "Scale calibration & compensation" (the per-scale editor and the fit tool,
+  // with its own Save), "HiveTraffic setup", and at the very bottom "Admin",
+  // grouping the account and admin-only panels.
   const isAdmin = state.authUser?.role === "admin";
 
   const topGrid = el("div", { class: "admin-cols" },
@@ -3003,7 +3089,8 @@ function renderDevice(root, state) {
 
   node.append(
     topGrid,
-    collapsible("Configuration", false, cfgForm, calCard, inspCard),
+    collapsible("Configuration", false, cfgForm, apCard, calCard, inspCard, cfgFooter),
+    collapsible("Scale calibration & compensation", false, calForm),
     collapsible("HiveTraffic setup", false, nmForm, bankForm),
     // Publishing is optional server-side (ENABLE_PUBLIC_EMBEDS): when it is off,
     // every /publish endpoint 404s, so the panel is not built at all rather than

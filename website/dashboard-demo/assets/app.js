@@ -336,6 +336,7 @@ function buildState() {
       approveFirmware: () => api.approveFirmware(activeId),
       queueHiveInsideUpdate: (slot, force) => api.queueHiveInsideUpdate(activeId, slot, force),
       queueBeeCounterUpdate: (slot, force) => api.queueBeeCounterUpdate(activeId, slot, force),
+      startProvisioning: () => api.startProvisioning(activeId),
       startCalibration: (p) => api.startCalibration(activeId, p),
       stopCalibration: () => api.stopCalibration(activeId),
       fitTempComp: (p) => api.fitTempCompensation(activeId, p),
