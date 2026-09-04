@@ -714,7 +714,7 @@ permanent "relaying…". The attempt counter lives in `device_commands.attempts`
 | `check_ota` / `ota_update` | `{}` | Trigger immediate OTA check/update |
 | `update_hiveinside` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a HiveInside sensor over BLE GATT (normally queued via the `update-hiveinside` helper above) |
 | `update_beecounter` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a HiveTraffic counter over BLE GATT (normally queued via the `update-beecounter` helper above) |
-| `start_provisioning` | `{}` | Start provisioning AP |
+| `start_provisioning` | `{}` | Start the provisioning AP — the remote equivalent of a short press on the setup button. The device opens it at the end of the cycle that picked the command up, and closes it again on the portal timeout. Also queued by the dashboard's **Device & admin → Configuration → Start AP mode** button (`POST /api/v1/local/devices/{device_id}/provisioning/start`, admin) |
 
 Response:
 

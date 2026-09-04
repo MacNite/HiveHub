@@ -1328,8 +1328,15 @@ void checkCommands() {
 #endif
   else if (type == "start_provisioning") {
     // This only makes sense while someone is physically near the device.
-    postCommandResult(commandId, true, "Provisioning AP started");
-    startProvisioningPortal();
+    //
+    // Only *requested* here, not started: opening the AP switches the radio out
+    // of station mode, and this runs in the middle of an upload cycle that
+    // still has cached lines to flush and an OTA check to make. The cycle opens
+    // the portal as soon as it is finished (see startRequestedProvisioningPortal
+    // in main.cpp), which is the same point a button press reaches it — so a
+    // hub sealed in a box behaves exactly as if somebody had pressed setup.
+    requestProvisioningPortal();
+    postCommandResult(commandId, true, "Provisioning AP starting at the end of this cycle");
   } else if (type == "start_calibration_mode") {
     unsigned long intervalSeconds = payload["interval_seconds"] | (CALIBRATION_MODE_DEFAULT_INTERVAL_MS / 1000UL);
     unsigned long timeoutSeconds = payload["timeout_seconds"] | (CALIBRATION_MODE_DEFAULT_TIMEOUT_MS / 1000UL);

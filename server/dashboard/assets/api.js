@@ -255,6 +255,12 @@ export const api = {
         `?slot=${encodeURIComponent(slot)}${force ? "&force=true" : ""}`,
       { method: "POST" }),
 
+  // Open the device's setup AP remotely — the same thing a short press on the
+  // setup button does, queued as a command the hub picks up on its next
+  // check-in. For a hub in a sealed box this is the only way in.
+  startProvisioning: (deviceId) =>
+    req(`/devices/${encodeURIComponent(deviceId)}/provisioning/start`, { method: "POST" }),
+
   startCalibration: (deviceId, payload) =>
     req(`/devices/${encodeURIComponent(deviceId)}/calibration/start`, {
       method: "POST",

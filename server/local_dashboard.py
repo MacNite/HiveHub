@@ -1171,6 +1171,31 @@ def local_queue_beecounter_update(
     )
 
 
+@router.post("/api/v1/local/devices/{device_id}/provisioning/start", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
+def local_start_provisioning(device_id: str):
+    """Queue a start-provisioning command — the remote equivalent of the setup button.
+
+    The hub picks it up on its next check-in and opens its setup AP once that
+    cycle is finished, exactly as a short press on the setup button does. That
+    matters for a hub sealed in an enclosure, or one on a pole: the C6 build's
+    setup button is the on-board USER button, which is not brought out.
+
+    Queued, not immediate — the device is asleep between cycles, so the AP
+    appears up to one send interval later, and it closes itself again after the
+    firmware's portal timeout if nobody connects.
+    """
+    result = create_command(
+        device_id,
+        DeviceCommandIn(command_type="start_provisioning", payload={}),
+    )
+    return {
+        "status": result["status"],
+        "id": result["id"],
+        "command_type": "start_provisioning",
+        "payload": {},
+    }
+
+
 @router.post("/api/v1/local/devices/{device_id}/calibration/start", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_start_calibration(
     device_id: str,

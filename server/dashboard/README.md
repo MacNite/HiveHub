@@ -73,10 +73,18 @@ Related settings (all optional, see `server/.env.example`):
 - **Insights history:** the Insights view lists the persisted lifecycle of every
   alert — active *and* resolved — with an all/active/resolved filter, so you can
   see warnings that have since cleared, not just the current state.
-- **Configuration:** edit device config (send interval, scale offsets/factors,
-  temperature-compensation settings) and rename each hive the device reports (up
-  to 18) — the labels used across every chart and card. Saving bumps the config
-  version so the device applies it on its next check-in.
+- **Configuration:** edit the general device config (send interval, inspection
+  timeout) and rename each hive the device reports (up to 18) — the labels used
+  across every chart and card. Saving bumps the config version so the device
+  applies it on its next check-in.
+- **Scale calibration & compensation:** its own drop-down, with its own Save —
+  per-scale offset/factor/temperature coefficient plus the compensation
+  settings and the fit-from-data tool.
+- **Setup access point:** **Start AP mode** queues the same thing a short press
+  on the device's setup button does, so a hub sealed in its enclosure (the XIAO
+  C6 setup button is the on-board USER button) can still be reached. The device
+  opens its `HiveHub-Setup-…` AP on its next check-in and closes it again on the
+  firmware's portal timeout.
 - **Firmware:** upload a `.bin`, see current-vs-latest status and approve an OTA
   update (queues the device to flash on its next check-in). When a **HiveInside**
   node is paired, the same panel lists the firmware version and board each node
