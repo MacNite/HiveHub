@@ -662,6 +662,20 @@ def init_db():
                     error TEXT
                 );
 
+                -- The two halves of a seam (added after the table shipped).
+                -- `gaps` used to be a sum: hubs up to firmware 0.30.1 reported
+                -- air loss and their own staging-ring refusals in one number,
+                -- which have opposite fixes. From 0.30.2 the ring's share
+                -- arrives separately, so it gets its own columns rather than
+                -- being folded back into `gaps`. Defaulting to 0 leaves every
+                -- existing row with exactly the meaning it was written with —
+                -- the sum, attributed to the air. See
+                -- migrations/030_recording_ring_overruns.sql.
+                ALTER TABLE hive_recordings
+                    ADD COLUMN IF NOT EXISTS ring_overruns INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE hive_recordings
+                    ADD COLUMN IF NOT EXISTS ring_dropped_bytes BIGINT NOT NULL DEFAULT 0;
+
                 CREATE INDEX IF NOT EXISTS hive_recordings_device_idx
                     ON hive_recordings (device_id, requested_at DESC);
                 CREATE INDEX IF NOT EXISTS hive_recordings_hive_idx

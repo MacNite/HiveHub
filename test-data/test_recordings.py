@@ -15,11 +15,13 @@ leave no trace of why.
 """
 
 import os
+import re
 import struct
 import sys
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
+SERVER_DIR = os.path.join(os.path.dirname(__file__), "..", "server")
+sys.path.insert(0, SERVER_DIR)
 
 # recordings.py pulls in auth -> config, which reads these at import time. No
 # database, network or disk is touched: everything checked below is a pure
@@ -31,6 +33,7 @@ os.environ.setdefault("API_KEY", "test-api-key")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 os.environ.setdefault("RECORDINGS_DIR", "/tmp/hivehub-test-recordings")
 
+import recordings  # noqa: E402
 from recordings import (  # noqa: E402
     SAMPLE_RATE,
     _path_for,
@@ -222,6 +225,53 @@ try:
     check("an unknown command type is still rejected", False)
 except Exception:
     check("an unknown command type is still rejected", True)
+
+
+# ── the schema the queries are written against ──────────────────────────────
+#
+# init_db() in db.py is what actually builds and upgrades a deployment's schema;
+# the files in server/migrations/ document the same changes for anyone applying
+# them by hand. A column added to a migration but not to init_db therefore
+# exists nowhere at runtime, and every query naming it fails with a 500 — on
+# fresh installs as well as upgrades. That shipped once: ring_overruns and
+# ring_dropped_bytes went into 030 and into recordings.py, but not into db.py,
+# so listing recordings 500'd and the dashboard reported that scheduling one had
+# failed. Reading the SQL is enough to catch it, and needs no database.
+
+_recordings_sql = open(os.path.join(SERVER_DIR, "recordings.py")).read()
+_init_db_sql = open(os.path.join(SERVER_DIR, "db.py")).read()
+
+# Columns the SELECT reads (r.<col>) and the ones finalize writes (<col> = %s).
+_queried = set(re.findall(r"\br\.([a-z0-9_]+)", recordings._SELECT))
+_queried |= set(re.findall(r"^\s+([a-z0-9_]+) = %s,", _recordings_sql, re.M))
+
+# What init_db actually creates: the hive_recordings CREATE TABLE body plus any
+# ALTER ... ADD COLUMN that names the table.
+_created = set(re.findall(
+    r"CREATE TABLE IF NOT EXISTS hive_recordings \((.*?)\n\s*\);",
+    _init_db_sql, re.S)[0].split())
+_created |= set(re.findall(
+    r"ALTER TABLE hive_recordings\s+ADD COLUMN IF NOT EXISTS ([a-z0-9_]+)",
+    _init_db_sql))
+
+_missing = sorted(_queried - _created)
+check(f"every column the recordings SQL names is created by init_db "
+      f"({'missing: ' + ', '.join(_missing) if _missing else 'none missing'})",
+      not _missing)
+
+# The same drift in the other direction: a migration file that init_db never
+# learned about. Only hive_recordings is in this file's remit.
+_migrations = os.path.join(SERVER_DIR, "migrations")
+_migrated = set()
+for _name in sorted(os.listdir(_migrations)):
+    _sql = open(os.path.join(_migrations, _name)).read()
+    _migrated |= set(re.findall(
+        r"ALTER TABLE hive_recordings\s+ADD COLUMN IF NOT EXISTS ([a-z0-9_]+)",
+        _sql))
+_unapplied = sorted(_migrated - _created)
+check(f"every hive_recordings migration column is also in init_db "
+      f"({'missing: ' + ', '.join(_unapplied) if _unapplied else 'none missing'})",
+      not _unapplied)
 
 
 if _failures:
