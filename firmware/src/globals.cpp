@@ -3,7 +3,7 @@
 
 #include <esp_system.h>
 
-const char* const FIRMWARE_VERSION = "0.30.3";
+const char* const FIRMWARE_VERSION = "0.30.4";
 
 #if ENABLE_HX711
 HX711 scale1;
@@ -40,6 +40,7 @@ bool sdOk = false;
 bool sdBusInitialized = false;
 bool shtOk = false;
 bool rtcOk = false;
+bool rtcTimeValid = false;
 bool provisioningActive = false;
 bool calibrationModeActive = false;
 

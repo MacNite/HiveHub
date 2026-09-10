@@ -83,7 +83,7 @@ void markOtaChecked() {
 }
 
 bool rtcHasValidTime() {
-  if (!rtcOk) return false;
+  if (!rtcOk || !rtcTimeValid) return false;
   DateTime now = rtc.now();
   return now.year() >= 2024 && now.year() <= 2099;
 }

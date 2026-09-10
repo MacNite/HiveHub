@@ -87,6 +87,7 @@ extern bool sdOk;
 extern bool sdBusInitialized;
 extern bool shtOk;
 extern bool rtcOk;
+extern bool rtcTimeValid;
 extern bool provisioningActive;
 extern bool calibrationModeActive;
 extern bool claimRegistered;

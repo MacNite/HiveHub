@@ -261,12 +261,12 @@ void setup() {
   rtcOk = i2cOk && rtc.begin();
   Serial.printf("[RTC] %s\n", rtcOk ? "OK" : "MISSING");
 
-  // A DS3231 with OSF/lostPower set does not hold trustworthy time. Treat it as
-  // unusable for this boot so initializeTime()/timestampNow() go straight to the
-  // system/NTP clock and never format garbage register bytes as a timestamp.
-  if (rtcOk && rtc.lostPower()) {
-    Serial.println("[RTC] Lost power; disabling RTC time for this boot");
-    rtcOk = false;
+  // Keep hardware availability separate from time validity. A new or
+  // power-interrupted DS3231 must not be read as a clock until NTP initializes
+  // it, but it must remain available so syncTime() can write that NTP time.
+  rtcTimeValid = rtcOk && !rtc.lostPower();
+  if (rtcOk && !rtcTimeValid) {
+    Serial.println("[RTC] Lost power; RTC time invalid until NTP sync");
   }
 
   // Ambient temp/humidity[/pressure] sensor. Exactly one family is compiled in
