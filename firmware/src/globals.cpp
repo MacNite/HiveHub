@@ -40,6 +40,7 @@ bool sdOk = false;
 bool sdBusInitialized = false;
 bool shtOk = false;
 bool rtcOk = false;
+bool rtcTimeValid = false;
 bool provisioningActive = false;
 bool calibrationModeActive = false;
 

@@ -112,7 +112,7 @@ uint16_t localMinuteOfDay() {
 }
 
 String timestampNow() {
-  if (rtcOk) {
+  if (rtcOk && rtcTimeValid) {
     DateTime now = rtc.now();
     // A wedged driver makes rtc.now() return zeroed registers (year 2000). Heal
     // once and re-read so a bus that another device wedged doesn't force the
@@ -154,6 +154,7 @@ void syncTime() {
           if (rtcOk) {
             struct tm* utc = gmtime(&nowUnix);
             rtc.adjust(DateTime(utc->tm_year + 1900, utc->tm_mon + 1, utc->tm_mday, utc->tm_hour, utc->tm_min, utc->tm_sec));
+            rtcTimeValid = true;
             Serial.println("[TIME] RTC updated from NTP");
           }
 
