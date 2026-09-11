@@ -1175,15 +1175,38 @@ static bool relayAudioSession(const String& mac, long recordingId,
   WiFiClientSecure secureClient;
   WiFiClient plainClient;
   WiFiClient* sock = nullptr;
+  // TWO different timeouts, both in MILLISECONDS, and they are not the same
+  // knob — which is what the single call here used to get wrong.
+  //
+  // `setTimeout(HTTP_REQUEST_TIMEOUT_MS / 1000)` looks like "15 seconds", and
+  // that division says it was meant as one. But NetworkClient and
+  // NetworkClientSecure declare no setTimeout at all: the call bound to
+  // Stream::setTimeout, whose argument is MILLISECONDS (Stream.h: "sets maximum
+  // milliseconds to wait for stream data"). It asked for a 15 ms budget, and it
+  // governs only the Stream read helpers — readStringUntil() below — never the
+  // socket. The status line of the upload's response routinely needs more than
+  // one TLS record to arrive, so a 15 ms budget returns a truncated or empty
+  // line, httpStatus parses as 0, and a recording that uploaded perfectly is
+  // reported to the operator as "backend rejected the upload (HTTP 0)".
+  //
+  // The socket's own send/receive timeouts come from a DIFFERENT member, set by
+  // setConnectionTimeout() (milliseconds) and applied as SO_SNDTIMEO/SO_RCVTIMEO
+  // on the first write and read. It was never set here, so both defaulted:
+  // 30 s for the secure client, 3 s for the plain one. Setting it explicitly
+  // before connect() also bounds the TLS handshake, which is the one part of
+  // this path that talks to the network before any audio exists.
   if (tls) {
     applyTlsConfig(secureClient);
-    secureClient.setTimeout(HTTP_REQUEST_TIMEOUT_MS / 1000);
+    secureClient.setConnectionTimeout(HTTP_REQUEST_TIMEOUT_MS);
+    secureClient.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
     if (!secureClient.connect(host.c_str(), port)) {
       setMsg("TLS connect to the backend failed");
       return false;
     }
     sock = &secureClient;
   } else {
+    plainClient.setConnectionTimeout(HTTP_REQUEST_TIMEOUT_MS);
+    plainClient.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
     if (!plainClient.connect(host.c_str(), port)) {
       setMsg("connect to the backend failed");
       return false;
@@ -1283,6 +1306,24 @@ static bool relayAudioSession(const String& mac, long recordingId,
   bool stalled = false, socketLost = false;
 
   while (true) {
+    // The cap is checked FIRST, before the drain, because it is the only bound
+    // on this loop that does not depend on the node going quiet.
+    //
+    // It used to live below the `continue`, in the branch reached only when
+    // the ring came back EMPTY. That is the common case — the upload usually
+    // outruns 32 kB/s — but it is not guaranteed: an open-ended session, where
+    // the node streams until it is told to stop, keeps refilling the ring while
+    // the upload drains it, and for as long as a packet is always waiting the
+    // cap is never read. A bound that a busy link can skip is not a bound.
+    if (millis() - startedMs > maxMs) {
+      // The node caps itself at 60 s; reaching this means it never sent a final
+      // packet, so end the session from this side rather than holding a hive
+      // off the air indefinitely.
+      Serial.println("[HI-AUD] hub-side cap reached; stopping the session");
+      gattaudio::stop();
+      break;
+    }
+
     size_t n = gattaudio::read(buf, HIVEINSIDE_AUDIO_UPLOAD_CHUNK);
     if (n > 0) {
       if (!sendChunk(n)) { socketLost = true; break; }
@@ -1302,27 +1343,34 @@ static bool relayAudioSession(const String& mac, long recordingId,
       stalled = true;
       break;
     }
-    if (millis() - startedMs > maxMs) {
-      // The node caps itself at 60 s; reaching this means it never sent a final
-      // packet, so end the session from this side rather than holding a hive
-      // off the air indefinitely.
-      Serial.println("[HI-AUD] hub-side cap reached; stopping the session");
-      gattaudio::stop();
-      break;
-    }
     delay(5);
   }
 
-  // Whatever is still in the ring belongs to this recording.
-  size_t n;
-  while ((n = gattaudio::read(buf, HIVEINSIDE_AUDIO_UPLOAD_CHUNK)) > 0 && !socketLost) {
+  // Tell the node to stop BEFORE draining what it already sent.
+  //
+  // Ordered the other way — drain first, stop after — the loop below was
+  // reading a ring that the node was still filling, and "drain until empty" is
+  // not a terminating condition against a producer that never stops. Stopping
+  // first makes the ring a fixed amount of audio, so the drain always ends.
+  // stop() is idempotent, so the cap path above having already sent one costs
+  // nothing here.
+  gattaudio::stop();
+
+  // Whatever is still in the ring belongs to this recording. Bounded by the
+  // stall timeout, because a stopped node's ring is at most one ring-full of
+  // audio and anything slower than that is a socket that has stopped draining:
+  // this is the last place one could hold the cycle open, and a few seconds of
+  // tail audio is not worth a hub that never comes back.
+  const unsigned long drainDeadline = millis() + HIVEINSIDE_AUDIO_STALL_S * 1000UL;
+  size_t n = 0;
+  while (!socketLost && (long)(drainDeadline - millis()) > 0 &&
+         (n = gattaudio::read(buf, HIVEINSIDE_AUDIO_UPLOAD_CHUNK)) > 0) {
     // Checked, like the main loop: a short write here would declare a chunk
     // length the body does not carry and mis-frame everything after it.
     if (!sendChunk(n)) { socketLost = true; break; }
     uploaded += n;
   }
 
-  gattaudio::stop();
   gattaudio::Stats stats;
   bool sessionOk = gattaudio::finish(&stats);
   String sessionErr = gattaudio::lastError();
@@ -1332,9 +1380,14 @@ static bool relayAudioSession(const String& mac, long recordingId,
   if (!socketLost) {
     sock->print("0\r\n\r\n");
     // Read just the status line; the body carries nothing this side needs.
+    // `(long)(deadline - millis()) > 0`, not `millis() < deadline`, matching
+    // the follow-up window in checkCommands(). The plain comparison reads as
+    // "already expired" for the ~15 s after millis() wraps, which would skip
+    // the read and report HTTP 0 for an upload that in fact succeeded.
     unsigned long deadline = millis() + HTTP_REQUEST_TIMEOUT_MS;
     String line;
-    while (millis() < deadline && sock->connected() && line.length() == 0) {
+    while ((long)(deadline - millis()) > 0 && sock->connected() &&
+           line.length() == 0) {
       if (sock->available()) line = sock->readStringUntil('\n');
       else delay(10);
     }
