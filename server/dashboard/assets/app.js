@@ -101,8 +101,10 @@ function hiveWeight(row, n) {
   const comp = row[`scale_${n}_weight_kg_compensated`];
   return comp != null ? comp : (row[`scale_${n}_weight_kg`] ?? null);
 }
-// A device-shaped object for availableHives()/hiveLabel(): custom channel names
-// are only loaded for the active device, so others fall back to firmware names.
+// A device-shaped object for availableHives()/hiveLabel(). The full channels
+// payload is only loaded for the active device; the others carry the names from
+// the device list, which is enough for hiveLabel (and the hive's own reading
+// carries the name set on the device either way).
 function deviceState(id) {
   // channels come from the last device-scoped load, so they only apply to the
   // device that load was for — see loadData()/buildState().

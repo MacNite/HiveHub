@@ -360,6 +360,9 @@ curl "http://HOST:31115/api/v1/app/devices/DEVICE_ID/measurements/latest?limit=1
 
 ### Update channel names
 
+These names override the ones set on the device itself; send an empty string to
+drop the override and follow the device's own hive name again.
+
 ```bash
 curl -X PATCH http://HOST:31115/api/v1/app/devices/DEVICE_ID/channels \
   -H "Content-Type: application/json" \
@@ -367,9 +370,12 @@ curl -X PATCH http://HOST:31115/api/v1/app/devices/DEVICE_ID/channels \
   -H "Authorization: Bearer JWT_TOKEN" \
   -d '{
     "scale_1_display_name": "Hive A",
-    "scale_2_display_name": "Hive B"
+    "scale_2_display_name": ""
   }'
 ```
+
+The response carries `names` (what each hive is labelled with), `custom_names`
+(the overrides) and `device_names` (what the device reports).
 
 ### Share a device with another HivePal user ID
 

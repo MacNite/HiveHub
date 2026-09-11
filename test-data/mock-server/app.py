@@ -584,17 +584,35 @@ def get_device_channels(device_id: str, user_id: str = Depends(require_user_id))
     require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
     ch = STORE["channels"].get(device_id, {})
     return {"scale_1_display_name": ch.get("scale_1_display_name"),
-            "scale_2_display_name": ch.get("scale_2_display_name")}
+            "scale_2_display_name": ch.get("scale_2_display_name"),
+            "names": dict(ch.get("names") or {}),
+            "custom_names": dict(ch.get("custom_names") or {}),
+            "device_names": dict(ch.get("device_names") or {})}
 
 
 @app.patch("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])
 def update_device_channels(device_id: str, payload: DeviceChannelsUpdateIn, user_id: str = Depends(require_user_id)):
     require_device_role(user_id, device_id, ["owner", "admin"])
     ch = STORE["channels"].setdefault(device_id, {"scale_1_display_name": None, "scale_2_display_name": None})
-    if payload.scale_1_display_name is not None:
-        ch["scale_1_display_name"] = payload.scale_1_display_name
-    if payload.scale_2_display_name is not None:
-        ch["scale_2_display_name"] = payload.scale_2_display_name
+    custom = ch.setdefault("custom_names", {})
+    names = ch.setdefault("names", {})
+    # An empty name clears the override, so the hive falls back to the name the
+    # device reports — same rule as the real server (see apply_device_channels).
+    for idx, value in ((1, payload.scale_1_display_name), (2, payload.scale_2_display_name)):
+        if value is None:
+            continue
+        override = value.strip() or None
+        if override:
+            custom[str(idx)] = override
+        else:
+            custom.pop(str(idx), None)
+        device_name = (ch.get("device_names") or {}).get(str(idx))
+        effective = override or device_name
+        ch[f"scale_{idx}_display_name"] = effective
+        if effective:
+            names[str(idx)] = effective
+        else:
+            names.pop(str(idx), None)
     return get_device_channels(device_id, user_id)
 
 

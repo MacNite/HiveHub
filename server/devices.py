@@ -303,30 +303,96 @@ def get_device_owner_id(device_id: str) -> Optional[str]:
     return r[0] if r else None
 
 
+# A hive is labelled by the name the device itself reports (hives[].name on every
+# upload, set in the firmware's setup portal), unless someone typed a different
+# one here. Renaming a hive in AP mode therefore shows up on the next upload — it
+# used to be shadowed forever by whatever name was stored when the device was
+# claimed. See sync_reported_hive_names() in measurements.py for the write side.
+def effective_channel_name(custom: Optional[str], reported: Optional[str]) -> Optional[str]:
+    if custom:
+        return custom
+    return reported or None
+
+
+CHANNELS_SELECT = (
+    "SELECT device_id, channel_number, name, device_name FROM device_channels "
+    "WHERE device_id = ANY(%s) ORDER BY device_id, channel_number;"
+)
+
+
+def channels_payload(custom: dict[int, Optional[str]],
+                     reported: dict[int, Optional[str]]) -> dict:
+    """The channels object every device-listing endpoint embeds.
+
+    ``names`` is what a hive should be labelled with — the override when there is
+    one, else the device's own name. ``custom_names`` and ``device_names`` split
+    that back apart, so the dashboard's rename form can show an override as an
+    override and offer the device's name as the placeholder it falls back to.
+    """
+    indices = sorted(set(custom) | set(reported))
+    effective = {
+        str(n): effective_channel_name(custom.get(n), reported.get(n))
+        for n in indices
+    }
+    return {
+        "names": {n: v for n, v in effective.items() if v is not None},
+        "custom_names": {str(n): custom[n] for n in indices if custom.get(n)},
+        "device_names": {str(n): reported[n] for n in indices if reported.get(n)},
+        "scale_1": effective.get("1"),
+        "scale_2": effective.get("2"),
+    }
+
+
+def fetch_channels_for_devices(cur, device_ids: list[str]) -> dict[str, dict]:
+    """Per-device channels payloads for a list of devices, in one query."""
+    if not device_ids:
+        return {}
+    cur.execute(CHANNELS_SELECT, (device_ids,))
+    custom: dict[str, dict[int, Optional[str]]] = {}
+    reported: dict[str, dict[int, Optional[str]]] = {}
+    for did, num, name, device_name in cur.fetchall():
+        custom.setdefault(did, {})[num] = name
+        reported.setdefault(did, {})[num] = device_name
+    return {
+        did: channels_payload(custom.get(did, {}), reported.get(did, {}))
+        for did in device_ids
+    }
+
+
 def fetch_device_channels(device_id: str) -> dict:
     """Return the per-hive (scale-channel) display names for a device.
 
-    ``names`` maps every stored hive index ("1".."18") to its custom name and is
-    the canonical multi-hive shape the local dashboard consumes. ``scale_1/2_*``
-    are kept for the HivePal app endpoints and older callers.
+    ``names`` maps every hive index ("1".."18") to the name it should be shown
+    under — the override stored here when there is one, otherwise the name the
+    device itself reported. ``custom_names`` / ``device_names`` expose the two
+    sources separately, and ``scale_1/2_*`` are kept for the HivePal app
+    endpoints and older callers.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT channel_number, name FROM device_channels WHERE device_id = %s ORDER BY channel_number;",
+                "SELECT channel_number, name, device_name FROM device_channels "
+                "WHERE device_id = %s ORDER BY channel_number;",
                 (device_id,),
             )
             rows = cur.fetchall()
-    ch = {r[0]: r[1] for r in rows}
+    payload = channels_payload({r[0]: r[1] for r in rows}, {r[0]: r[2] for r in rows})
     return {
-        "scale_1_display_name": ch.get(1),
-        "scale_2_display_name": ch.get(2),
-        "names": {str(num): name for num, name in ch.items() if name is not None},
+        "scale_1_display_name": payload["scale_1"],
+        "scale_2_display_name": payload["scale_2"],
+        "names": payload["names"],
+        "custom_names": payload["custom_names"],
+        "device_names": payload["device_names"],
     }
 
 
 def apply_device_channels(device_id: str, payload: DeviceChannelsUpdateIn) -> dict:
-    """Upsert the provided per-hive display names and return all of them."""
+    """Upsert the provided per-hive name overrides and return all the names.
+
+    An empty (or whitespace-only) name clears the override, which is how a hive
+    is handed back to the name its device reports — the rename form spells that
+    out, and it is what a beekeeper who empties the field means.
+    """
     # Collapse the legacy scale_1/2 fields and the general names[] map into one
     # {hive_index: name} set, dropping anything outside 1..MAX_HIVES.
     updates: dict[int, Optional[str]] = {}
@@ -346,13 +412,14 @@ def apply_device_channels(device_id: str, payload: DeviceChannelsUpdateIn) -> di
     with get_conn() as conn:
         with conn.cursor() as cur:
             for ch_num, ch_name in updates.items():
+                cleared = (ch_name or "").strip() or None
                 cur.execute(
                     """
                     INSERT INTO device_channels (device_id, channel_number, name)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (device_id, channel_number) DO UPDATE SET name = EXCLUDED.name;
                     """,
-                    (device_id, ch_num, ch_name),
+                    (device_id, ch_num, cleared),
                 )
             conn.commit()
     return fetch_device_channels(device_id)

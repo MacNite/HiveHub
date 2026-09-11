@@ -796,7 +796,7 @@ Failure modes are reported separately, because they need different fixes:
 
 ### `GET /api/v1/app/devices`
 
-Lists all devices the current user can access. Device objects include `device_id`, `display_name`, `claimed_at`, `last_seen_at`, `last_firmware_version`, `role`, and `channels`.
+Lists all devices the current user can access. Device objects include `device_id`, `display_name`, `claimed_at`, `last_seen_at`, `last_firmware_version`, `role`, and `channels` (the same object as `GET …/channels` below: `names`, `custom_names`, `device_names`, plus `scale_1`/`scale_2`).
 
 ### `DELETE /api/v1/app/devices/{device_id}`
 
@@ -822,17 +822,47 @@ Readings, config and channel names are untouched; only the pairing is undone.
 
 ### `GET /api/v1/app/devices/{device_id}/channels`
 
-Returns channel display names for scale 1 and scale 2.
+Returns the hive (scale-channel) display names.
+
+```json
+{
+  "scale_1_display_name": "Buckfast colony",
+  "scale_2_display_name": "shire-03",
+  "names":        { "1": "Buckfast colony", "2": "shire-03" },
+  "custom_names": { "1": "Buckfast colony" },
+  "device_names": { "1": "shire-01", "2": "shire-03" }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `names` | What each hive should be **labelled** with: the override when one is stored, otherwise the name the device itself reports. This is the field to display. |
+| `custom_names` | Only the overrides stored on the server (set here or in the dashboard). |
+| `device_names` | Only the names the device itself reports — the hive names set in its setup portal (AP mode), taken from `hives[].name` on the newest upload. |
+| `scale_1/2_display_name` | The labels (as in `names`) for hives 1 and 2, kept for older callers. |
+
+A hive with no override follows the name set on the device, so **renaming a hive
+in the setup portal relabels it everywhere on the next upload**. An override
+always wins until it is cleared — except that an override which merely copied the
+name the device was reporting is dropped when the device is renamed, since it was
+a copy rather than a deliberate choice.
 
 ### `PATCH /api/v1/app/devices/{device_id}/channels`
 
-Updates channel display names. Requires `owner` or `admin`.
+Updates the hive name overrides. Requires `owner` or `admin`.
 
 ```json
 {
   "scale_1_display_name": "Buckfast colony",
   "scale_2_display_name": "Carnica colony"
 }
+```
+
+An empty string clears an override, handing that hive back to the name its
+device reports:
+
+```json
+{ "scale_2_display_name": "" }
 ```
 
 ### `GET /api/v1/app/devices/{device_id}/config`
@@ -1383,7 +1413,7 @@ The backend auto-creates and updates the schema on startup.
 |---|---|
 | `devices` | Device identity, claim status, per-device API key hash, display name, last seen, firmware version, and the owner-approved firmware version (accept-to-apply gate) |
 | `device_members` | Users with `owner`, `admin`, or `viewer` role per device |
-| `device_channels` | Display names for scale channel 1 and 2 |
+| `device_channels` | Per-hive display names: `name` (the override set in the app/dashboard) beside `device_name`/`device_name_at` (the name the device itself last reported, and the reading it came from) |
 | `device_configs` | Send interval, offsets, calibration factors, config version, bee-counter night mode |
 | `measurements` | Measurement records, including power/acoustic/bee-counter columns and `raw_json` |
 | `firmware_releases` | Firmware versions available for OTA, with `target`, `crc32`, and `owner_user_id` (NULL = global/official; otherwise the owner the release is private to) |
@@ -1392,7 +1422,7 @@ The backend auto-creates and updates the schema on startup.
 | `inspections` | Open and closed inspection windows per device/hive, with the note and end reason |
 | `hive_recordings` | One row per audio session: status, timings, byte count, CRC, quality counters and the `command_id` that carried it. The audio itself is a file under `RECORDINGS_DIR`, not a column |
 
-The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields, the normalized per-hive `hive_readings` table (multi-hive payloads), and the dashboard-auth tables (`dashboard_users`, `dashboard_settings`, `push_subscriptions`); `firmware_releases` gains `target`, `crc32`, `owner_user_id`, and `board`; `device_commands` gains `attempts`. The SQL files in `server/migrations/` (`001_offgrid_telemetry.sql` through `030_recording_ring_overruns.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
+The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields, the normalized per-hive `hive_readings` table (multi-hive payloads), and the dashboard-auth tables (`dashboard_users`, `dashboard_settings`, `push_subscriptions`); `firmware_releases` gains `target`, `crc32`, `owner_user_id`, and `board`; `device_commands` gains `attempts`. The SQL files in `server/migrations/` (`001_offgrid_telemetry.sql` through `031_hive_device_names.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
 
 ---
 

@@ -20,6 +20,7 @@ from commands import check_relay_slot, create_command, queue_relay_firmware_upda
 from db import get_conn, hash_claim_code
 from devices import (
     apply_device_channels,
+    fetch_channels_for_devices,
     fetch_device_channels,
     fetch_device_config,
     get_device_owner_id,
@@ -138,15 +139,10 @@ def list_devices(user_id: str = Depends(require_user_id)):
                 (user_id,),
             )
             rows = cur.fetchall()
-            device_ids = [r[0] for r in rows]
-            channels: dict[str, dict] = {}
-            if device_ids:
-                cur.execute(
-                    "SELECT device_id, channel_number, name FROM device_channels WHERE device_id = ANY(%s);",
-                    (device_ids,),
-                )
-                for ch in cur.fetchall():
-                    channels.setdefault(ch[0], {})[ch[1]] = ch[2]
+            # Hive names: the override stored here when there is one, else the
+            # name the device itself last reported — so a hive renamed in the
+            # setup portal relabels itself here too.
+            channels = fetch_channels_for_devices(cur, [r[0] for r in rows])
     return [
         {
             "device_id": r[0],
@@ -155,17 +151,7 @@ def list_devices(user_id: str = Depends(require_user_id)):
             "last_seen_at": r[3],
             "last_firmware_version": r[4],
             "role": r[5],
-            "channels": {
-                "scale_1": channels.get(r[0], {}).get(1),
-                "scale_2": channels.get(r[0], {}).get(2),
-                # All custom hive names this device has (index "1".."18" -> name),
-                # so the dashboard can label hives beyond the first two.
-                "names": {
-                    str(num): name
-                    for num, name in channels.get(r[0], {}).items()
-                    if name is not None
-                },
-            },
+            "channels": channels[r[0]],
         }
         for r in rows
     ]

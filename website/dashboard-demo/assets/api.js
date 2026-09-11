@@ -302,11 +302,22 @@ export const api = {
     timezone: "CET-1CEST,M3.5.0,M10.5.0/3",
   }),
 
+  // Hive names, in the shape the real server sends: `names` is what each hive is
+  // labelled with, split into the overrides typed in this form (`custom_names`)
+  // and the names the device itself reports (`device_names`). The demo device has
+  // no overrides, so the rename form shows the device's names as placeholders —
+  // the same thing a fresh install sees.
   channels: (deviceId) => {
     const dev = findDevice(deviceId);
+    const deviceNames = {};
+    if (dev.channels.scale_1) deviceNames["1"] = dev.channels.scale_1;
+    if (dev.channels.scale_2) deviceNames["2"] = dev.channels.scale_2;
     return wrap({
       scale_1_display_name: dev.channels.scale_1,
       scale_2_display_name: dev.channels.scale_2,
+      names: { ...deviceNames },
+      custom_names: {},
+      device_names: deviceNames,
     });
   },
 

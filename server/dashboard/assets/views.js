@@ -623,6 +623,8 @@ export function availableHives(state) {
     if (h && h.index != null) set.add(Number(h.index));
   }
   const names = state.channels?.names || state.device?.channels?.names || {};
+  // (names covers both the overrides and the device's own names — channels_payload
+  // merges them server-side, so a hive that only exists as a name is still listed.)
   for (const k of Object.keys(names)) { const n = Number(k); if (n) set.add(n); }
   if (state.latest) {
     for (const key of Object.keys(state.latest)) {
@@ -633,14 +635,33 @@ export function availableHives(state) {
   return [...set].filter((n) => n >= 1).sort((a, b) => a - b);
 }
 
-// Best display name for hive n: a custom channel name first, then the firmware-
-// reported name from the hives[] array, then the legacy single-channel fields,
-// then a generic "Hive n".
+// The name a hive was given on the device itself (its setup portal), as carried
+// by the newest reading we hold for it.
+function reportedHiveName(state, n) {
+  const hv = (state.latest?.hives || []).find((h) => Number(h?.index) === Number(n));
+  return (hv && hv.name) || null;
+}
+
+// A name typed into the rename form (or by HivePal), which outranks the name the
+// device reports. Older servers only sent the merged `names` map, so nothing is
+// treated as an override there — the reading's own name is fresher anyway.
+function customHiveName(state, n) {
+  const own = state.channels?.custom_names || {};
+  const dev = state.device?.channels?.custom_names || {};
+  return own[n] || dev[n] || null;
+}
+
+// Best display name for hive n: an explicit override first, then the name the
+// device reports — taken from the newest reading, so renaming a hive in the
+// setup portal relabels it here as soon as the next upload lands, ahead of the
+// server's stored copy — then the legacy single-channel fields, then "Hive n".
 export function hiveLabel(state, n) {
+  const custom = customHiveName(state, n);
+  if (custom) return custom;
+  const reported = reportedHiveName(state, n);
+  if (reported) return reported;
   const names = state.channels?.names || {};
   if (names[n] != null && names[n] !== "") return names[n];
-  const hv = (state.latest?.hives || []).find((h) => Number(h?.index) === Number(n));
-  if (hv && hv.name) return hv.name;
   const c = state.channels || {};
   const legacy = n === 1 ? c.scale_1_display_name : n === 2 ? c.scale_2_display_name : null;
   const dev = state.device?.channels || {};
@@ -2939,27 +2960,41 @@ function renderDevice(root, state) {
   });
 
   // Hive (scale-channel) names — one input per hive the device reports (up to 18).
+  //
+  // A hive is normally labelled with the name set on the device itself, which is
+  // why the inputs hold only the overrides typed here: leaving one empty (or
+  // clearing it) shows the device's own name, and a hive renamed in the setup
+  // portal is then picked up automatically. `custom_names` is missing on an older
+  // server, where every stored name was an override.
   const chData = state.channels || {};
-  const chNames = chData.names || {};
+  const chCustom = chData.custom_names || chData.names || {};
+  const chDeviceNames = chData.device_names || {};
   const curName = (n) =>
-    chNames[n] ??
+    chCustom[n] ??
     (n === 1 ? chData.scale_1_display_name : n === 2 ? chData.scale_2_display_name : null) ??
     "";
   const chInputs = availableHives(state).map((n) => {
     const fw = (state.latest?.hives || []).find((h) => Number(h?.index) === n);
     const initial = curName(n);
+    const onDevice = (fw && fw.name) || chDeviceNames[n] || null;
     return {
       n,
       initial,
-      input: el("input", { type: "text", value: initial, placeholder: (fw && fw.name) || `Hive ${n}` }),
+      onDevice,
+      input: el("input", { type: "text", value: initial, placeholder: onDevice || `Hive ${n}` }),
     };
   });
   const chBtn = el("button", { class: "btn", type: "submit" }, "Save names");
   const chForm = chInputs.length
     ? el("form", {},
-        ...chInputs.map(({ n, input }) =>
-          el("div", { class: "form-row" }, el("label", {}, `Hive ${n} name`), input)),
-        el("p", { class: "note" }, "Shown as the hive labels across every chart and card."),
+        ...chInputs.map(({ n, input, onDevice }) =>
+          el("div", { class: "form-row" },
+            el("label", {}, onDevice ? `Hive ${n} name (on device: ${onDevice})` : `Hive ${n} name`),
+            input)),
+        el("p", { class: "note" },
+          "Shown as the hive labels across every chart and card. Leave a field " +
+          "empty to use the name set on the device itself, so renaming a hive in " +
+          "its setup portal is picked up here automatically."),
         el("div", { class: "form-actions" }, chBtn))
     : el("p", { class: "muted-text" },
         "No hives reported yet — names can be set once the device sends its first reading.");

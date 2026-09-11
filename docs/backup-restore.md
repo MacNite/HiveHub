@@ -107,11 +107,13 @@ then succeeds. So the order is **let the device check in once → then restore**
    AP-mode setup portal) and wait for one check-in, so the device registers
    itself there.
 3. On the new server's dashboard, **Import SD card data** and upload the file.
-4. Re-create what the backup does not carry: hive names
-   (**Device & admin → Hive names**) and the device configuration — in
+4. Re-create what the backup does not carry: the device configuration — in
    particular the **scale offsets and factors** and any temperature-compensation
    coefficients (**Device & admin → Configuration**). Copy them off the old
-   server before you decommission it.
+   server before you decommission it. Hive names come across on their own, since
+   each hive is labelled with the name set on the device itself; only names that
+   were overridden in the dashboard (**Device & admin → Hive names**) need
+   re-typing.
 5. Once the data is verified on the new server, remove the device from the old
    one (**Device & admin → Delete readings**, or drop the device row directly).
 

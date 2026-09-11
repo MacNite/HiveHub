@@ -66,6 +66,16 @@ def init_db():
                     ADD CONSTRAINT device_channels_channel_number_check
                     CHECK (channel_number BETWEEN 1 AND 18);
 
+                -- `name` is an *override* typed in the dashboard / HivePal;
+                -- `device_name` is the name the device itself last reported for
+                -- that hive (hives[].name on every upload), so a hive renamed in
+                -- the firmware's setup portal is picked up automatically instead
+                -- of being shadowed forever by the name stored at claim time.
+                -- `device_name_at` is the measured_at that name came from, so an
+                -- out-of-order SD-card import cannot resurrect an older name.
+                ALTER TABLE device_channels ADD COLUMN IF NOT EXISTS device_name TEXT;
+                ALTER TABLE device_channels ADD COLUMN IF NOT EXISTS device_name_at TIMESTAMPTZ;
+
                 CREATE TABLE IF NOT EXISTS measurements (
                     id BIGSERIAL PRIMARY KEY,
                     device_id TEXT NOT NULL,
@@ -798,6 +808,60 @@ def init_db():
                     view_count BIGINT NOT NULL DEFAULT 0,
                     last_viewed_at TIMESTAMPTZ
                 );
+
+                -- ── device_channels.device_name backfill (migration 031) ──────
+                -- Runs after hive_readings exists. Each step is a no-op once it
+                -- has run, so init_db can keep applying it on every boot.
+                --
+                -- 1. A stored name the device itself once reported was never a
+                --    deliberate override — it is a copy made at claim time or by
+                --    saving the pre-filled name form — so drop it and let the
+                --    hive follow the device again. Guarded on device_name IS
+                --    NULL (only true before the backfill below has run), so a
+                --    later override can never be cleared by a restart.
+                UPDATE device_channels dc
+                   SET name = NULL
+                 WHERE dc.device_name IS NULL
+                   AND dc.name IS NOT NULL
+                   AND dc.name <> ''
+                   AND EXISTS (
+                       SELECT 1 FROM hive_readings hr
+                        WHERE hr.device_id = dc.device_id
+                          AND hr.hive_index = dc.channel_number
+                          AND hr.name = dc.name
+                   );
+
+                -- 2. Seed device_name from the newest reading that carried one.
+                UPDATE device_channels dc
+                   SET device_name = l.name,
+                       device_name_at = l.measured_at
+                  FROM (
+                       SELECT DISTINCT ON (device_id, hive_index)
+                              device_id, hive_index, name, measured_at
+                         FROM hive_readings
+                        WHERE name IS NOT NULL AND name <> ''
+                          AND hive_index BETWEEN 1 AND 18
+                        ORDER BY device_id, hive_index, measured_at DESC
+                  ) l
+                 WHERE dc.device_id = l.device_id
+                   AND dc.channel_number = l.hive_index
+                   AND dc.device_name IS NULL;
+
+                -- 3. Hives that report a name but were never renamed by hand have
+                --    no channel row at all; give them one so the reported name is
+                --    served without waiting for the next upload.
+                INSERT INTO device_channels (device_id, channel_number, device_name, device_name_at)
+                SELECT l.device_id, l.hive_index, l.name, l.measured_at
+                  FROM (
+                       SELECT DISTINCT ON (device_id, hive_index)
+                              device_id, hive_index, name, measured_at
+                         FROM hive_readings
+                        WHERE name IS NOT NULL AND name <> ''
+                          AND hive_index BETWEEN 1 AND 18
+                        ORDER BY device_id, hive_index, measured_at DESC
+                  ) l
+                  JOIN devices d ON d.device_id = l.device_id
+                ON CONFLICT (device_id, channel_number) DO NOTHING;
                 """
             )
             conn.commit()

@@ -75,8 +75,11 @@ Related settings (all optional, see `server/.env.example`):
   see warnings that have since cleared, not just the current state.
 - **Configuration:** edit the general device config (send interval, inspection
   timeout) and rename each hive the device reports (up to 18) — the labels used
-  across every chart and card. Saving bumps the config version so the device
-  applies it on its next check-in.
+  across every chart and card. Hives are labelled with the name set on the device
+  itself (in its setup portal), so renaming one there is picked up here on the
+  next upload; a name typed in this form overrides that until the field is
+  emptied again. Saving bumps the config version so the device applies it on its
+  next check-in.
 - **Scale calibration & compensation:** its own drop-down, with its own Save —
   per-scale offset/factor/temperature coefficient plus the compensation
   settings and the fit-from-data tool.

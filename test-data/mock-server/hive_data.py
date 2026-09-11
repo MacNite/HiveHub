@@ -597,9 +597,18 @@ def device_config(send_interval_seconds: int = SEND_INTERVAL_DEFAULT_SECONDS) ->
 
 
 def device_channels() -> dict:
+    """Hive names in the server's shape: what each hive is labelled with
+    (``names``), split into the overrides stored server-side (``custom_names``)
+    and the names the device itself reports (``device_names``). The mock device
+    carries no overrides, so its names come from the device.
+    """
+    device_names = {"1": SCALE_1_DISPLAY_NAME, "2": SCALE_2_DISPLAY_NAME}
     return {
         "scale_1_display_name": SCALE_1_DISPLAY_NAME,
         "scale_2_display_name": SCALE_2_DISPLAY_NAME,
+        "names": dict(device_names),
+        "custom_names": {},
+        "device_names": device_names,
     }
 
 

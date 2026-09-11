@@ -144,6 +144,15 @@ jobs:
           PYTHONPATH: server
         run: python3 test-data/test_pairing_lifecycle.py --require-db
 
+      # Hive naming is the other behaviour that lives in SQL: an upload carries
+      # the name set on the device, and it must win over a stale stored copy
+      # without ever overwriting a name the beekeeper typed.
+      - name: Run hive-name tests against PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hivehub_test
+          PYTHONPATH: server
+        run: python3 test-data/test_hive_names.py --require-db
+
   # The website/configurator and dashboard have no test suite yet; keep them at
   # least syntactically sound so a broken script cannot ship unnoticed.
   website-js-check:

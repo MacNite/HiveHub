@@ -111,6 +111,12 @@ The setup portal (AP mode → `http://192.168.4.1/`) is now organised **by hive*
 4. **Save and reboot** writes one compact JSON blob per hive to NVS
    (`h0_cfg`..`h17_cfg` + `hive_count`).
 
+Each hive's **name** is uploaded with every reading (`hives[].name`), and that is
+what labels the hive in the dashboard and in HivePal — so renaming a hive here is
+picked up automatically on the next upload. A name typed into the dashboard
+(**Device & admin → Hive names**) overrides it until that field is emptied
+again.
+
 On the first boot after upgrading from a pre-0.20 build, the old two-slot config
 (scale offsets, paired BLE/GATT MACs) is **migrated automatically** into a
 two-hive registry, so an existing device keeps working until you remap it.

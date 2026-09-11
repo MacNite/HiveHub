@@ -360,6 +360,56 @@ def overlay_legacy_hive_columns(params: dict, payload: "MeasurementIn") -> None:
             put(f"bee_counter_{n}_interval_out", h.bee_counter.interval_out)
 
 
+# Record the hive name the device itself reports, so a hive renamed in the
+# firmware's setup portal (AP mode) is picked up on the very next upload instead
+# of keeping the label stored when it was claimed.
+#
+# device_channels.name stays the user's override; only device_name follows the
+# device. Two guards keep this honest:
+#
+#   * device_name_at — the reading this name came from. A bulk SD-card import
+#     replays old readings, and those must not resurrect a name the beekeeper has
+#     since changed, so an older reading than the one that last set the name is
+#     ignored.
+#   * name = NULL when it merely mirrored the previous device_name — a stored
+#     name equal to what the device was reporting was a copy, not a deliberate
+#     override, so it follows the rename instead of shadowing it.
+#
+# The INSERT ... SELECT FROM devices makes this a no-op for a device with no
+# registry row rather than a foreign-key error that would fail the whole upload.
+REPORTED_HIVE_NAME_SQL = """
+    INSERT INTO device_channels (device_id, channel_number, device_name, device_name_at)
+    SELECT %(device_id)s, %(hive_index)s, %(name)s, %(measured_at)s
+      FROM devices WHERE device_id = %(device_id)s
+    ON CONFLICT (device_id, channel_number) DO UPDATE
+       SET device_name = EXCLUDED.device_name,
+           device_name_at = EXCLUDED.device_name_at,
+           name = CASE
+                      WHEN device_channels.name IS NOT DISTINCT FROM device_channels.device_name
+                      THEN NULL ELSE device_channels.name
+                  END
+     WHERE device_channels.device_name IS DISTINCT FROM EXCLUDED.device_name
+       AND (device_channels.device_name_at IS NULL
+            OR device_channels.device_name_at <= EXCLUDED.device_name_at)
+"""
+
+
+def sync_reported_hive_names(cur, device_id: str, rows: list[dict]) -> None:
+    """Upsert the device-reported hive names carried by one measurement."""
+    named = [
+        {
+            "device_id": device_id,
+            "hive_index": r["hive_index"],
+            "name": r["name"],
+            "measured_at": r["measured_at"],
+        }
+        for r in rows
+        if r.get("name") and 1 <= r["hive_index"] <= MAX_HIVES
+    ]
+    if named:
+        cur.executemany(REPORTED_HIVE_NAME_SQL, named)
+
+
 def insert_hive_readings(cur, payload: "MeasurementIn",
                          measurement_id: int, measured_at: datetime) -> None:
     """Fan a payload's hives[] array into hive_readings rows. No-op for legacy
@@ -376,6 +426,7 @@ def insert_hive_readings(cur, payload: "MeasurementIn",
         rows.append(_hive_reading_row_params(payload.device_id, h, measurement_id, measured_at))
     if rows:
         cur.executemany(HIVE_READINGS_INSERT_SQL, rows)
+        sync_reported_hive_names(cur, payload.device_id, rows)
 
 
 def resolve_measured_at(
