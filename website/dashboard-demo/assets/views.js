@@ -2190,25 +2190,152 @@ function setTipText(tip, text) {
   if (bubble) bubble.textContent = text || "";
 }
 
+// ── Sensor health ────────────────────────────────────────────────────────────
+// A health flag is a bare boolean, so a "Fault" row on its own says that a read
+// failed — never why. Only the HiveTraffic counter reports a real numeric code
+// (its status bitfield); the hub's own subsystems report pass/fail and nothing
+// else. So each fault row carries the most specific description the payload
+// actually supports, plus the code where one exists. Nothing here invents one:
+// a status bit with no published meaning is printed as a raw value rather than
+// given a story.
+
+// Night-mode idle bit of the HiveTraffic status bitfield — the one bit with a
+// published meaning. Mirrors STATUS_NIGHT_IDLE in
+// firmware/include/bee_counter_wire.h (see docs/hivetraffic-bee-counter.md).
+const BEE_COUNTER_STATUS_NIGHT_IDLE = 0x80;
+
+// Why a hub subsystem's flag reads false, keyed by measurement field. Each entry
+// names the failure that clears the flag in the firmware and what is missing
+// from the reading while it persists — the hub sends no code to go with it.
+const HUB_FAULT_REASONS = {
+  sht_ok: "The ambient sensor did not return a valid reading this cycle, so this check-in carries no ambient temperature or humidity. Usually an I²C bus or wiring fault; a sensor that was never detected at boot reads the same way.",
+  rtc_ok: "The real-time clock did not answer on the I²C bus. Timestamps fall back to network time, so a reading taken while offline can be misdated.",
+  sd_ok: "The SD card was not mounted this cycle — missing, unreadable, or an SPI/wiring fault. Readings are not buffered to the card while this persists.",
+  mic_ok: "The microphone capture returned no usable samples, so this check-in carries no acoustic bands.",
+  mic_left_ok: "The left microphone returned no usable samples.",
+  mic_right_ok: "The right microphone returned no usable samples.",
+  battery_monitor_ok: "The battery fuel gauge did not answer on the I²C bus — battery voltage and state of charge are missing from this check-in.",
+  solar_monitor_ok: "The solar monitor did not answer on the I²C bus — solar voltage, current and power are missing from this check-in.",
+};
+
+// A byte as "0x8F". Status flags are uint8 on the wire; mask so a stray wider
+// value cannot render as something the counter could never have sent.
+function hexByte(v) {
+  return `0x${(Number(v) & 0xff).toString(16).toUpperCase().padStart(2, "0")}`;
+}
+
+// The published part of a HiveTraffic status bitfield. Only 0x80 is specified,
+// so every other bit is reported as a raw value for matching against the
+// counter's own firmware notes rather than translated into a guess.
+function beeCounterStatusText(flags) {
+  const byte = Number(flags) & 0xff;
+  const parts = [];
+  if (byte & BEE_COUNTER_STATUS_NIGHT_IDLE) parts.push("night-mode idle");
+  const rest = byte & ~BEE_COUNTER_STATUS_NIGHT_IDLE;
+  if (rest) parts.push(`counter-specific bits ${hexByte(rest)}`);
+  return parts.length ? parts.join(", ") : "no flags set";
+}
+
+// One hive's value for `key` inside its nested `group` object ("accel", "ble",
+// "bee_counter"), falling back to the flat `{group}_{n}_{key}` field that only
+// hives 1–2 carry. Multi-hive firmware sends everything nested, and hives 3–18
+// exist there only — reading the flat keys alone is what limited this panel to
+// the first two hives.
+function hiveSensorField(m, n, group, key) {
+  if (!m) return null;
+  const hv = (m.hives || []).find((h) => Number(h?.index) === Number(n));
+  const nested = hv && hv[group] ? hv[group][key] : null;
+  if (nested != null) return nested;
+  const flat = m[`${group}_${n}_${key}`];
+  return flat != null ? flat : null;
+}
+
+// Newest loaded reading for which `probe` is truthy, or null when none is.
+// Readings are scanned newest-first (the API returns them DESC), so the first
+// hit is the most recent one.
+function newestReadingWhere(state, probe) {
+  for (const m of [state.latest, ...(state.measurements || [])]) {
+    if (m && probe(m)) return m;
+  }
+  return null;
+}
+
+// Fault line for a hive's in-hive BLE node. `accel_{n}_ok` is NOT a wired
+// accelerometer — there is no wired accelerometer support (docs/accelerometer.md);
+// ble_sensor.cpp sets the flag from "a matching advertisement was heard during
+// this cycle's scan". A fault therefore means the node went unheard, and the
+// detail worth showing is which node it is and when it last reported.
+function inHiveSensorFault(state, n) {
+  const type = bleFieldLatest(state, n, "sensor_type");
+  const board = bleFieldLatest(state, n, "board");
+  const node = bleFieldLatest(state, n, "device_name") || bleFieldLatest(state, n, "mac");
+  const kind = type ? (board ? `${type} (${board})` : type) : "in-hive sensor";
+  const parts = [`No advertisement from the paired ${kind} during this cycle's BLE scan — out of range, flat battery, or powered off.`];
+  if (node) parts.push(`Node ${node}.`);
+  const last = newestReadingWhere(state, (r) => hiveSensorField(r, n, "accel", "ok"));
+  parts.push(last?.measured_at ? `Last heard ${relAge(last.measured_at)}.`
+                               : "Not heard in the loaded range.");
+  return { text: parts.join(" ") };
+}
+
+// Fault line for a hive's HiveTraffic counter. ok:false means "paired, but the
+// GATT read did not succeed this cycle" — a counter that never answered cannot
+// annotate its own failure, so the code shown is the status bitfield from the
+// last reading that DID succeed, which is where a diagnosis starts.
+function beeCounterFault(state, n) {
+  const parts = ["The entrance counter did not answer its GATT read this cycle — out of range, powered off, or busy when HiveHub dialled."];
+  const node = beeCounterFieldLatest(state, n, "device_name") || beeCounterFieldLatest(state, n, "mac");
+  if (node) parts.push(`Counter ${node}.`);
+  const last = newestReadingWhere(state, (r) => hiveSensorField(r, n, "bee_counter", "ok"));
+  parts.push(last?.measured_at ? `Last answered ${relAge(last.measured_at)}.`
+                               : "It has not answered in the loaded range.");
+  const flags = last ? hiveSensorField(last, n, "bee_counter", "status_flags") : null;
+  // MCP23017 port expanders answering on the counter's I2C bus, 0..3 — three
+  // covers all 24 gates. Readings taken before the rename carry the identical
+  // value under the flat legacy `gates_healthy` key (docs/hivetraffic-bee-counter.md),
+  // so an older row still says how much of the entrance was being sensed.
+  const mcps = last
+    ? (hiveSensorField(last, n, "bee_counter", "mcps_healthy")
+       ?? hiveSensorField(last, n, "bee_counter", "gates_healthy"))
+    : null;
+  if (flags != null) parts.push(`Status then: ${beeCounterStatusText(flags)}.`);
+  if (mcps != null) parts.push(`${mcps} of 3 port expanders answering then.`);
+  return { code: flags != null ? `status ${hexByte(flags)}` : null, text: parts.join(" ") };
+}
+
 // Sensor-health panel for the Device & admin page: one row per subsystem the
 // device reports a health flag for, OK vs Fault. A subsystem whose flag is null
 // (not fitted / not configured) is omitted rather than shown as a false fault.
+// A row in fault also carries a second line saying what failed, and the device's
+// own code where it reports one.
 function sensorStatusCard(state) {
   const m = state.latest || {};
   const checks = [];
-  const add = (label, ok) => { if (ok != null) checks.push({ label, ok: !!ok }); };
-  add("Ambient temp/humidity (SHT40)", m.sht_ok);
-  add("Real-time clock", m.rtc_ok);
-  add("SD card", m.sd_ok);
-  add("Microphone", m.mic_ok);
-  add("Microphone · left", m.mic_left_ok);
-  add("Microphone · right", m.mic_right_ok);
-  add("Battery monitor", m.battery_monitor_ok);
-  add("Solar monitor", m.solar_monitor_ok);
-  // Per-hive vibration and entrance sensors (hives 1–2 carry dedicated columns).
-  for (const n of availableHives(state).filter((h) => h <= 2)) {
-    add(`Accelerometer ${n}`, m[`accel_${n}_ok`]);
-    add(`Bee counter ${n}`, m[`bee_counter_${n}_ok`]);
+  // `detail` is only built for a row that is actually in fault, so the lookups
+  // behind it (which walk the loaded readings) never run for a healthy device.
+  const add = (label, ok, detail) => {
+    if (ok == null) return;
+    checks.push({ label, ok: !!ok, detail: ok ? null : (typeof detail === "function" ? detail() : detail) || null });
+  };
+  const hub = (label, field) =>
+    add(label, m[field], () => (HUB_FAULT_REASONS[field] ? { text: HUB_FAULT_REASONS[field] } : null));
+  hub("Ambient temp/humidity (SHT40)", "sht_ok");
+  hub("Real-time clock", "rtc_ok");
+  hub("SD card", "sd_ok");
+  hub("Microphone", "mic_ok");
+  hub("Microphone · left", "mic_left_ok");
+  hub("Microphone · right", "mic_right_ok");
+  hub("Battery monitor", "battery_monitor_ok");
+  hub("Solar monitor", "solar_monitor_ok");
+  // Per-hive wireless sensors, for EVERY hive the device reports — the nested
+  // hives[] array carries hives 3–18, which the flat accel_{n}_* / bee_counter_{n}_*
+  // fields (hives 1–2 only) do not. The in-hive row was labelled "Accelerometer n"
+  // for the field it reads; the field is the BLE node's presence flag, so the
+  // row is named after the node and the hive it sits in.
+  for (const n of availableHives(state)) {
+    const hive = hiveLabel(state, n);
+    add(`In-hive sensor · ${hive}`, hiveSensorField(m, n, "accel", "ok"), () => inHiveSensorFault(state, n));
+    add(`Bee counter · ${hive}`, hiveSensorField(m, n, "bee_counter", "ok"), () => beeCounterFault(state, n));
   }
   const faults = checks.filter((c) => !c.ok).length;
   const badge = !checks.length
@@ -2218,8 +2345,18 @@ function sensorStatusCard(state) {
       : el("span", { class: "badge good" }, "All OK");
   const body = checks.length
     ? el("div", { class: "rows" },
-        ...checks.map((c) => el("div", { class: "row" },
-          el("span", { class: "k" }, c.label),
+        ...checks.map((c) => el("div", { class: "row status-row" },
+          el("span", { class: "k" },
+            el("span", {}, c.label),
+            c.detail
+              ? el("span", { class: "status-detail" },
+                  // The code and the sentence are separate nodes, so the space
+                  // between them is explicit: the margin on .status-code styles
+                  // the gap, but copied text and a screen reader need a real one.
+                  c.detail.code ? el("code", { class: "status-code" }, c.detail.code) : null,
+                  c.detail.code ? " " : null,
+                  c.detail.text)
+              : null),
           el("span", { class: "v" },
             el("span", { class: `badge ${c.ok ? "good" : "danger"}` }, c.ok ? "OK" : "Fault")))))
     : el("p", { class: "muted-text" },
@@ -2238,6 +2375,12 @@ function sensorStatusCard(state) {
       m.measured_at ? `Sensor health from the last check-in · ${relAge(m.measured_at)}.`
                     : "Per-sensor health as reported by the device."),
     body,
+    faults
+      ? el("p", { class: "note" },
+          "The hub reports its own subsystems as pass/fail — it sends no error code for them, so each " +
+          "fault above says what failed instead. The entrance counter does report a status code, and it " +
+          "is shown with the fault wherever one was read.")
+      : null,
     nodes.length ? el("h3", { class: "fw-upload-head" }, "In-hive sensors") : null,
     nodes.length
       ? el("div", { class: "rows" },

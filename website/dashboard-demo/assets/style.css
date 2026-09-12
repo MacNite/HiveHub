@@ -444,6 +444,21 @@ select:disabled { opacity: .7; cursor: not-allowed; }
 .rows .row .k { color: var(--ink-soft); }
 .rows .row .v { font-weight: 700; font-variant-numeric: tabular-nums; }
 
+/* A sensor-health row in fault carries a second line under its label: what
+   failed, prefixed by the device's own code where it reports one. The label
+   column takes the free space so that text wraps there rather than squeezing
+   the OK/Fault badge, which stays pinned to the top-right of the row. */
+.status-row .k { flex: 1 1 auto; min-width: 0; }
+.status-row .v { flex: 0 0 auto; align-self: flex-start; }
+.status-row .status-detail {
+  display: block; margin-top: .25rem;
+  font-size: .8rem; line-height: 1.4; color: var(--ink-faint);
+}
+.status-row .status-code {
+  font: 600 .75rem var(--mono); color: var(--danger);
+  margin-right: .35rem; white-space: nowrap;
+}
+
 /* ── Insights list ───────────────────────────────────────────── */
 .insight { display: flex; gap: .75rem; padding: .8rem 0; border-bottom: 1px solid var(--line); }
 .insight:last-child { border-bottom: 0; }

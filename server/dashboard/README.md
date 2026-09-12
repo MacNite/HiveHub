@@ -96,6 +96,14 @@ Related settings (all optional, see `server/.env.example`):
   one row per wireless node paired to a hive (HolyIot, RuuviTag, HiveInside,
   HiveHeart, HiveScale) with the firmware version it advertises. Only HiveInside
   broadcasts one; the others report none and show an em-dash.
+  The per-hive rows cover **every** hive the device reports, not just the first
+  two, and are named after the hive and the thing that is actually checked:
+  *In-hive sensor · «hive»* is the paired BLE node's presence flag (the
+  `accel_{n}_ok` field — there is no wired accelerometer), *Bee counter · «hive»*
+  the HiveTraffic relay. A row in fault carries a second line saying what failed —
+  and, for the entrance counter, the status code it last reported, decoded as far
+  as the counter's wire protocol documents it. The hub's own subsystems report
+  pass/fail with no code, which that line says rather than inventing one.
 - **Calibration:** start/stop calibration mode and fit a load-cell temperature
   coefficient.
 - **Publish data (admin):** **Device & admin → Publish data** turns a chosen slice —
