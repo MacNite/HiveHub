@@ -133,14 +133,19 @@ AlertCategory = Literal[
     "harvest",
     "acoustic",
 ]
-# A hive index, 1..MAX_HIVES. This was `Literal[1, 2]` back when a device carried
-# two scale channels, and it stayed that way after compute_insights() started
+# Keep this local because the standalone mock server copies this module without
+# the main server's schemas module.
+MAX_HIVE_CHANNEL = 18
+
+# A hive index, 1..MAX_HIVE_CHANNEL. This was `Literal[1, 2]` back when a device
+# carried two scale channels, and it stayed that way after compute_insights() started
 # iterating every hive the device reports. Because `Alert` is a pydantic model,
 # the annotation is enforced at construction: an alert for hive 3 raised a
 # ValidationError, which the blanket `except Exception` in compute_insights()
 # then swallowed. The result was that every detector, in every category, was
 # silently dead for hives 3-18 — no alert, no log line, no failure anywhere to
-# notice. Keep this an int, and let _hive_channels() decide the range.
+# notice. Keep detector annotations general, while the Alert field and
+# _hive_channels() enforce the actual supported range.
 ChannelRef = int
 
 
@@ -150,7 +155,7 @@ class Alert(BaseModel):
     id: str = Field(..., description="Stable id, unique within one compute pass")
     category: AlertCategory
     severity: AlertSeverity
-    channel: ChannelRef
+    channel: ChannelRef = Field(..., ge=1, le=MAX_HIVE_CHANNEL)
     title: str
     description: str
     window_start: Optional[datetime] = None
@@ -347,7 +352,8 @@ def _hive_channels(measurements: Iterable[dict[str, Any]]) -> list[int]:
     for m in measurements:
         for h in (m.get("hives") or []):
             idx = h.get("index")
-            if isinstance(idx, int) and idx >= 1:
+            # bool is an int subclass, but it is not a valid hive index.
+            if type(idx) is int and 1 <= idx <= MAX_HIVE_CHANNEL:
                 found.add(idx)
     return sorted(found) if found else [1, 2]
 

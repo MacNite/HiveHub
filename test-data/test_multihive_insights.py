@@ -39,6 +39,7 @@ for _candidate in (
         break
 
 import insights
+from pydantic import ValidationError
 
 
 # Active season, midday, so the night windows both detectors use have room.
@@ -97,6 +98,48 @@ for hive in (3, 9, 18):
         title="probe", description="probe", confidence=0.5,
     )
     check(f"Alert(channel={hive}) validates", alert.channel == hive)
+
+# Widening the old two-value Literal must not remove range validation entirely.
+# Malformed nested input is also ignored rather than making the engine run
+# detectors for channels the API and firmware do not support.
+def _alert_rejected(channel) -> bool:
+    try:
+        insights.Alert(
+            id="invalid-channel", category="swarm", severity="watch",
+            channel=channel, title="probe", description="probe",
+            confidence=0.5,
+        )
+    except ValidationError:
+        return True
+    return False
+
+
+for invalid_hive in (0, insights.MAX_HIVE_CHANNEL + 1):
+    check(f"Alert(channel={invalid_hive}) is rejected", _alert_rejected(invalid_hive))
+
+malformed = [
+    {"hives": [{"index": 0}, {"index": insights.MAX_HIVE_CHANNEL + 1},
+               {"index": True}, {"index": 3}]}
+]
+check("channel discovery keeps only supported integer hive indices",
+      insights._hive_channels(malformed) == [3])
+
+# The bound above is a SECOND copy of the hive count, next to schemas.MAX_HIVES
+# (and MAX_HIVES in the firmware's config.h). insights.py deliberately imports
+# nothing from the server so the standalone mock server can copy it, which is why
+# the number is repeated rather than imported — but a copy that drifts LOW
+# recreates the exact bug this file exists to catch: _hive_channels() drops the
+# hives above it, Alert() rejects them, and the alerts disappear with no error.
+# Pin the two together so raising one without the other fails here instead of in
+# a beekeeper's missing swarm warning.
+try:
+    import schemas  # noqa: E402  (server-only; absent when run against the mock copy)
+except ImportError:
+    print("  [SKIP] MAX_HIVE_CHANNEL vs schemas.MAX_HIVES (schemas.py not importable here)")
+else:
+    check(f"MAX_HIVE_CHANNEL ({insights.MAX_HIVE_CHANNEL}) tracks "
+          f"schemas.MAX_HIVES ({schemas.MAX_HIVES})",
+          insights.MAX_HIVE_CHANNEL == schemas.MAX_HIVES)
 
 
 print("\n=== 2. Acoustic bands come from the hive's own microphone ===")
