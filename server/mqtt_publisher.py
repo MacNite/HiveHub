@@ -145,6 +145,7 @@ _HIVE_SUBDEVICES: list[tuple[str, str, str, str, list]] = [
         ("accel_band_fanning_mg",  "vibration fanning band",  "mg",   None,              "measurement", "mdi:vibrate"),
         ("accel_band_activity_mg", "vibration activity band", "mg",   None,              "measurement", "mdi:vibrate"),
         ("mic_rms_dbfs",           "sound level",             "dBFS", None,              "measurement", "mdi:microphone"),
+        ("mic_peak_dbfs",          "sound peak",              "dBFS", None,              "measurement", "mdi:microphone"),
         ("mic_band_sub_bass_dbfs", "sound sub-bass band",     "dBFS", None,              "measurement", "mdi:microphone"),
         ("mic_band_hum_dbfs",      "sound hum band",          "dBFS", None,              "measurement", "mdi:microphone"),
         ("mic_band_piping_dbfs",   "sound piping band",       "dBFS", None,              "measurement", "mdi:microphone"),
@@ -175,6 +176,7 @@ _BLE_NESTED_FIELDS: list[tuple[str, str, str]] = [
     ("accel_band_fanning_mg",  "accel", "band_fanning_mg"),
     ("accel_band_activity_mg", "accel", "band_activity_mg"),
     ("mic_rms_dbfs",           "mic",   "rms_dbfs"),
+    ("mic_peak_dbfs",          "mic",   "peak_dbfs"),
     ("mic_band_sub_bass_dbfs", "mic",   "band_sub_bass_dbfs"),
     ("mic_band_hum_dbfs",      "mic",   "band_hum_dbfs"),
     ("mic_band_piping_dbfs",   "mic",   "band_piping_dbfs"),
@@ -205,9 +207,18 @@ _BLE_NESTED_FIELDS: list[tuple[str, str, str]] = [
 #     raw axes the hub turns into a vibration RMS + peak. No on-board FFT bands,
 #     no cell voltage, no firmware version.
 #   HiveInside — SHT temp+humidity, battery percent AND cell voltage, firmware
-#     version, on-board vibration RMS + three bands and acoustic RMS + five
-#     bands. No barometer, and no vibration peak (the hub only derives a peak
-#     from raw axes, which this node does not send).
+#     version, on-board vibration RMS + peak + three bands and acoustic RMS +
+#     peak + five bands. No barometer.
+#
+#     The two broadband peaks arrived with beacon frame version 2, which this
+#     set was not updated for: it still declared the node incapable of a
+#     vibration peak ("the hub only derives a peak from raw axes"), which is no
+#     longer true — parseHiveInside() reads accel_peak_mg and mic_peak_dbfs
+#     straight out of the frame. Leaving them out meant that on any cycle where
+#     the node's IMU flag was clear, ble_<n>_accel_peak_mg counted as a
+#     capability this beacon "can never populate" and its retained discovery
+#     config was deleted, making the Home Assistant entity disappear and come
+#     back with the next good reading.
 #
 # Anything outside that set is retracted once the type is known (see
 # _ble_stale_keys / _retract_sensor_configs), which is what finally clears an
@@ -218,10 +229,11 @@ _BLE_COMMON = {"temp_c", "humidity_percent", "battery_percent", "rssi_dbm"}
 _BLE_RAW_AXIS_BEACON = _BLE_COMMON | {"pressure_hpa", "accel_rms_mg", "accel_peak_mg"}
 _BLE_HIVEINSIDE = _BLE_COMMON | {
     "battery_mv", "firmware_version",
-    "accel_rms_mg", "accel_band_swarm_mg", "accel_band_fanning_mg",
-    "accel_band_activity_mg",
-    "mic_rms_dbfs", "mic_band_sub_bass_dbfs", "mic_band_hum_dbfs",
-    "mic_band_piping_dbfs", "mic_band_stress_dbfs", "mic_band_high_dbfs",
+    "accel_rms_mg", "accel_peak_mg", "accel_band_swarm_mg",
+    "accel_band_fanning_mg", "accel_band_activity_mg",
+    "mic_rms_dbfs", "mic_peak_dbfs", "mic_band_sub_bass_dbfs",
+    "mic_band_hum_dbfs", "mic_band_piping_dbfs", "mic_band_stress_dbfs",
+    "mic_band_high_dbfs",
 }
 
 # prefix -> (manufacturer, model, label), fields the beacon can ever report

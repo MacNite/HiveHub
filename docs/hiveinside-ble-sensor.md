@@ -23,8 +23,8 @@ set — a failed on-board sensor is reported as *absent*, never as `0.0`):
 | Group (flags bit) | Fields | HiveHub field |
 |---|---|---|
 | SHT (bit 0) | temperature, humidity | `hive_{n}_temp_c`, `ble_{n}_humidity_percent` |
-| accel (bit 1) | RMS + peak + swarm/fanning/activity bands | `accel_{n}_*` (reused accelerometer fields) |
-| mic (bit 2) | RMS + peak + 5 acoustic bands | `mic_{left,right}_*` (slot 1 → left, 2 → right) |
+| accel (bit 1) | RMS + peak + swarm/fanning/activity bands | `accel_{n}_*` (reused accelerometer fields; see the note on capture diagnostics below) |
+| mic (bit 2) | RMS + peak + 5 acoustic bands | `hives[].mic.*`, read back as `mic_{n}_*` |
 | battery (bit 3) | percent, millivolts | `ble_{n}_battery_percent`, `ble_{n}_battery_mv` |
 
 The two broadband **peak** values (`accel_{n}_peak_mg`, `mic_{n}_peak_dbfs`)
@@ -77,9 +77,18 @@ GATT (streamed straight from the HTTPS download into the node's OTA
 characteristics; the CRC-32 is verified end-to-end before the node swaps slots).
 The relayed bytes are an nRF54 MCUboot image and are forwarded **opaquely** — the
 HiveHub never runs its own ESP32 self-OTA architecture guard on them; only the
-node verifies its own image. The nRF54 node is normally a **non-connectable
-beacon** and opens a connectable OTA window on demand, so the relay locates it by
-its identity address before connecting.
+node verifies its own image. The relay locates the node by its identity address
+(learned from this cycle's measurement scan) before connecting.
+
+> The node advertises **connectable** (`ADV_IND`) continuously — it does not open
+> an OTA window on demand, and this page previously said it was a
+> "non-connectable beacon", which was never true of any shipped firmware. The
+> measurement frame is still read passively out of the advertisement; being
+> connectable is what lets the OTA relay and an audio session reach it at all.
+> It also means the node's OTA GATT service is reachable by any BLE central in
+> range, so the signing key MCUboot verifies against is the only thing standing
+> between a stranger and the contents of slot 1 — build releases with your own
+> key, not the SDK development key.
 
 Uploads are **board-stamped** `nrf54lm20a` (the only HiveInside board). In the
 dashboard firmware tool the target and version are filled in from the filename as

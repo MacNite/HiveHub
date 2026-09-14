@@ -199,6 +199,14 @@ without this field remain supported but cannot get this delivery guarantee.
 | `mic_{left,right}_band_stress_dbfs` | number | No | 550–1500 Hz agitation band energy |
 | `mic_{left,right}_band_high_dbfs` | number | No | 1500–3000 Hz band energy |
 
+The `mic_left_*` / `mic_right_*` pair is the **stereo wired-microphone** schema
+(left = hive 1, right = hive 2), written only by a device built with two INMP441
+mics. In-hive acoustics from a BLE node (a HiveInside runs the FFT on board)
+arrive per hive instead, as `hives[].mic.*` on the way in and `mic_{n}_*` on the
+way back out, for any `N` up to `MAX_HIVES`. Read the per-hive key first and fall
+back to the stereo channel — that is what the dashboard and the insight engine
+both do.
+
 #### Entrance-counter fields (HiveTraffic BeeCounter — BLE/GATT only)
 
 One HiveTraffic counter may be paired per hive; it is read over **BLE/GATT**
@@ -253,10 +261,10 @@ band/RMS values are AC (gravity removed), in milli-g (mg). For `N` in `1`, `2`:
 
 | Field | Type | Description |
 |---|---|---|
-| `accel_N_ok` | boolean | Vibration source present and read this cycle |
-| `accel_N_sample_rate_hz` | integer | Output data rate used for the capture |
-| `accel_N_sample_count` | integer | Samples fed into the FFT |
-| `accel_N_range_g` | integer | Full-scale range (±2/4/8/16 g) |
+| `accel_N_ok` | boolean | The paired in-hive node was **heard** during this cycle's BLE scan. This is node presence, not accelerometer health: a node that answered but whose IMU failed reports `true` here with `accel_N_rms_mg` and the bands null. It is the only field a node that was *not* heard emits at all. |
+| `accel_N_sample_rate_hz` | integer | Output data rate used for the capture. Reported as `0` by HolyIot / RuuviTag, which yield one sample per advertisement rather than a fixed rate. **Not reported by a HiveInside**: it runs its own capture on the node and the beacon frame carries neither the rate it used nor the sample count. |
+| `accel_N_sample_count` | integer | Samples the hub itself collected (advertisements parsed). Not reported by a HiveInside — see above. |
+| `accel_N_range_g` | integer | Full-scale range (±2/4/8/16 g) of the beacon's accelerometer. Not reported by a HiveInside, whose IMU the hub never configures. |
 | `accel_N_rms_mg` | number | Broadband AC RMS of the vector magnitude |
 | `accel_N_peak_mg` | number | Peak deviation from the mean |
 | `accel_N_band_swarm_mg` | number | 8–30 Hz energy — ~20 Hz pre-swarm signal (consumed by Insights) |
