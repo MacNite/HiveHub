@@ -134,7 +134,13 @@ jobs:
           # anywhere, so they are pinned here.
           python3 test-data/test_multihive_insights.py
           python3 test-data/test_sd_import.py
-
+          python3 test-data/test_data_export.py
+          python3 test-data/test_bee_counter_banks.py
+          python3 test-data/test_recordings.py
+          python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hive_tempcomp.py \
+                            test-data/test_hiveheart_fft.py \
+                            test-data/test_mqtt_ha_discovery.py \
+                            test-data/test_relay_ota_gate.py test-data/test_publish.py
       # The mock server ships verbatim copies of the production insights engine
       # and its FFT helper: its Dockerfile build context is test-data/mock-server,
       # so it cannot reach ../../server and the files have to be duplicated. Left
@@ -147,13 +153,6 @@ jobs:
         run: |
           diff -u server/insights.py test-data/mock-server/insights.py
           diff -u server/hiveheart_fft.py test-data/mock-server/hiveheart_fft.py
-          python3 test-data/test_data_export.py
-          python3 test-data/test_bee_counter_banks.py
-          python3 test-data/test_recordings.py
-          python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hive_tempcomp.py \
-                            test-data/test_hiveheart_fft.py \
-                            test-data/test_mqtt_ha_discovery.py \
-                            test-data/test_relay_ota_gate.py test-data/test_publish.py
       # --require-db turns an unreachable database into a failure rather than a
       # skip, so a broken service container can never leave this job green while
       # silently testing nothing.
