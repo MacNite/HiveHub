@@ -8,9 +8,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Just the three modules the mock needs (insights.py is copied verbatim from
-# ../server so the insights endpoints behave exactly like production).
-COPY hive_data.py insights.py app.py ./
+# Keep the production insights engine and its FFT helper together so the mock's
+# insights endpoints behave exactly like production.
+COPY hive_data.py hiveheart_fft.py insights.py app.py ./
 
 EXPOSE 8000
 

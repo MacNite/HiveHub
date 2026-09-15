@@ -96,6 +96,7 @@ Sources for the thresholds used below
 
 from __future__ import annotations
 
+import logging
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -110,6 +111,10 @@ from hiveheart_fft import (
     spectral_centroid_hz,
     total_activity,
 )
+
+# Plain stdlib logging rather than config.logger: this module is deliberately
+# free of server imports so the test harness can load it standalone.
+logger = logging.getLogger("hivescale.insights.detectors")
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +133,20 @@ AlertCategory = Literal[
     "harvest",
     "acoustic",
 ]
-ChannelRef = Literal[1, 2]
+# Keep this local because the standalone mock server copies this module without
+# the main server's schemas module.
+MAX_HIVE_CHANNEL = 18
+
+# A hive index, 1..MAX_HIVE_CHANNEL. This was `Literal[1, 2]` back when a device
+# carried two scale channels, and it stayed that way after compute_insights() started
+# iterating every hive the device reports. Because `Alert` is a pydantic model,
+# the annotation is enforced at construction: an alert for hive 3 raised a
+# ValidationError, which the blanket `except Exception` in compute_insights()
+# then swallowed. The result was that every detector, in every category, was
+# silently dead for hives 3-18 — no alert, no log line, no failure anywhere to
+# notice. Keep detector annotations general, while the Alert field and
+# _hive_channels() enforce the actual supported range.
+ChannelRef = int
 
 
 class Alert(BaseModel):
@@ -137,7 +155,7 @@ class Alert(BaseModel):
     id: str = Field(..., description="Stable id, unique within one compute pass")
     category: AlertCategory
     severity: AlertSeverity
-    channel: ChannelRef
+    channel: ChannelRef = Field(..., ge=1, le=MAX_HIVE_CHANNEL)
     title: str
     description: str
     window_start: Optional[datetime] = None
@@ -334,7 +352,8 @@ def _hive_channels(measurements: Iterable[dict[str, Any]]) -> list[int]:
     for m in measurements:
         for h in (m.get("hives") or []):
             idx = h.get("index")
-            if isinstance(idx, int) and idx >= 1:
+            # bool is an int subclass, but it is not a valid hive index.
+            if type(idx) is int and 1 <= idx <= MAX_HIVE_CHANNEL:
                 found.add(idx)
     return sorted(found) if found else [1, 2]
 
@@ -424,14 +443,19 @@ def _is_winter(when: datetime) -> bool:
 # Acoustic helpers
 # ---------------------------------------------------------------------------
 
-def _latest_band(measurements: list[dict[str, Any]], field: str) -> Optional[float]:
+def _latest_band(measurements: list[dict[str, Any]], *fields: str) -> Optional[float]:
     """
     Return the most recent non-null value of a mic band field across all
-    measurements.  Returns None when no measurement carries the field.
+    measurements.  Several field names may be given, most specific first: within
+    one measurement the first that carries a value wins, so a per-hive key is
+    preferred over its legacy stereo alias.  Returns None when no measurement
+    carries any of them.
     """
     for m in reversed(measurements):
-        v = m.get(field)
-        if v is not None:
+        for field in fields:
+            v = m.get(field)
+            if v is None:
+                continue
             try:
                 return float(v)
             except (TypeError, ValueError):
@@ -439,21 +463,44 @@ def _latest_band(measurements: list[dict[str, Any]], field: str) -> Optional[flo
     return None
 
 
+def _mic_band_keys(channel: ChannelRef, band: str) -> tuple[str, ...]:
+    """Candidate flat keys for one acoustic band of one hive, most specific first.
+
+    ``mic_{n}_band_*`` is the per-hive key the read layer synthesizes for every
+    hive from ``hives[].mic`` — which is where an in-hive BLE node's acoustics
+    actually land (a HiveInside runs the FFT on board and the HiveHub forwards
+    the finished bands per hive).  ``mic_left_*`` / ``mic_right_*`` is the older
+    stereo schema, written only by a device with two wired INMP441 mics, where
+    left is hive 1 and right is hive 2.
+
+    Reading only the stereo keys, as this used to, had two consequences.  Every
+    HiveInside deployment got no acoustic evidence at all: the wired mics default
+    to off, and BLE_OVERRIDE_MICS suppresses them anyway as soon as a beacon
+    supplies acoustics, so those keys are simply never present.  And because
+    `side` was "right" for any channel but 1, hives 3-18 were handed hive 2's
+    microphone — one hive's sound corroborating another hive's alert.
+
+    Mirrors micKeys() in the dashboard (server/dashboard/assets/views.js), which
+    already resolves the same two shapes in the same order.
+    """
+    keys = [f"mic_{channel}_band_{band}_dbfs"]
+    if channel == 1:
+        keys.append(f"mic_left_band_{band}_dbfs")
+    elif channel == 2:
+        keys.append(f"mic_right_band_{band}_dbfs")
+    return tuple(keys)
+
+
 def _mic_band_snapshot(
     measurements: list[dict[str, Any]], channel: ChannelRef
 ) -> dict[str, Optional[float]]:
     """
-    Collect the latest value of every FFT band for the given channel.
-    channel=1 -> left mic, channel=2 -> right mic.
+    Collect the latest value of every FFT band for the given hive.
     Returns a dict with keys: sub_bass, hum, piping, stress, high (all dBFS or None).
     """
-    side = "left" if channel == 1 else "right"
     return {
-        "sub_bass": _latest_band(measurements, f"mic_{side}_band_sub_bass_dbfs"),
-        "hum":      _latest_band(measurements, f"mic_{side}_band_hum_dbfs"),
-        "piping":   _latest_band(measurements, f"mic_{side}_band_piping_dbfs"),
-        "stress":   _latest_band(measurements, f"mic_{side}_band_stress_dbfs"),
-        "high":     _latest_band(measurements, f"mic_{side}_band_high_dbfs"),
+        band: _latest_band(measurements, *_mic_band_keys(channel, band))
+        for band in ("sub_bass", "hum", "piping", "stress", "high")
     }
 
 
@@ -2063,6 +2110,15 @@ def compute_insights(
             try:
                 alert = detector()
             except Exception:
+                # One detector must never take the whole pass down — a single
+                # malformed series should cost its own alert, not every other
+                # hive's. But swallowing it without a word is how the
+                # Literal[1, 2] channel annotation above went unnoticed while it
+                # discarded every alert for hives 3-18, so say something.
+                logger.warning(
+                    "insight detector raised for hive %s; alert skipped",
+                    channel, exc_info=True,
+                )
                 alert = None
             if alert is not None:
                 alerts.append(alert)

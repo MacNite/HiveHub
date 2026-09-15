@@ -23,7 +23,7 @@ This document is the authoritative reference for **what is detected**,
 | Trigger | Every call to the insights endpoint; cached on the frontend for 5 minutes |
 | Inputs | Weight, hive temperature, ambient temperature/humidity, FFT mic bands, BeeCounter entrance counts, in-hive vibration (HiveInside FFT bands or a low-rate HolyIot/RuuviTag beacon magnitude), and the HiveHeart 16-band relative FFT — all per channel, all optional except weight/temperature |
 | Lookback | Up to 14 days, configurable via the `lookback_days` query parameter |
-| Per-channel | Each detector runs independently for scale 1 and scale 2 |
+| Per-channel | Each detector runs independently for **every hive the device reports** (1..18), not only scales 1 and 2 |
 | Output | A flat list of `Alert` objects, sorted by severity then time |
 
 
@@ -522,9 +522,17 @@ weight/temperature stack. Both the microphone (FFT bands) and the
 entrance counter (BeeCounter) are now integrated; the table below records
 which detectors each one feeds:
 
+> **Acoustic source, per hive.** The acoustic detectors read each hive's own
+> microphone: the per-hive `mic_{n}_band_*_dbfs` keys first (where an in-hive
+> BLE node's on-board FFT lands), falling back to the legacy stereo
+> `mic_left_*` / `mic_right_*` channels for hives 1 and 2. They used to read
+> only the stereo pair, which meant a HiveInside supplied five bands that no
+> detector ever looked at — the wired mics it replaces default to off — while
+> hives 3-18 were handed hive 2's microphone.
+
 | Sensor | Detectors that would benefit | Status |
 |---|---|---|
-| Microphone | Pre-swarm (piping/tooting), queenlessness (acoustic signature), robbing (agitated spectrum) | **Integrated** (FFT bands) |
+| Microphone | Pre-swarm (piping/tooting), queenlessness (acoustic signature), robbing (agitated spectrum) | **Integrated** (FFT bands, from a wired stereo mic *or* an in-hive BLE node, per hive) |
 | Entrance counter (BeeCounter) | Swarm event (asymmetric outflow), robbing (incoming-spike pattern), queenlessness (forager decline), absconding (daily decline → 3-of-3), foraging (traffic cross-check), winter (cleansing flights) | **Integrated** |
 | In-hive vibration (BLE: HiveInside FFT / HolyIot-RuuviTag low-rate) | Pre-swarm vibration rising (detectors 11 and 12) and the pre-swarm temperature watch boost | **Integrated** |
 

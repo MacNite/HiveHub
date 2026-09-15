@@ -196,8 +196,17 @@ check("a beacon that reports temp_c itself is announced from that field",
 configs = announce([HIVEINSIDE])
 check("a HiveInside retracts the pressure entity it can never populate",
       ("ble_1_pressure_hpa", None) in configs)
-check("it also retracts the hub-derived vibration peak it cannot populate",
-      ("ble_1_accel_peak_mg", None) in configs)
+# The vibration peak used to be retracted here, on the belief that a peak only
+# ever came from raw axes the hub sampled itself. Beacon frame version 2 added
+# both broadband peaks to the HiveInside payload — parseHiveInside() reads
+# accel_peak_mg at offset 26 and mic_peak_dbfs at offset 28, and the hub forwards
+# them as hives[].accel.peak_mg / hives[].mic.peak_dbfs. So the node does report
+# them, and deleting their discovery configs made the entities vanish from Home
+# Assistant on any cycle where the node's IMU flag happened to be clear.
+check("it does not retract the vibration peak, which frame v2 does carry",
+      ("ble_1_accel_peak_mg", None) not in configs)
+check("nor the acoustic peak from the same frame",
+      ("ble_1_mic_peak_dbfs", None) not in configs)
 check("it does not retract entities it does report",
       not any(k in ("ble_1_battery_mv", "ble_1_rssi_dbm", "ble_1_temp_c")
               and cfg is None for k, cfg in configs))

@@ -1414,8 +1414,18 @@ def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
         put(f"ble_{n}_accel_y_mg", b.get("accel_y_mg"))
         put(f"ble_{n}_accel_z_mg", b.get("accel_z_mg"))
         put(f"ble_{n}_battery_percent", b.get("battery_percent"))
+        put(f"ble_{n}_battery_mv", b.get("battery_mv"))
         put(f"ble_{n}_rssi_dbm", b.get("rssi_dbm"))
         put(f"ble_{n}_firmware_version", b.get("firmware_version"))
+        # Board and node identity. These reach hive_readings.raw_json and the
+        # nested hives[] shape, but had no flat alias — so ble_{n}_battery_mv,
+        # which the HiveInside is the only beacon to report at all, was absent
+        # from every read response even though the value was stored. The MQTT
+        # bridge has its own flattener and was unaffected, which is why the gap
+        # showed up in Home Assistant but not here.
+        put(f"ble_{n}_board", b.get("board"))
+        put(f"ble_{n}_device_name", b.get("device_name"))
+        put(f"ble_{n}_mac", b.get("mac"))
 
     # HiveInside acoustic aliases from hives[n].mic. The historical flat mic
     # schema is stereo-only (mic_left/mic_right), so expose per-hive mic_N_*

@@ -9,10 +9,6 @@
 #include "ble_stack.h"
 #include "ruuvi_decode.h"
 
-// Declared at global scope so the blesensor namespace sees ::sendIntervalMs,
-// not blesensor::sendIntervalMs.  Defined in globals.cpp.
-extern unsigned long sendIntervalMs;
-
 namespace blesensor {
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -426,7 +422,10 @@ class ScanCallbacks : public NimBLEScanCallbacks {
       while (i + 1 < payload.size()) {
         uint8_t len = payload[i];
         if (len == 0 || i + 1 + len > payload.size()) break;
-        if (payload[i + 1] == 0xFF && len >= 1) {
+        // len counts the type byte too, so len == 1 is a manufacturer
+        // element with no data at all. Requiring len > 1 keeps &payload[i + 2]
+        // from being formed one past the end of the vector on such an element.
+        if (payload[i + 1] == 0xFF && len > 1) {
           const uint8_t* d = reinterpret_cast<const uint8_t*>(&payload[i + 2]);
           size_t n = (size_t)(len - 1);
           if (!p.ok) { Parsed q = parsePayload(d, n); if (q.ok) p = q; }
@@ -770,74 +769,20 @@ std::vector<Discovered> discover(uint32_t seconds) {
   return found;
 }
 
-void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap) {
-  // Index keys with a temporary String so ArduinoJson copies them (same pattern
-  // as accel/beecnt::writeSnapshotToJson).
-  String bp = "ble_" + String((int)slot) + "_";
-  String ap = "accel_" + String((int)slot) + "_";
-
-  // Acceleration is mirrored into the existing accel_{slot}_* fields so the
-  // server's vibration insight and storage reuse the accelerometer schema.
-  doc[ap + "ok"] = snap.present;
-
-  if (!snap.present) return;
-
-  // ── new ble_{slot}_* fields (type / humidity / pressure / raw accel / link) ─
-  doc[bp + "sensor_type"] = sensorTypeName(snap.type);
-  if (!isnan(snap.humidity_pct)) doc[bp + "humidity_percent"] = snap.humidity_pct;
-  if (!isnan(snap.pressure_hpa)) doc[bp + "pressure_hpa"]     = snap.pressure_hpa;
-  if (!isnan(snap.accel_x_mg))   doc[bp + "accel_x_mg"]       = snap.accel_x_mg;
-  if (!isnan(snap.accel_y_mg))   doc[bp + "accel_y_mg"]       = snap.accel_y_mg;
-  if (!isnan(snap.accel_z_mg))   doc[bp + "accel_z_mg"]       = snap.accel_z_mg;
-  if (snap.battery_pct >= 0)     doc[bp + "battery_percent"]  = snap.battery_pct;
-  if (snap.battery_mv >= 0)      doc[bp + "battery_mv"]       = snap.battery_mv;
-  doc[bp + "rssi_dbm"] = snap.rssi_dbm;
-  // HiveInside advertises its running firmware version in its beacon identity
-  // record ("fw"); surface it as ble_{slot}_firmware_version so the backend and
-  // HivePal can display it next to the HiveHub node's own firmware. HolyIot/Ruuvi
-  // leave this empty.
-  if (snap.fw_version.length()) doc[bp + "firmware_version"] = snap.fw_version;
-  // Board/architecture (now only "nrf54lm20a") so the backend can confirm it is
-  // relaying the nRF54 HiveInside image.
-  if (snap.board.length())      doc[bp + "board"]            = snap.board;
-
-  // ── reused accel_{slot}_* fields (per-cycle AC magnitude + FFT bands) ───────
-  if (snap.sample_count > 0) {
-    doc[ap + "sample_count"]   = snap.sample_count;
-    doc[ap + "sample_rate_hz"] = 0;            // beacon: no fixed sample rate
-    doc[ap + "range_g"]        = 2;            // LIS2DH12 / LIS3DH default ±2 g
-    if (!isnan(snap.accel_rms_mg))  doc[ap + "rms_mg"]  = snap.accel_rms_mg;
-    if (!isnan(snap.accel_peak_mg)) doc[ap + "peak_mg"] = snap.accel_peak_mg;
-    // HiveInside also reports the three on-board vibration FFT bands; they slot
-    // straight into the wired-accelerometer band schema the server already has.
-    if (!isnan(snap.accel_band_swarm_mg))    doc[ap + "band_swarm_mg"]    = snap.accel_band_swarm_mg;
-    if (!isnan(snap.accel_band_fanning_mg))  doc[ap + "band_fanning_mg"]  = snap.accel_band_fanning_mg;
-    if (!isnan(snap.accel_band_activity_mg)) doc[ap + "band_activity_mg"] = snap.accel_band_activity_mg;
-  }
-
-  // ── acoustics (HiveInside) mapped onto the wired-mic schema ────────────────
-  // The stereo INMP441 build keys acoustics as mic_left_* (hive 1) and
-  // mic_right_* (hive 2); a per-slot BLE sensor maps the same way so its bands
-  // reuse the existing columns and insight detectors. slot 1 -> left, 2 -> right.
-  if (snap.mic_present) {
-    String mp = (slot == 1) ? "mic_left_" : "mic_right_";
-    doc["mic_ok"] = true;
-    doc[mp + "ok"] = true;
-    if (!isnan(snap.mic_rms_dbfs))     doc[mp + "rms_dbfs"]           = snap.mic_rms_dbfs;
-    if (!isnan(snap.mic_peak_dbfs))    doc[mp + "peak_dbfs"]          = snap.mic_peak_dbfs;
-    if (!isnan(snap.mic_sub_bass_dbfs)) doc[mp + "band_sub_bass_dbfs"] = snap.mic_sub_bass_dbfs;
-    if (!isnan(snap.mic_hum_dbfs))     doc[mp + "band_hum_dbfs"]      = snap.mic_hum_dbfs;
-    if (!isnan(snap.mic_piping_dbfs))  doc[mp + "band_piping_dbfs"]   = snap.mic_piping_dbfs;
-    if (!isnan(snap.mic_stress_dbfs))  doc[mp + "band_stress_dbfs"]   = snap.mic_stress_dbfs;
-    if (!isnan(snap.mic_high_dbfs))    doc[mp + "band_high_dbfs"]     = snap.mic_high_dbfs;
-  }
-}
-
 void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
   // Nested per-hive form used by the hives[] array (server maps these onto the
   // hive_readings accel_*/ble_*/mic_* columns). Temperature is owned by
   // sensors.cpp (DS18B20-vs-BLE arbitration), so it is not written here.
   JsonObject accel = hive["accel"].to<JsonObject>();
+  // NOTE: this flag means "the paired in-hive node was heard during this
+  // cycle's scan", NOT "the node's accelerometer produced a reading". It is the
+  // hive's only node-presence signal — the dashboard's sensor-health panel
+  // reports it as "No advertisement from the paired sensor", and it is the one
+  // field that exists for a node that was NOT heard (a silent node emits no
+  // "ble" object at all). A HiveInside that was heard but whose IMU failed
+  // clears the frame's accel flag, so its rms/bands arrive NaN and are omitted
+  // below; the reading is then correctly "node alive, no vibration data",
+  // which is what a false here would wrongly report as "node gone".
   accel["ok"] = snap.present;
   if (!snap.present) return;
 
@@ -869,9 +814,24 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
   if (snap.mac.length())         ble["mac"]              = snap.mac;
 
   if (snap.sample_count > 0) {
-    accel["sample_count"]   = snap.sample_count;
-    accel["sample_rate_hz"] = 0;   // beacon: no fixed sample rate
-    accel["range_g"]        = 2;   // LIS2DH12 / LIS3DH default ±2 g
+    // Capture diagnostics, for the beacons the hub actually sampled itself. A
+    // HolyIot / RuuviTag emits one raw triple per advertisement and the hub
+    // counts them, so sample_count is real, there genuinely is no fixed rate,
+    // and ±2 g is the part's default full scale.
+    //
+    // A HiveInside is none of that: it ran a 1024-point capture on the node and
+    // sent back finished RMS and bands, and the 29-byte frame carries neither
+    // the rate nor the sample count it used — nor its full scale, which is an
+    // LSM6DS3TR-C and not the LIS2DH12 named below. Reporting 1 sample at 0 Hz
+    // over ±2 g invented three diagnostics nothing ever measured, and the
+    // dashboard printed them ("0 Hz · 1 samples · ±2 g") next to an OK badge.
+    // Omitting them leaves the fields null, which is what "the hub does not
+    // know this" is supposed to look like.
+    if (snap.type != SensorType::HiveInside) {
+      accel["sample_count"]   = snap.sample_count;
+      accel["sample_rate_hz"] = 0;   // beacon: no fixed sample rate
+      accel["range_g"]        = 2;   // LIS2DH12 / LIS3DH default ±2 g
+    }
     if (!isnan(snap.accel_rms_mg))  accel["rms_mg"]  = snap.accel_rms_mg;
     if (!isnan(snap.accel_peak_mg)) accel["peak_mg"] = snap.accel_peak_mg;
     if (!isnan(snap.accel_band_swarm_mg))    accel["band_swarm_mg"]    = snap.accel_band_swarm_mg;

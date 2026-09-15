@@ -96,12 +96,25 @@ Sources for the thresholds used below
 
 from __future__ import annotations
 
+import logging
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+from hiveheart_fft import (
+    decode_fft,
+    dominant_range,
+    semantic_bands,
+    spectral_centroid_hz,
+    total_activity,
+)
+
+# Plain stdlib logging rather than config.logger: this module is deliberately
+# free of server imports so the test harness can load it standalone.
+logger = logging.getLogger("hivescale.insights.detectors")
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +131,22 @@ AlertCategory = Literal[
     "decline",
     "winter",
     "harvest",
+    "acoustic",
 ]
-ChannelRef = Literal[1, 2]
+# Keep this local because the standalone mock server copies this module without
+# the main server's schemas module.
+MAX_HIVE_CHANNEL = 18
+
+# A hive index, 1..MAX_HIVE_CHANNEL. This was `Literal[1, 2]` back when a device
+# carried two scale channels, and it stayed that way after compute_insights() started
+# iterating every hive the device reports. Because `Alert` is a pydantic model,
+# the annotation is enforced at construction: an alert for hive 3 raised a
+# ValidationError, which the blanket `except Exception` in compute_insights()
+# then swallowed. The result was that every detector, in every category, was
+# silently dead for hives 3-18 — no alert, no log line, no failure anywhere to
+# notice. Keep detector annotations general, while the Alert field and
+# _hive_channels() enforce the actual supported range.
+ChannelRef = int
 
 
 class Alert(BaseModel):
@@ -128,7 +155,7 @@ class Alert(BaseModel):
     id: str = Field(..., description="Stable id, unique within one compute pass")
     category: AlertCategory
     severity: AlertSeverity
-    channel: ChannelRef
+    channel: ChannelRef = Field(..., ge=1, le=MAX_HIVE_CHANNEL)
     title: str
     description: str
     window_start: Optional[datetime] = None
@@ -200,6 +227,19 @@ VIBRATION_SWARM_STANDALONE_MULT = 2.0
 VIBRATION_MIN_BASELINE_MG = 0.4
 VIBRATION_MIN_RECENT_MG = 0.8
 
+# ── Low-rate (BLE beacon) vibration thresholds ──────────────────────────────
+# The HolyIot 25015 is a passive BLE beacon: it yields a per-cycle acceleration
+# magnitude (accel_N_rms_mg) rather than a high-rate stream, so the 8–30 Hz FFT
+# swarm band above cannot be computed from it. Instead we trend the night-time
+# mean of that per-cycle magnitude — a rising baseline of in-hive movement is a
+# coarse but real pre-swarm activity signal (Bencsik/Ramsey: comb excitation
+# climbs for days before swarming). Thresholds are deliberately conservative and
+# the alert is lower-confidence than the FFT-band detector. Recalibrate on data.
+LOWRATE_SWARM_RISE_MULT = 1.8
+# Absolute floors so beacon/sensor noise on a still hive can't fake a big ratio.
+LOWRATE_MIN_BASELINE_MG = 2.0
+LOWRATE_MIN_RECENT_MG = 4.0
+
 # ── Acoustic thresholds (dBFS, see module docstring for literature refs) ────
 # Pre-swarm: piping band energy at or above this level is a strong positive signal.
 PIPING_ACTIVE_DBFS = -45.0
@@ -253,6 +293,33 @@ WINTER_CLEANSING_FLIGHT_OUT = 50.0
 # foraging classifier.
 FORAGING_ACTIVE_OUT_PER_HOUR = 100.0
 
+# ── HiveHeart FFT thresholds (relative levels 0–15, NOT dBFS) ────────────────
+# The beehivemonitoring.com HiveHeart reports a packed 16-band FFT of *relative*
+# levels (0–15), decoded by server/hiveheart_fft.py. These are NOT calibrated
+# acoustics, so every rule below compares a hive against ITS OWN rolling baseline
+# rather than any absolute threshold, and stays informational/low-severity until
+# the levels are validated against real field data. Never compare these values to
+# the microphone dBFS bands. Recalibrate all constants once field data exists.
+#
+# History is required before any alert: a recent window and a longer baseline
+# window, each with a minimum number of decoded spectra.
+HIVEHEART_RECENT_HOURS = 24
+HIVEHEART_BASELINE_DAYS = 7
+HIVEHEART_MIN_RECENT_SAMPLES = 4
+HIVEHEART_MIN_BASELINE_SAMPLES = 12
+# Ignore near-silent spectra so decoder noise on a quiet hive can't trip a rule
+# (mean total relative activity across the 16 bins, out of a 0–240 theoretical
+# max).
+HIVEHEART_MIN_ACTIVITY = 4.0
+# A "meaningful" shift in the relative-level-weighted spectral centroid (Hz) of
+# the recent window vs the baseline. Deliberately coarse (roughly one HiveHeart
+# bin width) — this is a change detector, not a tuned classifier.
+HIVEHEART_CENTROID_SHIFT_HZ = 120.0
+# A "meaningful" rise in mean total relative activity: recent >= this multiple of
+# baseline (and above the activity floor). Broad-spectrum loudening is coarse but
+# real; kept at "info" severity.
+HIVEHEART_ACTIVITY_RISE_MULT = 1.6
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -275,6 +342,20 @@ def _as_datetime(value: Any) -> Optional[datetime]:
         except ValueError:
             return None
     return None
+
+
+def _hive_channels(measurements: Iterable[dict[str, Any]]) -> list[int]:
+    """Hive indices (channels) to run detectors for. Reads the ``hives`` arrays the
+    read layer attaches; falls back to the legacy two channels when none carry a
+    hives[] array (e.g. raw rows passed directly in a test)."""
+    found: set[int] = set()
+    for m in measurements:
+        for h in (m.get("hives") or []):
+            idx = h.get("index")
+            # bool is an int subclass, but it is not a valid hive index.
+            if type(idx) is int and 1 <= idx <= MAX_HIVE_CHANNEL:
+                found.add(idx)
+    return sorted(found) if found else [1, 2]
 
 
 def _extract_series(measurements: Iterable[dict[str, Any]], field: str) -> Series:
@@ -362,14 +443,19 @@ def _is_winter(when: datetime) -> bool:
 # Acoustic helpers
 # ---------------------------------------------------------------------------
 
-def _latest_band(measurements: list[dict[str, Any]], field: str) -> Optional[float]:
+def _latest_band(measurements: list[dict[str, Any]], *fields: str) -> Optional[float]:
     """
     Return the most recent non-null value of a mic band field across all
-    measurements.  Returns None when no measurement carries the field.
+    measurements.  Several field names may be given, most specific first: within
+    one measurement the first that carries a value wins, so a per-hive key is
+    preferred over its legacy stereo alias.  Returns None when no measurement
+    carries any of them.
     """
     for m in reversed(measurements):
-        v = m.get(field)
-        if v is not None:
+        for field in fields:
+            v = m.get(field)
+            if v is None:
+                continue
             try:
                 return float(v)
             except (TypeError, ValueError):
@@ -377,22 +463,99 @@ def _latest_band(measurements: list[dict[str, Any]], field: str) -> Optional[flo
     return None
 
 
+def _mic_band_keys(channel: ChannelRef, band: str) -> tuple[str, ...]:
+    """Candidate flat keys for one acoustic band of one hive, most specific first.
+
+    ``mic_{n}_band_*`` is the per-hive key the read layer synthesizes for every
+    hive from ``hives[].mic`` — which is where an in-hive BLE node's acoustics
+    actually land (a HiveInside runs the FFT on board and the HiveHub forwards
+    the finished bands per hive).  ``mic_left_*`` / ``mic_right_*`` is the older
+    stereo schema, written only by a device with two wired INMP441 mics, where
+    left is hive 1 and right is hive 2.
+
+    Reading only the stereo keys, as this used to, had two consequences.  Every
+    HiveInside deployment got no acoustic evidence at all: the wired mics default
+    to off, and BLE_OVERRIDE_MICS suppresses them anyway as soon as a beacon
+    supplies acoustics, so those keys are simply never present.  And because
+    `side` was "right" for any channel but 1, hives 3-18 were handed hive 2's
+    microphone — one hive's sound corroborating another hive's alert.
+
+    Mirrors micKeys() in the dashboard (server/dashboard/assets/views.js), which
+    already resolves the same two shapes in the same order.
+    """
+    keys = [f"mic_{channel}_band_{band}_dbfs"]
+    if channel == 1:
+        keys.append(f"mic_left_band_{band}_dbfs")
+    elif channel == 2:
+        keys.append(f"mic_right_band_{band}_dbfs")
+    return tuple(keys)
+
+
 def _mic_band_snapshot(
     measurements: list[dict[str, Any]], channel: ChannelRef
 ) -> dict[str, Optional[float]]:
     """
-    Collect the latest value of every FFT band for the given channel.
-    channel=1 -> left mic, channel=2 -> right mic.
+    Collect the latest value of every FFT band for the given hive.
     Returns a dict with keys: sub_bass, hum, piping, stress, high (all dBFS or None).
     """
-    side = "left" if channel == 1 else "right"
     return {
-        "sub_bass": _latest_band(measurements, f"mic_{side}_band_sub_bass_dbfs"),
-        "hum":      _latest_band(measurements, f"mic_{side}_band_hum_dbfs"),
-        "piping":   _latest_band(measurements, f"mic_{side}_band_piping_dbfs"),
-        "stress":   _latest_band(measurements, f"mic_{side}_band_stress_dbfs"),
-        "high":     _latest_band(measurements, f"mic_{side}_band_high_dbfs"),
+        band: _latest_band(measurements, *_mic_band_keys(channel, band))
+        for band in ("sub_bass", "hum", "piping", "stress", "high")
     }
+
+
+# ---------------------------------------------------------------------------
+# HiveHeart FFT helpers (relative-level spectrum, not dBFS)
+# ---------------------------------------------------------------------------
+
+HiveHeartBins = tuple[datetime, list[int]]
+
+
+def _hiveheart_bins_from_row(m: dict[str, Any], channel: int) -> Optional[list[int]]:
+    """Decoded 16-bin HiveHeart spectrum for one hive from a measurement row.
+
+    Prefers the already-decoded ``hiveheart_{ch}_fft_bins`` the read layer
+    attaches; falls back to decoding the raw ``hiveheart_{ch}_fft`` array (or the
+    nested ``hives[].hiveheart.fft``). Returns None when absent or malformed.
+    """
+    bins = m.get(f"hiveheart_{channel}_fft_bins")
+    if isinstance(bins, list) and len(bins) == 16:
+        return bins
+    raw = m.get(f"hiveheart_{channel}_fft")
+    decoded = decode_fft(raw)
+    if decoded is not None:
+        return decoded
+    for h in (m.get("hives") or []):
+        if h.get("index") != channel:
+            continue
+        hh = h.get("hiveheart")
+        if isinstance(hh, dict):
+            hb = hh.get("fft_bins")
+            if isinstance(hb, list) and len(hb) == 16:
+                return hb
+            return decode_fft(hh.get("fft"))
+    return None
+
+
+def _hiveheart_fft_series(
+    measurements: Iterable[dict[str, Any]], channel: int
+) -> list[HiveHeartBins]:
+    """Time-ordered (timestamp, 16-bin) HiveHeart spectra for one hive.
+
+    Malformed / missing spectra are skipped so a corrupt row never derails the
+    detector (mirrors the safe-omit contract of hiveheart_fft.decode_fft).
+    """
+    out: list[HiveHeartBins] = []
+    for m in measurements:
+        ts = _as_datetime(m.get("measured_at"))
+        if ts is None:
+            continue
+        bins = _hiveheart_bins_from_row(m, channel)
+        if bins is None:
+            continue
+        out.append((ts, bins))
+    out.sort(key=lambda p: p[0])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +577,37 @@ def _accel_band_series(
     """
     ok_field = f"accel_{channel}_ok"
     val_field = f"accel_{channel}_band_{band}_mg"
+    out: Series = []
+    for m in measurements:
+        if not m.get(ok_field):
+            continue
+        ts = _as_datetime(m.get("measured_at"))
+        val = m.get(val_field)
+        if ts is None or val is None:
+            continue
+        try:
+            out.append((ts, float(val)))
+        except (TypeError, ValueError):
+            continue
+    out.sort(key=lambda p: p[0])
+    return out
+
+
+def _accel_rms_series(
+    measurements: Iterable[dict[str, Any]],
+    channel: ChannelRef,
+) -> Series:
+    """
+    Pull a (timestamp, mg) series of the per-cycle broadband AC magnitude
+    (``accel_{ch}_rms_mg``) for one hive, gated by ``accel_{ch}_ok``.
+
+    This is what a passive HolyIot 25015 BLE sensor produces — a single
+    acceleration magnitude per upload cycle rather than an FFT band. Used by the
+    low-rate pre-swarm detector. Identical gating to ``_accel_band_series`` so a
+    missing sensor never injects implicit zeros.
+    """
+    ok_field = f"accel_{channel}_ok"
+    val_field = f"accel_{channel}_rms_mg"
     out: Series = []
     for m in measurements:
         if not m.get(ok_field):
@@ -480,6 +674,38 @@ def _vibration_swarm_rise(
     return (recent_mean, baseline_mean, ratio)
 
 
+def _lowrate_vibration_rise(
+    accel_rms_series: Series, now: datetime
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Low-rate analogue of ``_vibration_swarm_rise`` for the per-cycle BLE-beacon
+    magnitude (``accel_{ch}_rms_mg``). Same night-window recent-vs-baseline
+    comparison, but with the LOWRATE_* floors (the per-cycle magnitude is in a
+    different, larger mg range than a narrow FFT band). Returns
+    (recent_mean_mg, baseline_mean_mg, ratio); ratio is None when there isn't
+    enough night-time data or levels are below the noise floors.
+    """
+    if not accel_rms_series:
+        return (None, None, None)
+    recent = _night_window(accel_rms_series, now, VIBRATION_RECENT_DAYS)
+    baseline_end = now - timedelta(days=VIBRATION_RECENT_DAYS)
+    baseline = _night_window(
+        accel_rms_series,
+        baseline_end,
+        VIBRATION_BASELINE_DAYS - VIBRATION_RECENT_DAYS,
+    )
+    if len(recent) < 3 or len(baseline) < 6:
+        return (None, None, None)
+    recent_mean = _safe_mean(_values(recent))
+    baseline_mean = _safe_mean(_values(baseline))
+    if recent_mean is None or baseline_mean is None:
+        return (None, None, None)
+    if baseline_mean < LOWRATE_MIN_BASELINE_MG or recent_mean < LOWRATE_MIN_RECENT_MG:
+        return (recent_mean, baseline_mean, None)
+    ratio = recent_mean / baseline_mean
+    return (recent_mean, baseline_mean, ratio)
+
+
 # ---------------------------------------------------------------------------
 # Entrance-counter (BeeCounter) helpers
 # ---------------------------------------------------------------------------
@@ -504,15 +730,16 @@ def _extract_counter_series(
     Two sources of the per-interval count are supported transparently:
 
     * **Device-reported interval** (``bee_counter_{ch}_interval_{dir}``):
-      HISTORICAL rows only — the removed wired latch path reported these
+      HISTORICAL rows only — the removed wired I2C latch path reported these
       directly. Used as-is whenever present so old data keeps evaluating.
     * **Differenced lifetime total** (``bee_counter_{ch}_total_{dir}``): the
-      totals-only wireless/BLE path, where the device never resets and the
-      interval is derived here as ``total_now - total_prev`` between
-      consecutive readings (see 2026-easy-bee-counter/docs/ble-mode.md). A
-      missed poll just widens the next interval; a counter reboot or uint32
-      wrap (``total_now < total_prev``) is treated as ``total_now`` so the
-      restart from zero is not mistaken for a huge negative delta.
+      totals-only BLE/GATT path (the only supported BeeCounter transport),
+      where the counter never resets and the interval is derived here as
+      ``total_now - total_prev`` between consecutive readings (see
+      2026-easy-bee-counter/docs/ble-mode.md). A missed poll just widens the
+      next interval; a counter reboot or uint32 wrap
+      (``total_now < total_prev``) is treated as ``total_now`` so the restart
+      from zero is not mistaken for a huge negative delta.
 
     Differencing needs chronological order, so rows are sorted before the
     deltas are computed. The total baseline advances on every row that carries
@@ -983,6 +1210,66 @@ def detect_vibration_swarm_prediction(
             "night_hours": list(VIBRATION_NIGHT_HOURS),
         },
         source="Ramsey et al. 2020 (Sci. Rep. 10:9798); Bencsik et al. 2011; Uthoff et al. 2023",
+    )
+
+
+def detect_lowrate_accel_swarm(
+    accel_rms_series: Series,
+    channel: ChannelRef,
+    now: datetime,
+    accel_swarm_series: Optional[Series] = None,
+) -> Optional[Alert]:
+    """
+    Pre-swarm watch from a passive BLE accelerometer (HolyIot 25015).
+
+    A passive beacon only emits periodic single-shot acceleration samples, so the
+    8–30 Hz FFT swarm band used by ``detect_vibration_swarm_prediction`` cannot be
+    computed. Instead this trends the night-time mean of the per-cycle broadband
+    magnitude (``accel_{ch}_rms_mg``): rising in-hive movement over days is a
+    coarse pre-swarm activity signal consistent with the comb-excitation increase
+    Bencsik/Ramsey report before swarming.
+
+    This is intentionally lower-confidence than the FFT-band detector. When real
+    8–30 Hz band data exists for this hive (a wired/high-rate sensor), it defers
+    to ``detect_vibration_swarm_prediction`` to avoid a duplicate alert. Active
+    season only.
+    """
+    if not _is_active_season(now):
+        return None
+
+    # Defer to the FFT-band detector when proper band data is available.
+    if accel_swarm_series:
+        return None
+
+    recent_mg, baseline_mg, ratio = _lowrate_vibration_rise(accel_rms_series, now)
+    if ratio is None or ratio < LOWRATE_SWARM_RISE_MULT:
+        return None
+
+    confidence = min(0.7, 0.35 + (ratio - LOWRATE_SWARM_RISE_MULT) * 0.2)
+    return Alert(
+        id=f"swarm-ble-vibration-ch{channel}",
+        category="swarm",
+        severity="watch",
+        channel=channel,
+        title=f"Pre-swarm movement rising (hive {channel})",
+        description=(
+            f"Night-time in-hive movement measured by the BLE accelerometer has "
+            f"risen {ratio:.1f}× over its baseline ({recent_mg:.1f} vs "
+            f"{baseline_mg:.1f} mg). Rising comb excitation over several days can "
+            f"precede swarming — inspect for queen cells. (Low-rate beacon signal: "
+            f"coarser than a wired vibration sensor.)"
+        ),
+        window_start=now - timedelta(days=VIBRATION_BASELINE_DAYS),
+        window_end=now,
+        confidence=confidence,
+        evidence={
+            "lowrate_vibration_recent_mg": recent_mg,
+            "lowrate_vibration_baseline_mg": baseline_mg,
+            "lowrate_vibration_ratio": ratio,
+            "night_hours": list(VIBRATION_NIGHT_HOURS),
+            "source_sensor": "ble_holyiot_25015",
+        },
+        source="Bencsik et al. 2011/2015; Ramsey et al. 2020 (low-rate proxy)",
     )
 
 
@@ -1646,6 +1933,105 @@ def detect_harvest_window(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+def detect_hiveheart_spectrum_shift(
+    fft_series: list[HiveHeartBins],
+    channel: int,
+    now: datetime,
+) -> Optional[Alert]:
+    """Informational HiveHeart FFT change detector (relative levels, not dBFS).
+
+    Compares a recent window of decoded HiveHeart spectra against the hive's own
+    longer baseline and flags a meaningful shift in either the relative-level
+    spectral centroid or the total relative activity. There are no calibrated
+    absolute thresholds for these packed 0–15 levels, so this stays low-severity
+    ("info"): it says "this colony's in-hive sound changed", never a direct
+    acoustic diagnosis, and never compares against the microphone dBFS bands.
+    """
+    if len(fft_series) < HIVEHEART_MIN_RECENT_SAMPLES + HIVEHEART_MIN_BASELINE_SAMPLES:
+        return None
+    recent_cut = now - timedelta(hours=HIVEHEART_RECENT_HOURS)
+    baseline_cut = now - timedelta(days=HIVEHEART_BASELINE_DAYS)
+    recent = [(t, b) for t, b in fft_series if t > recent_cut]
+    baseline = [(t, b) for t, b in fft_series if baseline_cut < t <= recent_cut]
+    if len(recent) < HIVEHEART_MIN_RECENT_SAMPLES or len(baseline) < HIVEHEART_MIN_BASELINE_SAMPLES:
+        return None
+
+    def _mean_of(rows, fn):
+        vals = [fn(b) for _, b in rows]
+        return _safe_mean([v for v in vals if v is not None])
+
+    recent_activity = _mean_of(recent, total_activity)
+    baseline_activity = _mean_of(baseline, total_activity)
+    recent_centroid = _mean_of(recent, spectral_centroid_hz)
+    baseline_centroid = _mean_of(baseline, spectral_centroid_hz)
+
+    # Require the hive to be acoustically "awake" recently; a silent HiveHeart
+    # carries no meaningful spectrum to compare against its baseline.
+    if recent_activity is None or recent_activity < HIVEHEART_MIN_ACTIVITY:
+        return None
+
+    reasons: list[str] = []
+    evidence: dict[str, Any] = {
+        "recent_activity": round(recent_activity, 2),
+        "baseline_activity": round(baseline_activity, 2) if baseline_activity is not None else None,
+        "recent_centroid_hz": round(recent_centroid, 1) if recent_centroid is not None else None,
+        "baseline_centroid_hz": round(baseline_centroid, 1) if baseline_centroid is not None else None,
+        "recent_samples": len(recent),
+        "baseline_samples": len(baseline),
+    }
+
+    if recent_centroid is not None and baseline_centroid is not None:
+        centroid_shift = recent_centroid - baseline_centroid
+        if abs(centroid_shift) >= HIVEHEART_CENTROID_SHIFT_HZ:
+            direction = "up" if centroid_shift > 0 else "down"
+            reasons.append(
+                f"spectral centroid shifted {direction} by {abs(centroid_shift):.0f} Hz "
+                f"({baseline_centroid:.0f}->{recent_centroid:.0f} Hz)"
+            )
+            evidence["centroid_shift_hz"] = round(centroid_shift, 1)
+
+    if (
+        baseline_activity is not None
+        and baseline_activity >= HIVEHEART_MIN_ACTIVITY
+        and recent_activity >= baseline_activity * HIVEHEART_ACTIVITY_RISE_MULT
+    ):
+        reasons.append(
+            f"total relative activity rose {recent_activity / baseline_activity:.1f}x "
+            f"({baseline_activity:.0f}->{recent_activity:.0f})"
+        )
+        evidence["activity_rise_mult"] = round(recent_activity / baseline_activity, 2)
+
+    if not reasons:
+        return None
+
+    # Context: which frequencies dominate now, and the overlap-weighted bands.
+    latest_bins = recent[-1][1]
+    dom = dominant_range(latest_bins)
+    if dom:
+        evidence["dominant_range_hz"] = [dom["lower_hz"], dom["upper_hz"]]
+    bands = semantic_bands(latest_bins)
+    if bands is not None:
+        evidence["semantic_bands"] = {k: round(v, 2) for k, v in bands.items()}
+
+    return Alert(
+        id=f"hiveheart-spectrum-shift-ch{channel}",
+        category="acoustic",
+        severity="info",
+        channel=channel,
+        title=f"HiveHeart spectrum shift (hive {channel})",
+        description=(
+            "In-hive HiveHeart sound changed vs this colony's 7-day baseline: "
+            + "; ".join(reasons)
+            + ". Relative levels (0-15), not calibrated dB — informational only."
+        ),
+        window_start=recent[0][0],
+        window_end=now,
+        confidence=0.4,
+        evidence=evidence,
+        source="HiveHeart FFT baseline comparison (relative levels; uncalibrated)",
+    )
+
+
 def compute_insights(
     measurements: list[dict[str, Any]],
     now: Optional[datetime] = None,
@@ -1671,17 +2057,24 @@ def compute_insights(
     ambient = _extract_series(measurements, "ambient_temp_c")
     alerts: list[Alert] = []
 
-    for channel, weight_field, temp_field in (
-        (1, "scale_1_weight_kg", "hive_1_temp_c"),
-        (2, "scale_2_weight_kg", "hive_2_temp_c"),
-    ):
+    # Run every detector for each hive the device reports (up to 18). The read
+    # layer synthesizes flat scale_N_/hive_N_ keys for hives beyond 2, so the
+    # detectors and _extract_* helpers below work unchanged per channel.
+    for channel in _hive_channels(measurements):
+        weight_field = f"scale_{channel}_weight_kg"
+        temp_field = f"hive_{channel}_temp_c"
         weight = _extract_series(measurements, weight_field)
         hive_temp = _extract_series(measurements, temp_field)
         bee_in = _extract_counter_series(measurements, channel, "in")
         bee_out = _extract_counter_series(measurements, channel, "out")
         accel_swarm = _accel_band_series(measurements, channel, "swarm")
+        accel_rms = _accel_rms_series(measurements, channel)
+        hiveheart_fft = _hiveheart_fft_series(measurements, channel)
 
-        if not weight and not hive_temp and not bee_in and not bee_out and not accel_swarm:
+        if (
+            not weight and not hive_temp and not bee_in and not bee_out
+            and not accel_swarm and not accel_rms and not hiveheart_fft
+        ):
             continue
 
         # Detectors that accept acoustic data get ``measurements`` passed in.
@@ -1694,6 +2087,9 @@ def compute_insights(
                 hive_temp, channel, now, measurements, accel_swarm
             ),
             lambda: detect_vibration_swarm_prediction(accel_swarm, channel, now),
+            lambda: detect_lowrate_accel_swarm(
+                accel_rms, channel, now, accel_swarm
+            ),
             lambda: detect_queenlessness(
                 hive_temp, weight, channel, now, measurements, bee_out
             ),
@@ -1709,10 +2105,20 @@ def compute_insights(
                 hive_temp, ambient, weight, channel, now, bee_out
             ),
             lambda: detect_harvest_window(weight, channel, now),
+            lambda: detect_hiveheart_spectrum_shift(hiveheart_fft, channel, now),
         ):
             try:
                 alert = detector()
             except Exception:
+                # One detector must never take the whole pass down — a single
+                # malformed series should cost its own alert, not every other
+                # hive's. But swallowing it without a word is how the
+                # Literal[1, 2] channel annotation above went unnoticed while it
+                # discarded every alert for hives 3-18, so say something.
+                logger.warning(
+                    "insight detector raised for hive %s; alert skipped",
+                    channel, exc_info=True,
+                )
                 alert = None
             if alert is not None:
                 alerts.append(alert)

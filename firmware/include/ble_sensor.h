@@ -154,12 +154,17 @@ std::vector<Discovered> discover(uint32_t seconds);
 // boot, never a reason to show an empty device list as if the air were quiet.
 bool discoveryAvailable();
 
-// Serialize a snapshot into the measurement JSON. Writes the new ble_{slot}_*
-// humidity/pressure/accel-raw/battery fields and mirrors the acceleration into
-// the existing accel_{slot}_* fields (ok / rms_mg / peak_mg / sample_count /
-// range_g). Temperature is NOT written here — sensors.cpp owns hive_{slot}_temp_c
-// so it can choose between the wired DS18B20 and this sensor.
-void writeSnapshotToJson(JsonDocument& doc, uint8_t slot, const Snapshot& snap);
+// NOTE: writeSnapshotToJson() — the flat two-slot serializer that wrote
+// ble_{slot}_*, accel_{slot}_* and mic_{left,right}_* at the document root — is
+// gone. It had not been called since the hives[] array became the upload shape:
+// sensors.cpp only ever calls writeSnapshotToHive() below. Because it was the
+// only thing that would have written mic_left_*/mic_right_* from a beacon, its
+// quiet death is what left the server's acoustic insight detectors with nothing
+// to read on every HiveInside deployment — the wired stereo mics that also fill
+// those keys default to off, and BLE_OVERRIDE_MICS suppresses them anyway. The
+// server now reads the per-hive mic_{n}_* keys the read layer already
+// synthesizes from hives[].mic, so there is nothing left for a flat serializer
+// to do; resurrecting it would only put the same values under a second name.
 
 // Per-hive form for the hives[] array: writes nested "ble", "accel" and (when
 // present) "mic" sub-objects into `hive`. Temperature is owned by the caller
