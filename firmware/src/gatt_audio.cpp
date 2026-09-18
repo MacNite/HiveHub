@@ -211,6 +211,33 @@ void cleanup() {
   blestack::release();
 }
 
+// Bring the BLE stack up on its own, ahead of everything else this file does.
+//
+// Split out of begin() because it is the one allocation on this path that
+// cannot be made smaller and cannot be retried. The BT controller wants tens of
+// kilobytes, some of it DMA-capable and in particular regions; the staging ring
+// below halves itself to fit, and mbedtls takes ordinary heap. So the radio
+// goes first, and the two that can bend take what is left.
+//
+// Only the STACK is brought up here — no scan, no connect. That matters: the
+// node disconnects a connection that has not claimed a service within
+// HIVE_LINK_ARM_TIMEOUT_MS (10 s, HiveInside link.c), and the timer is only
+// cancelled by the START write. Hoisting the connect as well would spend that
+// window on the caller's TLS handshake, whose own budget is 15 s, and turn an
+// out-of-memory failure into a mysterious disconnect. Connect-to-START stays as
+// tight as it has always been; it is the controller's allocation that moves.
+bool acquireRadio() {
+  if (!blestack::acquire()) {
+    s_lastError = "BLE stack would not start (not enough memory for the BT controller)";
+    Serial.printf("[HI-AUD] %s (free heap %u, largest block %u)\n",
+                  s_lastError.c_str(), (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+    return false;
+  }
+  NimBLEDevice::setMTU(247);  // 240 PCM bytes per notification once granted
+  return true;
+}
+
 bool begin(const String& mac, uint16_t durationDs, int8_t gainDb) {
   s_lastError = "";
   resetSession();
@@ -234,28 +261,21 @@ bool begin(const String& mac, uint16_t durationDs, int8_t gainDb) {
     return false;
   }
 
-  // Bring BLE up BEFORE the ring, not after. Both want memory from a heap that
-  // already holds WiFi and an open TLS session, and on the classic ESP32 there
-  // is far less of it than on the C6 — the BT controller alone wants tens of
-  // kilobytes. Of the two, the ring is the one that can be made smaller and
-  // still produce a recording, so it gets what is left rather than first
-  // refusal. Ordered the other way, a hub that could have recorded with a
-  // half-size buffer instead failed to start the radio at all.
-  if (!blestack::acquire()) {
-    s_lastError = "BLE stack would not start (out of memory with WiFi and TLS up?)";
-    Serial.printf("[HI-AUD] %s (free heap %u, largest block %u)\n",
-                  s_lastError.c_str(), (unsigned)ESP.getFreeHeap(),
-                  (unsigned)ESP.getMaxAllocHeap());
-    return false;
-  }
-  NimBLEDevice::setMTU(247);  // 240 PCM bytes per notification once granted
+  // Idempotent when the caller already ran acquireRadio(), which the relay does
+  // precisely so this cannot be the thing that fails — see the contract note in
+  // gatt_audio.h. A caller that goes straight to begin() still gets a working
+  // session, just with the radio bidding last.
+  if (!acquireRadio()) return false;
 
   // Size the ring against what the heap can actually give, not against what the
-  // config asks for. HIVEINSIDE_AUDIO_RING_BYTES is a cushion — how long a TLS
-  // write may stall before audio is lost — so halving it costs gaps under load,
-  // while insisting on the full figure costs the whole recording. Never take
-  // more than half the largest contiguous block: mbedtls still has to allocate
-  // record buffers underneath this for every chunk of the upload.
+  // config asks for. This runs last of the three big allocations on this path —
+  // controller, TLS session, ring — which is the right way round: it is the
+  // only one of them that can shrink and still produce a recording.
+  // HIVEINSIDE_AUDIO_RING_BYTES is a cushion — how long a TLS write may stall
+  // before audio is lost — so halving it costs gaps under load, while insisting
+  // on the full figure costs the whole recording. Never take more than half the
+  // largest contiguous block: mbedtls still has to allocate record buffers
+  // underneath this for every chunk of the upload.
   size_t want = HIVEINSIDE_AUDIO_RING_BYTES;
   const size_t largest = ESP.getMaxAllocHeap();
   while (want > HIVEINSIDE_AUDIO_RING_MIN_BYTES && want > largest / 2) {

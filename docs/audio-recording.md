@@ -311,6 +311,62 @@ If you see a reset on 0.30.1 or later, the serial log is the place to look:
 `platformio.ini`, so a panic prints a decoded backtrace rather than raw hex.
 
 
+## Why this is a 30-pin ESP32 problem
+
+A field report on 0.30.4 had a hub fail every recording with
+
+```
+[HEAP] audio-start: free=91296 largest=63476 min_ever=28084
+E NimBLEDevice: esp_nimble_hci_init() failed; err=257
+[HI-AUD] BLE stack would not start ... (free heap 16284, largest block 13812)
+```
+
+`err=257` is `ESP_ERR_NO_MEM`. The same firmware and the same hive worked on an
+ESP32-C6. Four things differ, and only the last is about the silicon:
+
+* **The classic board compiles a sensor path the C6 does not.** `config.h`
+  forces `ENABLE_INMP441_MICS` off on the C6. On `esp32dev` every cycle runs a
+  2048-point FFT in double precision — `vReal` and `vImag` are 16 kB each — plus
+  two 8 kB sample buffers. They are all freed, so they cost no *space*; what
+  they leave behind is **fragmentation**, which is why `audio-start` above shows
+  91 kB free but only 63 kB in one piece. The BT controller cannot use the rest.
+* **The mic's I2S channel used to stay resident all cycle.** It was released in
+  the deep-sleep prep, which is why `[INMP441] I2S uninstalled` printed *after*
+  `[SLEEP]`. That is 8 kB of DMA-capable internal RAM — the exact memory the BT
+  controller wants — held through the TLS handshake and the BLE init. Since
+  0.30.6 it is released as soon as the samples are read.
+* **`esp32dev` asks for a bigger NimBLE mbuf pool.** `platformio.ini` sets
+  `CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=48` there and the C6 takes 24 from its own
+  sdkconfig. The irony is in the reason: the pool was raised *because* the
+  classic ESP32 is dual-core and its NimBLE host task competes with the WiFi
+  driver for core 0 (see [When a recording comes back with
+  seams](#when-a-recording-comes-back-with-seams)). The property that forced the
+  larger pool onto that board is the one that makes it hardest to afford.
+* **Less usable DRAM, and a bigger controller.** The classic ESP32's SRAM is
+  split with a fixed IRAM/DRAM boundary, and its controller is dual-mode
+  Classic BT + BLE — larger than the C6's BLE-only one even with the Classic BT
+  memory released at init.
+
+0.30.6 changes two more things beyond the I2S release:
+
+* **The radio is asked for before the TLS socket, not after.** Three large
+  allocations have to coexist: the BT controller, the TLS session and the
+  staging ring. Only the controller can neither shrink nor be retried, so it now
+  goes first and the other two take what is left — the ring already halves
+  itself down to 8 KiB to fit. Only the *stack* moved; the scan and connect stay
+  below the socket, because the node disconnects a connection that has not
+  claimed a service within ten seconds and only START cancels that timer.
+* **A failed BLE init no longer strands its memory.** `NimBLEDevice::init()`
+  brings the IDF controller up before it reaches the host, so a failure at the
+  host layer returned false with the controller still holding its allocation —
+  and nothing unwound it, because `NimBLEDevice::deinit()` guards on a flag the
+  failed init never set. In the log above that cost ~20 kB for the rest of the
+  cycle (91 kB at `audio-start`, 71 kB at `cycle-end` with everything torn
+  down), and the minimum free heap for the cycle was **1456 bytes** — the
+  command-result POST and the OTA check that follow each open a fresh TLS
+  session on that. The failed recording was the harmless half of this.
+
+
 ## When a recording comes back with seams
 
 A hub on 0.30.1 recorded 27.3 s of a 30 s request with `Dropped: 0 B` and
@@ -369,5 +425,5 @@ one-second ring; it is a cheap `logDiag()` now.
 | Recording marked incomplete | See the quality flags above |
 | Gaps, with `Dropped` at 0 | The link kept up but audio was lost after it left the node. Fixed in 0.30.2 — see [When a recording comes back with seams](#when-a-recording-comes-back-with-seams) |
 | "hub reset during relay (panic/exception)" | A crash mid-session. Fixed in hub firmware 0.30.1 — see [When the hub resets mid-recording](#when-the-hub-resets-mid-recording) |
-| "BLE stack would not start" | The hub could not bring the radio up with WiFi and TLS already open. Almost always a 30-pin ESP32 with an unusually full heap; the serial log prints the free heap and the largest free block next to it |
+| "BLE stack would not start" | The hub could not bring the radio up at all. Almost always a 30-pin ESP32 with an unusually full heap; the serial log prints the free heap and the largest free block next to it. Hub firmware 0.30.6 makes this much less likely — see [Why this is a 30-pin ESP32 problem](#why-this-is-a-30-pin-esp32-problem) |
 | "audio buffer trimmed to N B" (serial log, not an error) | The hub could not get the full 32 KiB staging buffer and took a smaller one. The recording still happens; a slow upload will show up as gaps sooner |

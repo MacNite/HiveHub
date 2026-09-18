@@ -1172,6 +1172,37 @@ static bool relayAudioSession(const String& mac, long recordingId,
 
   heapdiag::probe("audio-start");
 
+  // Bring the radio up BEFORE the socket, not after.
+  //
+  // Three big allocations have to coexist for a recording: the BT controller,
+  // the TLS session, and the staging ring. Only one of them can neither shrink
+  // nor be retried — the controller wants tens of kilobytes, some of it
+  // DMA-capable and in particular regions, and when it cannot have them the
+  // recording is simply over. Asking for it last, behind an open TLS session,
+  // is asking the one inflexible allocation to take whatever the flexible ones
+  // left. A field log from a 30-pin hub shows the result: 91 kB free at
+  // audio-start, and by the time the radio was asked for,
+  //
+  //     E NimBLEDevice: esp_nimble_hci_init() failed; err=257  (ESP_ERR_NO_MEM)
+  //     [HI-AUD] ... (free heap 16284, largest block 13812)
+  //
+  // The C6 never shows this: it has more heap to begin with, and it does not
+  // compile the INMP441 path whose FFT fragments what is there (config.h forces
+  // ENABLE_INMP441_MICS off on that board).
+  //
+  // Only the STACK moves up here. The scan and the connect stay inside begin(),
+  // below the socket, because the node disconnects a connection that has not
+  // claimed a service within ten seconds and only the START write cancels that
+  // timer — see gatt_audio.cpp. Hoisting the connect too would spend that
+  // window on the TLS handshake, whose own budget is fifteen.
+  if (!gattaudio::acquireRadio()) {
+    setMsg(gattaudio::lastError().length()
+               ? gattaudio::lastError()
+               : String("BLE stack would not start"));
+    gattaudio::cleanup();  // hands the controller back for the rest of the cycle
+    return false;
+  }
+
   WiFiClientSecure secureClient;
   WiFiClient plainClient;
   WiFiClient* sock = nullptr;
@@ -1201,6 +1232,7 @@ static bool relayAudioSession(const String& mac, long recordingId,
     secureClient.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
     if (!secureClient.connect(host.c_str(), port)) {
       setMsg("TLS connect to the backend failed");
+      gattaudio::cleanup();
       return false;
     }
     sock = &secureClient;
@@ -1209,6 +1241,7 @@ static bool relayAudioSession(const String& mac, long recordingId,
     plainClient.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
     if (!plainClient.connect(host.c_str(), port)) {
       setMsg("connect to the backend failed");
+      gattaudio::cleanup();
       return false;
     }
     sock = &plainClient;
@@ -1253,9 +1286,12 @@ static bool relayAudioSession(const String& mac, long recordingId,
                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     sock->print("0\r\n\r\n");
     sock->stop();
+    gattaudio::cleanup();
     return false;
   }
 
+  // The stack is already up from acquireRadio() above; this is the scan,
+  // connect, subscribe, ring and START.
   bool bleOk = gattaudio::begin(mac, durationDs, gainDb);
   if (!bleOk) {
     setMsg(gattaudio::lastError().length() ? gattaudio::lastError()

@@ -30,10 +30,10 @@
 //     60 s, so a lost STOP costs one minute of audio, never an open microphone.
 //
 // Lifecycle:
-//   begin(mac, durationDs, gainDb) → read(buf,n)… while streaming() → stop()
-//   → finish(&stats) → cleanup()
+//   [acquireRadio()] → begin(mac, durationDs, gainDb) → read(buf,n)… while
+//   streaming() → stop() → finish(&stats) → cleanup()
 // cleanup() releases the NimBLE stack and the ring, and is safe to call at any
-// point after begin() — including after a failed begin().
+// point after acquireRadio() or begin() — including after either has failed.
 #pragma once
 
 #include <Arduino.h>
@@ -73,9 +73,22 @@ struct Stats {
 // Plain-English name for a STATUS error byte.
 const char* errorText(uint8_t error);
 
+// Bring the BLE stack up, and nothing else. Optional: begin() calls it itself,
+// and it is idempotent. A caller that has other large allocations to make —
+// the relay opens a TLS session and an upload buffer — should call this FIRST,
+// because the BT controller is the only allocation on this path that can
+// neither shrink to fit nor be retried. Returns false with lastError() set; the
+// caller must still call cleanup(). See the note on the implementation for why
+// this stops at the stack and does not also connect.
+bool acquireRadio();
+
 // Connect, authenticate and start capture. `durationDs` is deciseconds, 0 for
 // open-ended. `gainDb` is clamped by the node to -20..+20. Returns false with
 // lastError() set; the caller must still call cleanup().
+//
+// The node arms a 10-second window at connect and cancels it only when START
+// claims the link, so everything between those two points is on a clock: do
+// not put unrelated work inside this call.
 bool begin(const String& mac, uint16_t durationDs, int8_t gainDb);
 
 // Drain up to `max` PCM bytes. Returns 0 when nothing has arrived yet — that is
