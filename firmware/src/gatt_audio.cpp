@@ -12,6 +12,7 @@
 
 #include "audio_ring.h"
 #include "ble_stack.h"
+#include "heap_diag.h"
 #include "hivehub_network.h"  // crc32Update
 
 #if ENABLE_BLE_SCAN
@@ -211,33 +212,6 @@ void cleanup() {
   blestack::release();
 }
 
-// Bring the BLE stack up on its own, ahead of everything else this file does.
-//
-// Split out of begin() because it is the one allocation on this path that
-// cannot be made smaller and cannot be retried. The BT controller wants tens of
-// kilobytes, some of it DMA-capable and in particular regions; the staging ring
-// below halves itself to fit, and mbedtls takes ordinary heap. So the radio
-// goes first, and the two that can bend take what is left.
-//
-// Only the STACK is brought up here — no scan, no connect. That matters: the
-// node disconnects a connection that has not claimed a service within
-// HIVE_LINK_ARM_TIMEOUT_MS (10 s, HiveInside link.c), and the timer is only
-// cancelled by the START write. Hoisting the connect as well would spend that
-// window on the caller's TLS handshake, whose own budget is 15 s, and turn an
-// out-of-memory failure into a mysterious disconnect. Connect-to-START stays as
-// tight as it has always been; it is the controller's allocation that moves.
-bool acquireRadio() {
-  if (!blestack::acquire()) {
-    s_lastError = "BLE stack would not start (not enough memory for the BT controller)";
-    Serial.printf("[HI-AUD] %s (free heap %u, largest block %u)\n",
-                  s_lastError.c_str(), (unsigned)ESP.getFreeHeap(),
-                  (unsigned)ESP.getMaxAllocHeap());
-    return false;
-  }
-  NimBLEDevice::setMTU(247);  // 240 PCM bytes per notification once granted
-  return true;
-}
-
 bool begin(const String& mac, uint16_t durationDs, int8_t gainDb) {
   s_lastError = "";
   resetSession();
@@ -261,11 +235,30 @@ bool begin(const String& mac, uint16_t durationDs, int8_t gainDb) {
     return false;
   }
 
-  // Idempotent when the caller already ran acquireRadio(), which the relay does
-  // precisely so this cannot be the thing that fails — see the contract note in
-  // gatt_audio.h. A caller that goes straight to begin() still gets a working
-  // session, just with the radio bidding last.
-  if (!acquireRadio()) return false;
+  // Bring BLE up here, with the caller's TLS session already open, and NOT
+  // ahead of it. 0.30.6 hoisted this above the socket on the theory that the
+  // controller is the least flexible allocation and should bid first; the
+  // field answered in one cycle with "TLS connect to the backend failed" 1.28 s
+  // after the command was claimed, against a 15 s connect timeout — mbedtls
+  // failing to allocate, before it reached the network. See the long note in
+  // hivehub_network.cpp: mbedtls needs two 16 kB CONTIGUOUS record buffers on
+  // this framework, and contiguity is what a resident BT controller destroys.
+  // The fragile allocation goes first; this one is the robust one.
+  if (!blestack::acquire()) {
+    s_lastError = "BLE stack would not start (out of memory with WiFi and TLS up?)";
+    Serial.printf("[HI-AUD] %s (free heap %u, largest block %u)\n",
+                  s_lastError.c_str(), (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+    return false;
+  }
+  NimBLEDevice::setMTU(247);  // 240 PCM bytes per notification once granted
+
+  // What the heap looks like with BOTH the TLS session and the controller
+  // resident — the number every question on this path turns out to need, and
+  // the one 0.30.6 had no way to print. logDiag(), not probe(): nothing is
+  // streaming yet, but checkIntegrity() walks every block and this runs inside
+  // the node's ten-second arm window once the connect below happens.
+  heapdiag::logDiag("audio-radio-up");
 
   // Size the ring against what the heap can actually give, not against what the
   // config asks for. This runs last of the three big allocations on this path —

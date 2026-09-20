@@ -56,9 +56,11 @@ bool acquire() {
   // could not get the memory they need — which is a real possibility on the
   // classic ESP32, whose BT controller wants tens of kilobytes and which has
   // far less DRAM than the C6 to begin with. The audio relay in particular asks
-  // for the stack with WiFi already connected — which is why it now asks BEFORE
-  // opening its TLS session rather than after (gatt_audio::acquireRadio), so
-  // the one allocation here that cannot shrink is not also the last in line.
+  // for the stack with WiFi connected AND a TLS session already open, so this
+  // is the tightest moment in the whole firmware. That order is deliberate and
+  // was tested the other way round in 0.30.6: see gatt_audio.cpp: mbedtls needs
+  // contiguous 16 kB record buffers and loses that race to a resident
+  // controller, so the controller is the one that bids last.
   //
   // Returning here rather than pressing on is the point: none of NimBLE's host
   // API is usable after a failed init, and calling getScan() or createClient()

@@ -329,43 +329,94 @@ ESP32-C6. Four things differ, and only the last is about the silicon:
   2048-point FFT in double precision — `vReal` and `vImag` are 16 kB each — plus
   two 8 kB sample buffers. They are all freed, so they cost no *space*; what
   they leave behind is **fragmentation**, which is why `audio-start` above shows
-  91 kB free but only 63 kB in one piece. The BT controller cannot use the rest.
+  91 kB free but only 63 kB in one piece.
 * **The mic's I2S channel used to stay resident all cycle.** It was released in
   the deep-sleep prep, which is why `[INMP441] I2S uninstalled` printed *after*
-  `[SLEEP]`. That is 8 kB of DMA-capable internal RAM — the exact memory the BT
-  controller wants — held through the TLS handshake and the BLE init. Since
-  0.30.6 it is released as soon as the samples are read.
-* **`esp32dev` asks for a bigger NimBLE mbuf pool.** `platformio.ini` sets
-  `CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=48` there and the C6 takes 24 from its own
-  sdkconfig. The irony is in the reason: the pool was raised *because* the
+  `[SLEEP]`. That is 8 kB of DMA-capable internal RAM held through the TLS
+  handshake and the BLE init. Since 0.30.6 it is released as soon as the
+  samples are read.
+* **`esp32dev` asked for a bigger NimBLE mbuf pool.** `platformio.ini` set
+  `CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=48` there where the C6 takes 24 from its
+  own sdkconfig. The irony was in the reason: the pool was raised *because* the
   classic ESP32 is dual-core and its NimBLE host task competes with the WiFi
-  driver for core 0 (see [When a recording comes back with
-  seams](#when-a-recording-comes-back-with-seams)). The property that forced the
-  larger pool onto that board is the one that makes it hardest to afford.
+  driver for core 0. The property that forced the larger pool onto that board is
+  the one that made it hardest to afford. 0.30.7 lowers it to 24.
 * **Less usable DRAM, and a bigger controller.** The classic ESP32's SRAM is
-  split with a fixed IRAM/DRAM boundary, and its controller is dual-mode
-  Classic BT + BLE — larger than the C6's BLE-only one even with the Classic BT
-  memory released at init.
+  split with a fixed IRAM/DRAM boundary, and the shipped framework builds its
+  controller in dual mode (`CONFIG_BTDM_CTRL_MODE_BTDM=y`) rather than BLE-only,
+  so it is the larger variant even though NimBLE releases the Classic BT static
+  memory at init.
 
-0.30.6 changes two more things beyond the I2S release:
+### The ordering trap, and why the socket goes first
 
-* **The radio is asked for before the TLS socket, not after.** Three large
-  allocations have to coexist: the BT controller, the TLS session and the
-  staging ring. Only the controller can neither shrink nor be retried, so it now
-  goes first and the other two take what is left — the ring already halves
-  itself down to 8 KiB to fit. Only the *stack* moved; the scan and connect stay
-  below the socket, because the node disconnects a connection that has not
-  claimed a service within ten seconds and only START cancels that timer.
-* **A failed BLE init no longer strands its memory.** `NimBLEDevice::init()`
-  brings the IDF controller up before it reaches the host, so a failure at the
-  host layer returned false with the controller still holding its allocation —
-  and nothing unwound it, because `NimBLEDevice::deinit()` guards on a flag the
-  failed init never set. In the log above that cost ~20 kB for the rest of the
-  cycle (91 kB at `audio-start`, 71 kB at `cycle-end` with everything torn
-  down), and the minimum free heap for the cycle was **1456 bytes** — the
-  command-result POST and the OTA check that follow each open a fresh TLS
-  session on that. The failed recording was the harmless half of this.
+0.30.6 also reordered the relay to ask for the radio *before* opening the TLS
+socket, reasoning that the BT controller is the one allocation here that can
+neither shrink nor be retried, so it should get first refusal. **That was
+wrong, and the field disproved it in a single cycle.** The radio started and
+the handshake underneath it did not:
 
+```
+TLS connect to the backend failed        1.28 s from claimed_at to completed_at
+```
+
+against a 15-second connect timeout. An allocation had failed before anything
+touched the network — and the same cycle went on to complete a TLS handshake to
+the same host, to report that very failure, once the radio had been released.
+
+The mis-ranking was about *which* constraint binds. The controller needs a large
+total in many pieces. mbedtls needs **contiguity**, and a lot of it: this
+framework ships `CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN=16384` with
+`CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN` unset, so a session wants **two 16 kB
+contiguous record buffers** and neither may be the small one. Contiguity is the
+first thing fragmentation destroys, so whichever of the two runs second,
+mbedtls suffers far worse for it. The 0.30.4 log had already said so: once the
+controller took its share, `largest` collapsed to 13812 — under one record
+buffer.
+
+So the fragile allocation goes first, the robust one takes what is left, and
+the ring — the only one of the three that can shrink and still produce a
+recording — goes last. Getting all three to fit is a matter of lowering the
+peak, not of reordering it. **Do not re-reorder this without a field log
+showing the handshake surviving underneath a live controller.**
+
+That log is now possible: 0.30.7 prints
+
+```
+[HEAP] audio-radio-up: free=… largest=… min_ever=…
+```
+
+with both the TLS session and the controller resident, and puts the free and
+largest-block figures on the `TLS connect to the backend failed` line too. The
+0.30.6 failure had to be diagnosed from `device_commands` timestamps in the
+backend, because neither number was printed anywhere.
+
+If you need to diagnose one of these without a serial cable, that query is
+worth keeping:
+
+```sql
+SELECT id, claimed_at, completed_at,
+       completed_at - claimed_at AS relay_duration,
+       result->>'message' AS message
+FROM device_commands
+WHERE command_type = 'record_audio'
+ORDER BY id DESC LIMIT 5;
+```
+
+A sub-second duration on a connect failure means an allocation that never
+reached the network. Something near the 15-second timeout means a link or a
+handshake problem instead. The two want completely different fixes.
+
+### A failed BLE init no longer strands its memory
+
+`NimBLEDevice::init()` brings the IDF controller up before it reaches the host,
+so a failure at the host layer returned false with the controller still holding
+its allocation — and nothing unwound it, because `NimBLEDevice::deinit()` guards
+on a flag the failed init never set. In the 0.30.4 log that cost ~20 kB for the
+rest of the cycle (91 kB at `audio-start`, 71 kB at `cycle-end` with everything
+torn down), and the minimum free heap for the cycle was **1456 bytes** — the
+command-result POST and the OTA check that follow each open a fresh TLS session
+on that. The failed recording was the harmless half of it. Since 0.30.6
+`blestack::acquire()` unwinds the controller by hand when init fails.
 
 ## When a recording comes back with seams
 
@@ -393,9 +444,13 @@ Two things on the hub can do that, and 0.30.2 addresses both:
   NimBLE host task shares core 0 with the WiFi driver, which is busy precisely
   because the same session is uploading over TLS. Whenever the host task was
   held off longer than that, the pool emptied and the controller dropped the
-  next packet before any HiveHub code saw it. `platformio.ini` now asks for 48
-  blocks (~370 ms) on `esp32dev`. The C6 already gets 24 from the IDF and is
-  single-core, so its host task is not competing the same way.
+  next packet before any HiveHub code saw it. `platformio.ini` raised this to 48
+  blocks (~370 ms) on `esp32dev` in 0.30.2, and **0.30.7 lowered it again to 24
+  (~185 ms)** to buy back ~6 kB for the memory problem above — seams beat no
+  recording. 24 is still twice NimBLE's own default, and the other two causes of
+  the 0.30.2 seams (below) were fixed in code, not by buffering. The C6 gets 24
+  from the IDF and is single-core, so its host task is not competing the same
+  way.
 * **Each HTTP chunk cost three TLS records.** Every `NetworkClientSecure::write()`
   is one `mbedtls_ssl_write()`, so writing the hex length line, the payload and
   the trailing CRLF separately spent three records — three lots of framing and
@@ -425,5 +480,6 @@ one-second ring; it is a cheap `logDiag()` now.
 | Recording marked incomplete | See the quality flags above |
 | Gaps, with `Dropped` at 0 | The link kept up but audio was lost after it left the node. Fixed in 0.30.2 — see [When a recording comes back with seams](#when-a-recording-comes-back-with-seams) |
 | "hub reset during relay (panic/exception)" | A crash mid-session. Fixed in hub firmware 0.30.1 — see [When the hub resets mid-recording](#when-the-hub-resets-mid-recording) |
-| "BLE stack would not start" | The hub could not bring the radio up at all. Almost always a 30-pin ESP32 with an unusually full heap; the serial log prints the free heap and the largest free block next to it. Hub firmware 0.30.6 makes this much less likely — see [Why this is a 30-pin ESP32 problem](#why-this-is-a-30-pin-esp32-problem) |
+| "BLE stack would not start" | The hub could not bring the radio up at all. Almost always a 30-pin ESP32 with an unusually full heap; the serial log prints the free heap and the largest free block next to it. Hub firmware 0.30.7 makes this much less likely — see [Why this is a 30-pin ESP32 problem](#why-this-is-a-30-pin-esp32-problem) |
+| "TLS connect to the backend failed" | The hub could not open the upload socket. Since 0.30.7 the serial log prints free heap and largest block beside it; a sub-second `relay_duration` in `device_commands` means an allocation failure rather than a network one. This was the 0.30.6 symptom of asking for the radio before the socket |
 | "audio buffer trimmed to N B" (serial log, not an error) | The hub could not get the full 32 KiB staging buffer and took a smaller one. The recording still happens; a slow upload will show up as gaps sooner |

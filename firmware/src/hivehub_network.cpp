@@ -1172,37 +1172,36 @@ static bool relayAudioSession(const String& mac, long recordingId,
 
   heapdiag::probe("audio-start");
 
-  // Bring the radio up BEFORE the socket, not after.
+  // The SOCKET goes up before the radio, and that order is load-bearing.
   //
-  // Three big allocations have to coexist for a recording: the BT controller,
-  // the TLS session, and the staging ring. Only one of them can neither shrink
-  // nor be retried — the controller wants tens of kilobytes, some of it
-  // DMA-capable and in particular regions, and when it cannot have them the
-  // recording is simply over. Asking for it last, behind an open TLS session,
-  // is asking the one inflexible allocation to take whatever the flexible ones
-  // left. A field log from a 30-pin hub shows the result: 91 kB free at
-  // audio-start, and by the time the radio was asked for,
+  // 0.30.6 tried it the other way, reasoning that the BT controller is the one
+  // allocation here that can neither shrink nor be retried, so it should get
+  // first refusal. The field disproved it in one cycle: the radio started and
+  // the handshake underneath it did not, with
   //
-  //     E NimBLEDevice: esp_nimble_hci_init() failed; err=257  (ESP_ERR_NO_MEM)
-  //     [HI-AUD] ... (free heap 16284, largest block 13812)
+  //     "TLS connect to the backend failed"   1.28 s from claim to result
   //
-  // The C6 never shows this: it has more heap to begin with, and it does not
-  // compile the INMP441 path whose FFT fragments what is there (config.h forces
-  // ENABLE_INMP441_MICS off on that board).
+  // against a 15 s connect timeout — an allocation that failed before anything
+  // touched the network, not a slow or degraded link. (The same cycle then
+  // completed a TLS handshake to the same host to REPORT that failure, once
+  // the radio had been released again.)
   //
-  // Only the STACK moves up here. The scan and the connect stay inside begin(),
-  // below the socket, because the node disconnects a connection that has not
-  // claimed a service within ten seconds and only the START write cancels that
-  // timer — see gatt_audio.cpp. Hoisting the connect too would spend that
-  // window on the TLS handshake, whose own budget is fifteen.
-  if (!gattaudio::acquireRadio()) {
-    setMsg(gattaudio::lastError().length()
-               ? gattaudio::lastError()
-               : String("BLE stack would not start"));
-    gattaudio::cleanup();  // hands the controller back for the rest of the cycle
-    return false;
-  }
-
+  // The reasoning was wrong about which constraint binds. The controller needs
+  // a large total in many pieces; mbedtls needs CONTIGUITY, and on this
+  // framework it needs a lot of it: CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN is
+  // 16384 with CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN unset, so a session wants
+  // TWO 16 kB contiguous record buffers and neither of them may be the small
+  // one. Contiguity is what fragmentation destroys first, so whichever of the
+  // two runs second, mbedtls suffers far worse for it. The 0.30.4 log said as
+  // much before anyone read it that way: once the controller had taken its
+  // share, `largest` had collapsed to 13812 — under one record buffer.
+  //
+  // So the fragile allocation goes first and the robust one takes what is
+  // left. Getting both to fit at all is a separate problem, addressed by
+  // lowering the peak rather than by reordering it: the mic I2S channel is
+  // freed at the measurement now (sensors.cpp) and esp32dev asks for a smaller
+  // NimBLE mbuf pool (platformio.ini). Do not re-reorder this without a field
+  // log showing the handshake surviving underneath a live controller.
   WiFiClientSecure secureClient;
   WiFiClient plainClient;
   WiFiClient* sock = nullptr;
@@ -1231,8 +1230,13 @@ static bool relayAudioSession(const String& mac, long recordingId,
     secureClient.setConnectionTimeout(HTTP_REQUEST_TIMEOUT_MS);
     secureClient.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
     if (!secureClient.connect(host.c_str(), port)) {
+      // Say what the heap looked like. This is the failure 0.30.6 produced in
+      // the field, and it was diagnosed from command timestamps in the backend
+      // rather than from this line, because this line did not carry a number.
       setMsg("TLS connect to the backend failed");
-      gattaudio::cleanup();
+      Serial.printf("[HI-AUD] TLS connect to the backend failed "
+                    "(free heap %u, largest block %u)\n",
+                    (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
       return false;
     }
     sock = &secureClient;
@@ -1241,7 +1245,6 @@ static bool relayAudioSession(const String& mac, long recordingId,
     plainClient.setTimeout(HTTP_REQUEST_TIMEOUT_MS);
     if (!plainClient.connect(host.c_str(), port)) {
       setMsg("connect to the backend failed");
-      gattaudio::cleanup();
       return false;
     }
     sock = &plainClient;
@@ -1286,12 +1289,9 @@ static bool relayAudioSession(const String& mac, long recordingId,
                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
     sock->print("0\r\n\r\n");
     sock->stop();
-    gattaudio::cleanup();
     return false;
   }
 
-  // The stack is already up from acquireRadio() above; this is the scan,
-  // connect, subscribe, ring and START.
   bool bleOk = gattaudio::begin(mac, durationDs, gainDb);
   if (!bleOk) {
     setMsg(gattaudio::lastError().length() ? gattaudio::lastError()
