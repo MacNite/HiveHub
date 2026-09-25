@@ -1294,8 +1294,14 @@ static bool relayAudioSession(const String& mac, long recordingId,
 
   bool bleOk = gattaudio::begin(mac, durationDs, gainDb);
   if (!bleOk) {
-    setMsg(gattaudio::lastError().length() ? gattaudio::lastError()
-                                           : String("audio session failed to start"));
+    // Carry the heap numbers into the command result, not just onto serial.
+    // Every start failure on the 30-pin ESP32 so far has been a memory
+    // question, and the dashboard is the only place a field tester sees.
+    const String why = gattaudio::lastError().length()
+                           ? gattaudio::lastError()
+                           : String("audio session failed to start");
+    setMsg(why + " [heap free " + ESP.getFreeHeap() + ", largest " +
+           ESP.getMaxAllocHeap() + ", min " + ESP.getMinFreeHeap() + "]");
     // Close the body cleanly anyway: the backend then sees a zero-byte
     // recording it can mark failed, instead of a half-open socket it has to
     // time out.
@@ -1607,7 +1613,7 @@ static void reportInterruptedRelay() {
   postCommandResult(commandId, false, msg);
 }
 
-void postCommandResult(int commandId, bool success, const String& message) {
+bool postCommandResult(int commandId, bool success, const String& message) {
   JsonDocument result;
   result["success"] = success;
   result["message"] = message;
@@ -1615,7 +1621,77 @@ void postCommandResult(int commandId, bool success, const String& message) {
   String payload;
   serializeJson(result, payload);
 
-  httpPostJson(apiUrl(String("/api/v1/devices/") + deviceId + "/commands/" + commandId + "/result"), payload);
+  return httpPostJson(apiUrl(String("/api/v1/devices/") + deviceId + "/commands/" +
+                             commandId + "/result"),
+                      payload);
+}
+
+// ---- Relay results that must not be lost ----------------------------------
+//
+// A relay's command result is the only report the backend reliably acts on
+// (see finalize_from_command_result() on the server), and it is posted at the
+// worst moment of the cycle: straight after a BLE session, with the heap at its
+// most fragmented. PR 198's field test on a 30-pin ESP32 showed the cost — the
+// session failed, its one result POST evidently failed too, and the dashboard
+// got the backend's five-minute guess ("the hub started uploading but no audio
+// arrived") instead of the hub's actual reason.
+//
+// So retry once after a pause (the BLE host has fully released by then, and the
+// TLS session from the upload has been torn down), and if that fails as well,
+// keep the result in RTC memory and deliver it at the top of the next cycle,
+// before anything new is claimed. Bounded, so a backend that keeps rejecting it
+// cannot pin the slot forever.
+static const uint32_t PENDING_RESULT_MAGIC = 0x48505253UL;  // "HPRS"
+static const uint32_t PENDING_RESULT_MAX_TRIES = 3;
+static const uint32_t RELAY_RESULT_RETRY_DELAY_MS = 1500;
+
+static void clearPendingResult() {
+  rtcPendingResultMagic = 0;
+  rtcPendingResultCommandId = 0;
+  rtcPendingResultTries = 0;
+  rtcPendingResultMsg[0] = '\0';
+}
+
+static void stashPendingResult(int commandId, bool success, const String& message) {
+  rtcPendingResultCommandId = (uint32_t)commandId;
+  rtcPendingResultSuccess = success ? 1 : 0;
+  rtcPendingResultTries = 0;
+  strlcpy(rtcPendingResultMsg, message.c_str(), sizeof(rtcPendingResultMsg));
+  rtcPendingResultMagic = PENDING_RESULT_MAGIC;  // last: makes the record valid
+}
+
+static void postRelayResult(int commandId, bool success, const String& message) {
+  if (postCommandResult(commandId, success, message)) return;
+
+  Serial.printf("[CMD] result for command %d did not post (free heap %u, largest "
+                "block %u); retrying in %u ms\n",
+                commandId, (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getMaxAllocHeap(),
+                (unsigned)RELAY_RESULT_RETRY_DELAY_MS);
+  delay(RELAY_RESULT_RETRY_DELAY_MS);
+  if (postCommandResult(commandId, success, message)) return;
+
+  Serial.printf("[CMD] result for command %d kept for the next cycle\n", commandId);
+  stashPendingResult(commandId, success, message);
+}
+
+// Deliver a result an earlier cycle could not. Called once per cycle, before
+// the next command is fetched.
+static void reportPendingResult() {
+  if (rtcPendingResultMagic != PENDING_RESULT_MAGIC || rtcPendingResultCommandId == 0)
+    return;
+  rtcPendingResultMsg[sizeof(rtcPendingResultMsg) - 1] = '\0';
+  const int commandId = (int)rtcPendingResultCommandId;
+  Serial.printf("[CMD] Delivering held result for command %d\n", commandId);
+  if (postCommandResult(commandId, rtcPendingResultSuccess != 0,
+                        String(rtcPendingResultMsg))) {
+    clearPendingResult();
+    return;
+  }
+  if (++rtcPendingResultTries >= PENDING_RESULT_MAX_TRIES) {
+    Serial.printf("[CMD] giving up on the held result for command %d\n", commandId);
+    clearPendingResult();
+  }
 }
 
 // Claim and run at most one queued command. Returns true when one ran, and
@@ -1741,10 +1817,10 @@ static bool runOneCommand(bool* wasAudio) {
       bool ok = recordHiveInsideAudio(mac, recordingId, durationDs, gainDb, &resultMsg);
       clearRelayInFlight();
       if (wasAudio) *wasAudio = ok;
-      postCommandResult(commandId, ok,
-                        resultMsg.length() ? resultMsg
-                                           : (ok ? "audio session completed"
-                                                 : "audio session failed"));
+      postRelayResult(commandId, ok,
+                      resultMsg.length() ? resultMsg
+                                         : (ok ? "audio session completed"
+                                               : "audio session failed"));
     }
   }
 #else
@@ -1838,8 +1914,10 @@ static bool runOneCommand(bool* wasAudio) {
 void checkCommands() {
   if (!connectNetwork()) return;
 
-  // Close out a relay that a reset interrupted before claiming anything new.
+  // Close out a relay that a reset interrupted, and deliver a result an
+  // earlier cycle could not post, before claiming anything new.
   reportInterruptedRelay();
+  reportPendingResult();
 
   bool wasAudio = false;
   if (!runOneCommand(&wasAudio)) return;
