@@ -7,8 +7,9 @@ time-series your HiveHub device already records: weight (per channel),
 internal hive temperature (per channel), and ambient temperature/humidity.
 
 Insights are computed in [`server/insights.py`](../server/insights.py) and
-exposed through `/api/v1/devices/{device_id}/insights`. The HivePal frontend
-displays them in the **HiveScale → Insights** card.
+exposed to HivePal through `/api/v1/app/devices/{device_id}/insights` (plus
+`/insights/summary` and `/insights/history`). HivePal shows them on its
+**HiveHub** page and emails new or escalating alerts to the device's members.
 
 This document is the authoritative reference for **what is detected**,
 **how**, **when an alert is raised**, and **where the rule comes from**.
