@@ -940,7 +940,7 @@ def list_inspections_from_app(device_id: str, start_at: Optional[datetime] = Non
         rows = [r for r in rows if (r["ended_at"] or STORE["data_end"]) >= start_at]
     if end_at is not None:
         rows = [r for r in rows if r["started_at"] <= end_at]
-    return {"device_id": device_id, "inspections": rows[:limit]}
+    return rows[:limit]
 
 
 @app.post("/api/v1/app/devices/{device_id}/inspections/start",
@@ -960,7 +960,7 @@ def start_inspection_from_app(device_id: str, payload: Optional[InspectionStartI
         STORE["next_inspection_id"] += 1
         STORE["inspections"].setdefault(device_id, []).append(inspection)
         _create_command(device_id, "start_inspection", {})
-    return _inspection_status(device_id)
+    return _active_inspection(device_id)
 
 
 @app.post("/api/v1/app/devices/{device_id}/inspections/stop",
@@ -976,7 +976,7 @@ def stop_inspection_from_app(device_id: str, payload: Optional[InspectionStopIn]
         if payload.note:
             active["note"] = payload.note
         _create_command(device_id, "stop_inspection", {})
-    return _inspection_status(device_id)
+    return active
 
 
 @app.patch("/api/v1/app/devices/{device_id}/inspections/{inspection_id}",
