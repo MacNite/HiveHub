@@ -20,6 +20,10 @@ production-faithful backend, run ``server/`` against PostgreSQL and use
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -137,10 +141,45 @@ def require_hivepal_service_key(x_hivepal_service_key: str = Header(default=""))
         raise HTTPException(status_code=401, detail="Invalid HivePal service key")
 
 
-def require_user_id(x_user_id: str = Header(default="")) -> str:
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="X-User-Id header is required")
-    return x_user_id
+HIVEPAL_JWT_SECRET = os.environ.get("HIVEPAL_JWT_SECRET", "")
+
+
+def _user_from_bearer(authorization: str) -> Optional[str]:
+    """``sub`` of the HS256 token HivePal forwards, like server/auth.py.
+
+    Verified when HIVEPAL_JWT_SECRET is set; otherwise only decoded, which is
+    enough for a demo backend. Stdlib only, so the mock keeps its tiny
+    dependency list.
+    """
+    if not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        header_b64, payload_b64, signature_b64 = token.split(".")
+        def b64(part: str) -> bytes:
+            return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+        if HIVEPAL_JWT_SECRET:
+            expected = hmac.new(HIVEPAL_JWT_SECRET.encode(),
+                                f"{header_b64}.{payload_b64}".encode(),
+                                hashlib.sha256).digest()
+            if not hmac.compare_digest(expected, b64(signature_b64)):
+                return None
+        payload = json.loads(b64(payload_b64))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    sub = payload.get("sub")
+    return str(sub) if sub else None
+
+
+def require_user_id(x_user_id: str = Header(default=""),
+                    authorization: str = Header(default="")) -> str:
+    """HivePal sends ``Authorization: Bearer <jwt>``; ``X-User-Id`` is kept for
+    curl-driven testing."""
+    user_id = _user_from_bearer(authorization) or x_user_id
+    if not user_id:
+        raise HTTPException(status_code=401,
+                            detail="A HivePal bearer token (or X-User-Id header) is required")
+    return user_id
 
 
 def _ensure_app_device(device_id: str) -> None:
@@ -679,6 +718,7 @@ def list_device_measurements(
     limit: int = 200,
     start_at: Optional[datetime] = None,
     end_at: Optional[datetime] = None,
+    max_points: Optional[int] = None,
     user_id: str = Depends(require_user_id),
 ):
     require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
@@ -693,6 +733,10 @@ def list_device_measurements(
     if end_at is not None:
         rows = [m for m in rows if m["measured_at"] <= end_at]
     rows = sorted(rows, key=lambda m: m["measured_at"], reverse=True)
+    # Same even-stride thinning as measurements.execute_measurement_query.
+    if max_points and max_points > 0 and len(rows) > max_points:
+        stride = -(-len(rows) // max_points)
+        rows = rows[::stride]
     return rows[:limit]
 
 

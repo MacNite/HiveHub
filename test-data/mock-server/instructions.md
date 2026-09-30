@@ -35,7 +35,7 @@ Everything you need:
 | Base URL | `http://localhost:31115` |
 | Device key — `X-API-Key` | `demo-device-key` |
 | HivePal service key — `X-HivePal-Service-Key` | `demo-hivepal-service-key` |
-| HivePal user — `X-User-Id` | any value works (e.g. `demo-user`) |
+| HivePal user — `Authorization: Bearer <jwt>` (what HivePal sends; verified when `HIVEPAL_JWT_SECRET` is set) or `X-User-Id` | any value works (e.g. `demo-user`) |
 | Demo devices (both serve the full dataset) | `hive_scale_dual_01` (claim code `ABCD-1234`), `hive_scale_dual_02` (`WXYZ-5678`) |
 | Dummy data span | `2025-01-01` → `2026-05-31`, 30-min samples (~24,800 points) |
 
