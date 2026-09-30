@@ -65,6 +65,10 @@ def init_db():
                 ALTER TABLE device_channels
                     ADD CONSTRAINT device_channels_channel_number_check
                     CHECK (channel_number BETWEEN 1 AND 18);
+                -- The HivePal hive each slot is linked to, so the link survives
+                -- a rename. See migrations/031_device_channel_hive_links.sql.
+                ALTER TABLE device_channels
+                    ADD COLUMN IF NOT EXISTS hivepal_hive_id TEXT;
 
                 CREATE TABLE IF NOT EXISTS measurements (
                     id BIGSERIAL PRIMARY KEY,

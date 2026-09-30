@@ -307,13 +307,15 @@ def fetch_device_channels(device_id: str) -> dict:
     """Return the per-hive (scale-channel) display names for a device.
 
     ``names`` maps every stored hive index ("1".."18") to its custom name and is
-    the canonical multi-hive shape the local dashboard consumes. ``scale_1/2_*``
-    are kept for the HivePal app endpoints and older callers.
+    the canonical multi-hive shape the local dashboard consumes. ``hive_ids``
+    maps an index to the HivePal hive it is linked to. ``scale_1/2_*`` are kept
+    for the HivePal app endpoints and older callers.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT channel_number, name FROM device_channels WHERE device_id = %s ORDER BY channel_number;",
+                "SELECT channel_number, name, hivepal_hive_id FROM device_channels "
+                "WHERE device_id = %s ORDER BY channel_number;",
                 (device_id,),
             )
             rows = cur.fetchall()
@@ -322,30 +324,51 @@ def fetch_device_channels(device_id: str) -> dict:
         "scale_1_display_name": ch.get(1),
         "scale_2_display_name": ch.get(2),
         "names": {str(num): name for num, name in ch.items() if name is not None},
+        "hive_ids": {str(r[0]): r[2] for r in rows if r[2]},
     }
 
 
-def apply_device_channels(device_id: str, payload: DeviceChannelsUpdateIn) -> dict:
-    """Upsert the provided per-hive display names and return all of them."""
-    # Collapse the legacy scale_1/2 fields and the general names[] map into one
-    # {hive_index: name} set, dropping anything outside 1..MAX_HIVES.
-    updates: dict[int, Optional[str]] = {}
+def _hive_index_map(values: Optional[dict]) -> dict[int, Optional[str]]:
+    """Keep the entries of an index-keyed map whose key is a hive in 1..MAX_HIVES."""
+    out: dict[int, Optional[str]] = {}
+    for key, value in (values or {}).items():
+        try:
+            idx = int(key)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= idx <= MAX_HIVES:
+            out[idx] = value
+    return out
+
+
+def channel_updates(payload: DeviceChannelsUpdateIn) -> tuple[dict[int, str], dict[int, Optional[str]]]:
+    """Split a channels PATCH into ``({index: name}, {index: hive_id or None})``.
+
+    Names follow the existing contract (``None`` means "leave alone"); a hive
+    link of ``None`` or ``""`` clears it. Pure, so it is unit-testable.
+    """
+    names: dict[int, str] = {}
     if payload.scale_1_display_name is not None:
-        updates[1] = payload.scale_1_display_name
+        names[1] = payload.scale_1_display_name
     if payload.scale_2_display_name is not None:
-        updates[2] = payload.scale_2_display_name
-    if payload.names:
-        for key, name in payload.names.items():
-            try:
-                idx = int(key)
-            except (TypeError, ValueError):
-                continue
-            if 1 <= idx <= MAX_HIVES and name is not None:
-                updates[idx] = name
+        names[2] = payload.scale_2_display_name
+    for idx, name in _hive_index_map(payload.names).items():
+        if name is not None:
+            names[idx] = name
+    links = {
+        idx: (str(value).strip() or None) if value is not None else None
+        for idx, value in _hive_index_map(payload.hive_ids).items()
+    }
+    return names, links
+
+
+def apply_device_channels(device_id: str, payload: DeviceChannelsUpdateIn) -> dict:
+    """Upsert the provided per-hive display names / hive links and return all of them."""
+    names, links = channel_updates(payload)
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            for ch_num, ch_name in updates.items():
+            for ch_num, ch_name in names.items():
                 cur.execute(
                     """
                     INSERT INTO device_channels (device_id, channel_number, name)
@@ -353,6 +376,16 @@ def apply_device_channels(device_id: str, payload: DeviceChannelsUpdateIn) -> di
                     ON CONFLICT (device_id, channel_number) DO UPDATE SET name = EXCLUDED.name;
                     """,
                     (device_id, ch_num, ch_name),
+                )
+            for ch_num, hive_id in links.items():
+                cur.execute(
+                    """
+                    INSERT INTO device_channels (device_id, channel_number, hivepal_hive_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (device_id, channel_number)
+                    DO UPDATE SET hivepal_hive_id = EXCLUDED.hivepal_hive_id;
+                    """,
+                    (device_id, ch_num, hive_id),
                 )
             conn.commit()
     return fetch_device_channels(device_id)

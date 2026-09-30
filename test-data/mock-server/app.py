@@ -20,6 +20,10 @@ production-faithful backend, run ``server/`` against PostgreSQL and use
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -65,6 +69,8 @@ STORE: dict[str, Any] = {
     "devices": {},               # device_id -> device metadata dict
     "commands": [],              # queued device commands
     "firmware_releases": [],     # registered releases
+    "inspections": {},           # device_id -> [inspection dict, ...] newest last
+    "next_inspection_id": 1,
     "restamp_cache": {},         # device_id -> dataset re-stamped for that device
     "data_end": None,            # newest measured_at (anchor for insights "now")
     "next_command_id": 1,
@@ -135,10 +141,45 @@ def require_hivepal_service_key(x_hivepal_service_key: str = Header(default=""))
         raise HTTPException(status_code=401, detail="Invalid HivePal service key")
 
 
-def require_user_id(x_user_id: str = Header(default="")) -> str:
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="X-User-Id header is required")
-    return x_user_id
+HIVEPAL_JWT_SECRET = os.environ.get("HIVEPAL_JWT_SECRET", "")
+
+
+def _user_from_bearer(authorization: str) -> Optional[str]:
+    """``sub`` of the HS256 token HivePal forwards, like server/auth.py.
+
+    Verified when HIVEPAL_JWT_SECRET is set; otherwise only decoded, which is
+    enough for a demo backend. Stdlib only, so the mock keeps its tiny
+    dependency list.
+    """
+    if not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        header_b64, payload_b64, signature_b64 = token.split(".")
+        def b64(part: str) -> bytes:
+            return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+        if HIVEPAL_JWT_SECRET:
+            expected = hmac.new(HIVEPAL_JWT_SECRET.encode(),
+                                f"{header_b64}.{payload_b64}".encode(),
+                                hashlib.sha256).digest()
+            if not hmac.compare_digest(expected, b64(signature_b64)):
+                return None
+        payload = json.loads(b64(payload_b64))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    sub = payload.get("sub")
+    return str(sub) if sub else None
+
+
+def require_user_id(x_user_id: str = Header(default=""),
+                    authorization: str = Header(default="")) -> str:
+    """HivePal sends ``Authorization: Bearer <jwt>``; ``X-User-Id`` is kept for
+    curl-driven testing."""
+    user_id = _user_from_bearer(authorization) or x_user_id
+    if not user_id:
+        raise HTTPException(status_code=401,
+                            detail="A HivePal bearer token (or X-User-Id header) is required")
+    return user_id
 
 
 def _ensure_app_device(device_id: str) -> None:
@@ -291,6 +332,8 @@ class ShareDeviceIn(BaseModel):
 class DeviceChannelsUpdateIn(BaseModel):
     scale_1_display_name: Optional[str] = None
     scale_2_display_name: Optional[str] = None
+    names: Optional[dict[str, Optional[str]]] = None
+    hive_ids: Optional[dict[str, Optional[str]]] = None
 
 
 class AppCalibrationModeStartIn(BaseModel):
@@ -544,6 +587,8 @@ def list_devices(user_id: str = Depends(require_user_id)):
             "channels": {
                 "scale_1": ch.get("scale_1_display_name"),
                 "scale_2": ch.get("scale_2_display_name"),
+                "names": _channel_names(ch),
+                "hive_ids": dict(ch.get("hive_ids", {})),
             },
         })
     return out
@@ -579,12 +624,22 @@ def release_device_claim(device_id: str, user_id: str = Depends(require_user_id)
     }
 
 
+def _channel_names(ch: dict) -> dict[str, str]:
+    names = {k: v for k, v in ch.get("names", {}).items() if v is not None}
+    for idx, key in ((1, "scale_1_display_name"), (2, "scale_2_display_name")):
+        if ch.get(key) is not None:
+            names[str(idx)] = ch[key]
+    return names
+
+
 @app.get("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])
 def get_device_channels(device_id: str, user_id: str = Depends(require_user_id)):
     require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
     ch = STORE["channels"].get(device_id, {})
     return {"scale_1_display_name": ch.get("scale_1_display_name"),
-            "scale_2_display_name": ch.get("scale_2_display_name")}
+            "scale_2_display_name": ch.get("scale_2_display_name"),
+            "names": _channel_names(ch),
+            "hive_ids": dict(ch.get("hive_ids", {}))}
 
 
 @app.patch("/api/v1/app/devices/{device_id}/channels", dependencies=[Depends(require_hivepal_service_key)])
@@ -595,6 +650,23 @@ def update_device_channels(device_id: str, payload: DeviceChannelsUpdateIn, user
         ch["scale_1_display_name"] = payload.scale_1_display_name
     if payload.scale_2_display_name is not None:
         ch["scale_2_display_name"] = payload.scale_2_display_name
+    # Mirrors server/devices.py channel_updates(): names of None are left alone,
+    # an empty / None hive link clears it; indexes outside 1..18 are dropped.
+    for key, name in (payload.names or {}).items():
+        if key.isdigit() and 1 <= int(key) <= 18 and name is not None:
+            if key == "1":
+                ch["scale_1_display_name"] = name
+            elif key == "2":
+                ch["scale_2_display_name"] = name
+            ch.setdefault("names", {})[key] = name
+    for key, hive_id in (payload.hive_ids or {}).items():
+        if key.isdigit() and 1 <= int(key) <= 18:
+            links = ch.setdefault("hive_ids", {})
+            value = (hive_id or "").strip()
+            if value:
+                links[key] = value
+            else:
+                links.pop(key, None)
     return get_device_channels(device_id, user_id)
 
 
@@ -646,6 +718,7 @@ def list_device_measurements(
     limit: int = 200,
     start_at: Optional[datetime] = None,
     end_at: Optional[datetime] = None,
+    max_points: Optional[int] = None,
     user_id: str = Depends(require_user_id),
 ):
     require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
@@ -660,6 +733,10 @@ def list_device_measurements(
     if end_at is not None:
         rows = [m for m in rows if m["measured_at"] <= end_at]
     rows = sorted(rows, key=lambda m: m["measured_at"], reverse=True)
+    # Same even-stride thinning as measurements.execute_measurement_query.
+    if max_points and max_points > 0 and len(rows) > max_points:
+        stride = -(-len(rows) // max_points)
+        rows = rows[::stride]
     return rows[:limit]
 
 
@@ -728,7 +805,27 @@ def firmware_status_from_app(device_id: str, user_id: str = Depends(require_user
         "latest_is_official": latest_is_official, "approved_version": approved_version,
         "update_available": update_available,
         "pending_approval": update_available and approved_version != latest_version,
+        "hiveinside_latest_version": (_latest_release_for_owner("hiveinside", _device_owner_id(device_id)) or {}).get("version"),
+        "hiveinside_relays": _latest_relays(device_id, "update_hiveinside"),
+        "beecounter_latest_version": (_latest_release_for_owner("beecounter", _device_owner_id(device_id)) or {}).get("version"),
+        "beecounter_relays": _latest_relays(device_id, "update_beecounter"),
     }
+
+
+def _latest_relays(device_id: str, command_type: str) -> dict[str, dict]:
+    """Last relay command per slot, shaped like commands.latest_*_relays()."""
+    out: dict[str, dict] = {}
+    for cmd in STORE["commands"]:
+        if cmd["device_id"] == device_id and cmd["command_type"] == command_type:
+            slot = str(cmd["payload"].get("slot"))
+            out[slot] = {
+                "status": cmd["status"],
+                "message": (cmd.get("result") or {}).get("message"),
+                "version": cmd["payload"].get("version"),
+                "created_at": cmd["created_at"],
+                "completed_at": cmd.get("completed_at"),
+            }
+    return out
 
 
 @app.post("/api/v1/app/devices/{device_id}/firmware/approve",
@@ -764,8 +861,8 @@ def stop_calibration_mode_from_app(device_id: str, user_id: str = Depends(requir
 
 
 def _queue_relay_update_from_app(device_id: str, target: str, command_type: str, slot: int):
-    if slot not in (1, 2):
-        raise HTTPException(status_code=400, detail="slot must be 1 or 2")
+    if not 1 <= slot <= 18:
+        raise HTTPException(status_code=400, detail="slot must be between 1 and 18")
     r = _latest_release_for_owner(target, _device_owner_id(device_id))
     if not r:
         raise HTTPException(status_code=404, detail=f"No active {target} firmware release")
@@ -829,3 +926,126 @@ def get_device_insights_summary(device_id: str, user_id: str = Depends(require_u
         "highest_alert": s.highest_alert.model_dump() if s.highest_alert else None,
         "categories": s.categories,
     }
+
+
+# ── Remote AP mode, inspections, recordings (mirrors server/app_api.py and
+#    server/inspections.py; kept in memory) ─────────────────────────────────
+
+
+@app.post("/api/v1/app/devices/{device_id}/provisioning/start",
+          dependencies=[Depends(require_hivepal_service_key)])
+def start_provisioning_from_app(device_id: str, user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    cmd = _create_command(device_id, "start_provisioning", {})
+    return {"status": cmd["status"], "id": cmd["id"], "command_type": "start_provisioning", "payload": {}}
+
+
+class InspectionStartIn(BaseModel):
+    hives: Optional[list[int]] = None
+    note: Optional[str] = None
+    started_at: Optional[datetime] = None
+
+
+class InspectionStopIn(BaseModel):
+    note: Optional[str] = None
+    ended_at: Optional[datetime] = None
+
+
+class InspectionNoteIn(BaseModel):
+    note: Optional[str] = None
+
+
+def _active_inspection(device_id: str) -> Optional[dict]:
+    return next((i for i in reversed(STORE["inspections"].get(device_id, [])) if i["active"]), None)
+
+
+def _inspection_status(device_id: str) -> dict:
+    active = _active_inspection(device_id)
+    timeout = (STORE["configs"].get(device_id) or {}).get("inspection_timeout_minutes", 60)
+    return {"device_id": device_id, "active": active is not None, "pending": False,
+            "inspection": active, "timeout_minutes": timeout}
+
+
+@app.get("/api/v1/app/devices/{device_id}/inspections/status",
+         dependencies=[Depends(require_hivepal_service_key)])
+def inspection_status_from_app(device_id: str, user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
+    return _inspection_status(device_id)
+
+
+@app.get("/api/v1/app/devices/{device_id}/inspections",
+         dependencies=[Depends(require_hivepal_service_key)])
+def list_inspections_from_app(device_id: str, start_at: Optional[datetime] = None,
+                              end_at: Optional[datetime] = None, limit: int = Query(100),
+                              user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
+    rows = list(reversed(STORE["inspections"].get(device_id, [])))
+    if start_at is not None:
+        rows = [r for r in rows if (r["ended_at"] or STORE["data_end"]) >= start_at]
+    if end_at is not None:
+        rows = [r for r in rows if r["started_at"] <= end_at]
+    return rows[:limit]
+
+
+@app.post("/api/v1/app/devices/{device_id}/inspections/start",
+          dependencies=[Depends(require_hivepal_service_key)])
+def start_inspection_from_app(device_id: str, payload: Optional[InspectionStartIn] = None,
+                              user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    payload = payload or InspectionStartIn()
+    if _active_inspection(device_id) is None:
+        now = datetime.now(timezone.utc)
+        inspection = {
+            "id": STORE["next_inspection_id"], "device_id": device_id,
+            "hives": payload.hives, "started_at": payload.started_at or now, "ended_at": None,
+            "active": True, "source": "api", "end_reason": None, "requested_at": now,
+            "acknowledged_at": now, "note": payload.note, "created_by": user_id,
+        }
+        STORE["next_inspection_id"] += 1
+        STORE["inspections"].setdefault(device_id, []).append(inspection)
+        _create_command(device_id, "start_inspection", {})
+    return _active_inspection(device_id)
+
+
+@app.post("/api/v1/app/devices/{device_id}/inspections/stop",
+          dependencies=[Depends(require_hivepal_service_key)])
+def stop_inspection_from_app(device_id: str, payload: Optional[InspectionStopIn] = None,
+                             user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    payload = payload or InspectionStopIn()
+    active = _active_inspection(device_id)
+    if active is not None:
+        active.update(active=False, ended_at=payload.ended_at or datetime.now(timezone.utc),
+                      end_reason="api")
+        if payload.note:
+            active["note"] = payload.note
+        _create_command(device_id, "stop_inspection", {})
+    return active
+
+
+@app.patch("/api/v1/app/devices/{device_id}/inspections/{inspection_id}",
+           dependencies=[Depends(require_hivepal_service_key)])
+def update_inspection_from_app(device_id: str, inspection_id: int, payload: InspectionNoteIn,
+                               user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    for inspection in STORE["inspections"].get(device_id, []):
+        if inspection["id"] == inspection_id:
+            inspection["note"] = payload.note
+            return inspection
+    raise HTTPException(status_code=404, detail="Inspection not found")
+
+
+@app.get("/api/v1/app/devices/{device_id}/recordings",
+         dependencies=[Depends(require_hivepal_service_key)])
+def list_recordings_from_app(device_id: str, hive: Optional[int] = Query(None),
+                             limit: int = Query(50), user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin", "viewer"])
+    # The mock has no hub to stream audio from, so it never holds a recording.
+    return {"recordings": []}
+
+
+@app.post("/api/v1/app/devices/{device_id}/recordings",
+          dependencies=[Depends(require_hivepal_service_key)])
+def request_recording_from_app(device_id: str, user_id: str = Depends(require_user_id)):
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    raise HTTPException(status_code=501, detail="The mock server cannot record hive audio")

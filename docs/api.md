@@ -111,7 +111,7 @@ without this field remain supported but cannot get this delivery guarantee.
 
 **Auth:** `X-API-Key` (per-device key — registered on first contact, enforced thereafter)
 
-> **Multi-hive payload (firmware v0.20.0+).** Devices now report up to 16 hives in
+> **Multi-hive payload (firmware v0.20.0+).** Devices now report up to 18 hives in
 > a `hives` array (see below); the flat `scale_1/2_*` / `hive_1/2_*` fields are the
 > legacy two-hive form and remain accepted. The server stores per-hive data in the
 > `hive_readings` table, mirrors hives 1–2 onto the legacy columns, and on read
@@ -830,16 +830,33 @@ Readings, config and channel names are untouched; only the pairing is undone.
 
 ### `GET /api/v1/app/devices/{device_id}/channels`
 
-Returns channel display names for scale 1 and scale 2.
-
-### `PATCH /api/v1/app/devices/{device_id}/channels`
-
-Updates channel display names. Requires `owner` or `admin`.
+Returns the hive display names and HivePal hive links for every hive index.
+`scale_1/2_display_name` are the legacy two-hive fields; `names` and `hive_ids`
+are keyed by hive index (`"1"`–`"18"`).
 
 ```json
 {
   "scale_1_display_name": "Buckfast colony",
-  "scale_2_display_name": "Carnica colony"
+  "scale_2_display_name": "Carnica colony",
+  "names": { "1": "Buckfast colony", "2": "Carnica colony", "5": "Nuc 3" },
+  "hive_ids": { "1": "3c1f…", "5": "a07e…" }
+}
+```
+
+`GET /api/v1/app/devices` carries the same `names` and `hive_ids` maps inside
+each device's `channels` object.
+
+### `PATCH /api/v1/app/devices/{device_id}/channels`
+
+Updates hive display names and/or links. Requires `owner` or `admin`. Only the
+indexes you send are touched. A name of `null` leaves it alone and `""` clears it.
+A `hive_ids` entry of `""` or `null` removes the link. HiveHub never resolves
+`hive_ids`; it stores the HivePal hive id so the mapping survives a rename.
+
+```json
+{
+  "names": { "1": "Buckfast colony", "3": "Nuc 3" },
+  "hive_ids": { "1": "3c1f…", "3": "" }
 }
 ```
 
@@ -1145,9 +1162,22 @@ owner has not approved it yet, so the device will **not** auto-flash until they 
   "latest_is_official": false,
   "approved_version": null,
   "update_available": true,
-  "pending_approval": true
+  "pending_approval": true,
+  "device_board": "esp32",
+  "other_board_releases": [],
+  "hiveinside_latest_version": "1.4.0",
+  "hiveinside_relays": {
+    "3": { "status": "running", "message": null, "version": "1.4.0",
+           "created_at": "2026-09-01T10:00:00+00:00", "completed_at": null }
+  },
+  "beecounter_latest_version": "0.7.1",
+  "beecounter_relays": {}
 }
 ```
+
+`hiveinside_relays` / `beecounter_relays` hold the last relay attempt per hive
+slot (the same data the local dashboard's firmware card shows), so a queued,
+running or failed node update is visible to HivePal too.
 
 ### `POST /api/v1/app/devices/{device_id}/firmware/approve`
 
@@ -1279,6 +1309,42 @@ recurrence of the same detector starts a new row.
 }
 ```
 
+### `POST /api/v1/app/devices/{device_id}/provisioning/start`
+
+Opens the hub's setup access point remotely. It queues a `start_provisioning`
+command, and the hub opens its AP after its next check-in, so up to one send
+interval later. Requires `owner` or `admin`.
+
+```json
+{ "status": "pending", "id": 91, "command_type": "start_provisioning", "payload": {} }
+```
+
+### `GET /api/v1/app/devices/{device_id}/export/measurements/summary?start_at=&end_at=`
+
+Returns how many readings an export of this device and period would contain:
+`{devices:[{device_id, measurements, first_measured_at, last_measured_at}],
+total_measurements, filename}`. Requires `owner` or `admin`.
+
+### `GET /api/v1/app/devices/{device_id}/export/measurements?hive=&start_at=&end_at=`
+
+Streams this device's readings as an SD-style NDJSON backup, the same format as
+the local dashboard download. `hive` may be repeated to limit the per-hive fields
+written. The file imports straight back through the SD upload. Requires `owner`
+or `admin`.
+
+### `POST /api/v1/app/devices/{device_id}/measurements/delete`
+
+Deletes this device's readings in `[start_at, end_at]`. It is gated by the
+device's claim code as a second factor, exactly like the local dashboard.
+Owner only.
+
+```json
+{ "start_at": "2026-09-01T00:00:00Z", "end_at": "2026-09-01T00:10:00Z", "claim_code": "ABCD-1234" }
+```
+
+Response: `{ "status": "ok", "device_id": "...", "deleted": 3 }`. A wrong claim
+code returns `403`.
+
 ---
 
 ## Hive audio recordings
@@ -1306,7 +1372,7 @@ to upload.
 
 | Query | Default | Meaning |
 |---|---|---|
-| `slot` | `1` | hive index, 1–16 — must be a hive with a HiveInside |
+| `slot` | `1` | hive index, 1–18 — must be a hive with a HiveInside |
 | `duration` | `0.0` | seconds, 0–60. `0` is open-ended; the node still stops at its own 60-second cap |
 | `gain_db` | `0` | −20…+20, applied on the node before transmission |
 

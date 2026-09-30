@@ -16,7 +16,13 @@ from recordings import (
     recording_wav,
     request_recording,
 )
-from commands import check_relay_slot, create_command, queue_relay_firmware_update
+from commands import (
+    check_relay_slot,
+    create_command,
+    latest_beecounter_relays,
+    latest_hiveinside_relays,
+    queue_relay_firmware_update,
+)
 from db import get_conn, hash_claim_code
 from devices import (
     apply_device_channels,
@@ -29,6 +35,8 @@ from devices import (
 from firmware import (
     get_approved_firmware_version,
     get_device_board,
+    latest_beecounter_release,
+    latest_hiveinside_release,
     latest_release_for_owner,
     other_board_releases,
     parse_version,
@@ -40,12 +48,18 @@ from measurements import (
     execute_measurement_query,
     serialize_measurements,
 )
+from local_dashboard import (
+    local_delete_measurements,
+    local_export_measurements,
+    local_export_summary,
+)
 from schemas import (
     AppCalibrationModeStartIn,
     AppDeviceConfigUpdate,
     ClaimDeviceIn,
     DeviceChannelsUpdateIn,
     DeviceCommandIn,
+    MeasurementDeleteIn,
     ShareDeviceIn,
     TempCoefficientFitIn,
 )
@@ -140,13 +154,17 @@ def list_devices(user_id: str = Depends(require_user_id)):
             rows = cur.fetchall()
             device_ids = [r[0] for r in rows]
             channels: dict[str, dict] = {}
+            hive_links: dict[str, dict[str, str]] = {}
             if device_ids:
                 cur.execute(
-                    "SELECT device_id, channel_number, name FROM device_channels WHERE device_id = ANY(%s);",
+                    "SELECT device_id, channel_number, name, hivepal_hive_id "
+                    "FROM device_channels WHERE device_id = ANY(%s);",
                     (device_ids,),
                 )
                 for ch in cur.fetchall():
                     channels.setdefault(ch[0], {})[ch[1]] = ch[2]
+                    if ch[3]:
+                        hive_links.setdefault(ch[0], {})[str(ch[1])] = ch[3]
     return [
         {
             "device_id": r[0],
@@ -165,6 +183,8 @@ def list_devices(user_id: str = Depends(require_user_id)):
                     for num, name in channels.get(r[0], {}).items()
                     if name is not None
                 },
+                # HivePal hive each index is linked to (index "1".."18" -> id).
+                "hive_ids": hive_links.get(r[0], {}),
             },
         }
         for r in rows
@@ -547,6 +567,10 @@ def firmware_status_from_app(device_id: str, user_id: str = Depends(require_user
     current_version = row[0]
 
     owner_id = get_device_owner_id(device_id)
+    # Same relay metadata the local dashboard shows, so HivePal can tell a
+    # queued / relaying / failed node update apart from one that never started.
+    hiveinside_release = latest_hiveinside_release(owner_id)
+    beecounter_release = latest_beecounter_release(owner_id)
     # Resolve the latest release for this device's reported board so a C6 device is
     # never shown an esp32-only build as "available" (and vice versa). Falls back to
     # board-agnostic when the device has not yet checked in with the board param.
@@ -577,6 +601,10 @@ def firmware_status_from_app(device_id: str, user_id: str = Depends(require_user
         "other_board_releases": other_board_releases(
             "hivescale", owner_id, device_board, current_version
         ),
+        "hiveinside_latest_version": hiveinside_release[0] if hiveinside_release else None,
+        "hiveinside_relays": latest_hiveinside_relays(device_id),
+        "beecounter_latest_version": beecounter_release[0] if beecounter_release else None,
+        "beecounter_relays": latest_beecounter_relays(device_id),
     }
 
 
@@ -727,3 +755,84 @@ def queue_beecounter_update_from_app(
         "version": result.get("version"),
         "current_version": result.get("current_version"),
     }
+
+
+@router.post(
+    "/api/v1/app/devices/{device_id}/provisioning/start",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def start_provisioning_from_app(device_id: str, user_id: str = Depends(require_user_id)):
+    """Open the hub's setup access point remotely (owner/admin).
+
+    The app-side twin of POST /api/v1/local/devices/{id}/provisioning/start: the
+    hub picks the command up on its next check-in and opens its AP once that
+    cycle is done, so it appears up to one send interval later.
+    """
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    result = create_command(
+        device_id,
+        DeviceCommandIn(command_type="start_provisioning", payload={}),
+    )
+    return {
+        "status": result["status"],
+        "id": result["id"],
+        "command_type": "start_provisioning",
+        "payload": {},
+    }
+
+
+# ── Data export / range delete ─────────────────────────────────────────────
+#
+# Thin wrappers over the local dashboard handlers, scoped to one device the
+# caller is a member of. The local routes are gated by their decorators only,
+# so calling the functions directly reuses the logic without the dashboard
+# session requirement.
+
+
+@router.get(
+    "/api/v1/app/devices/{device_id}/export/measurements/summary",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def export_summary_from_app(
+    device_id: str,
+    start_at: Optional[datetime] = None,
+    end_at: Optional[datetime] = None,
+    user_id: str = Depends(require_user_id),
+):
+    """How many readings an export of this device and period would contain."""
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    return local_export_summary(device_id=[device_id], start_at=start_at, end_at=end_at)
+
+
+@router.get(
+    "/api/v1/app/devices/{device_id}/export/measurements",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def export_measurements_from_app(
+    device_id: str,
+    hive: list[int] = Query(default=[]),
+    start_at: Optional[datetime] = None,
+    end_at: Optional[datetime] = None,
+    user_id: str = Depends(require_user_id),
+):
+    """Stream this device's readings as an SD-style NDJSON backup.
+
+    The file imports straight back through POST .../measurements/import (or the
+    HivePal SD upload), so it doubles as a migration path between servers.
+    """
+    require_device_role(user_id, device_id, ["owner", "admin"])
+    return local_export_measurements(
+        device_id=[device_id], hive=hive, start_at=start_at, end_at=end_at
+    )
+
+
+@router.post(
+    "/api/v1/app/devices/{device_id}/measurements/delete",
+    dependencies=[Depends(require_hivepal_service_key)],
+)
+def delete_measurements_from_app(
+    device_id: str, body: MeasurementDeleteIn, user_id: str = Depends(require_user_id)
+):
+    """Delete this device's readings in a time range (owner only, claim-code gated)."""
+    require_device_role(user_id, device_id, ["owner"])
+    return local_delete_measurements(device_id, body)

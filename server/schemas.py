@@ -881,6 +881,9 @@ class DeviceChannelsUpdateIn(BaseModel):
     # reports, not just the first two. Ignored entries outside 1..MAX_HIVES are
     # dropped by apply_device_channels().
     names: Optional[dict[str, Optional[str]]] = None
+    # HivePal hive id linked to each hive index ("1".."18" -> id). An empty
+    # string clears the link; indexes left out are not touched.
+    hive_ids: Optional[dict[str, Optional[str]]] = None
 
 
 # Lightweight email check — good enough to catch typos without pulling in the
