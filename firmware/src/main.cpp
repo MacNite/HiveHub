@@ -42,52 +42,61 @@ void runUploadCycle() {
   heapdiag::probe("after-network");
   pollSetupButton();
 
-  JsonDocument doc;
-  // Assembly runs the BLE scan, which inits and deinits the NimBLE stack. That
-  // teardown is deliberately incomplete (deinit(false) — deinit(true) panics on
-  // the C6 once a scan has run this boot, see ble_sensor.cpp), so it is the
-  // stage most worth watching.
-  buildMeasurementDoc(doc);
-  heapdiag::probe("after-measure");
-  pollSetupButton();
+  // The measurement document and its serialised form are scoped to this block
+  // so they are freed BEFORE checkCommands(). They used to live to the end of
+  // the function, which kept them resident through the audio relay — the
+  // tightest moment for heap in the whole firmware on the 30-pin ESP32, where
+  // the staging ring was refused with under 10 kB left and every kilobyte (and
+  // every hole these leave in the heap) counts.
+  {
+    JsonDocument doc;
+    // Assembly runs the BLE scan, which inits and deinits the NimBLE stack. That
+    // teardown is deliberately incomplete (deinit(false) — deinit(true) panics on
+    // the C6 once a scan has run this boot, see ble_sensor.cpp), so it is the
+    // stage most worth watching.
+    buildMeasurementDoc(doc);
+    heapdiag::probe("after-measure");
+    pollSetupButton();
 
-  // SD.begin() is the reproducible boundary after which ESP32-C6 I2C-NG may
-  // reject later transfers. Capture the timestamp before bringing SPI/SD up.
-  initSdCard();
-  heapdiag::probe("after-sd");
+    // SD.begin() is the reproducible boundary after which ESP32-C6 I2C-NG may
+    // reject later transfers. Capture the timestamp before bringing SPI/SD up.
+    initSdCard();
+    heapdiag::probe("after-sd");
 
-  // Stamp sd_ok only now. sdOk is a plain global that starts false on every boot
-  // and prepareSdForSleep() clears it before each deep sleep, so it is always
-  // false while the document above is assembled — stamping it there reported an
-  // SD card fault on every cycle even though the card mounted and the backup
-  // line was written moments later.
-  doc["sd_ok"] = sdOk;
+    // Stamp sd_ok only now. sdOk is a plain global that starts false on every boot
+    // and prepareSdForSleep() clears it before each deep sleep, so it is always
+    // false while the document above is assembled — stamping it there reported an
+    // SD card fault on every cycle even though the card mounted and the backup
+    // line was written moments later.
+    doc["sd_ok"] = sdOk;
 
-  String json = finalizeMeasurementJson(doc);
+    String json = finalizeMeasurementJson(doc);
 
-  if (sdOk) appendBackupLine(json);
+    if (sdOk) appendBackupLine(json);
 
-  // Track the claim in both directions: latch it once the server confirms the
-  // device is claimed, and un-latch it when the server explicitly says it is
-  // not. The second half is what makes "remove the device in the app" a
-  // recoverable action — the device notices the pairing is gone and starts
-  // offering its claim code again, so it can simply be re-claimed. A server
-  // that reports nothing (older build, or a failed upload) changes neither.
-  ClaimStatus claimStatus = ClaimStatus::Unknown;
-  bool currentUploaded = uploadLine(json, &claimStatus);
-  if (claimStatus == ClaimStatus::Claimed) markClaimRegistered();
-  else if (claimStatus == ClaimStatus::Unclaimed) clearClaimRegistered();
+    // Track the claim in both directions: latch it once the server confirms the
+    // device is claimed, and un-latch it when the server explicitly says it is
+    // not. The second half is what makes "remove the device in the app" a
+    // recoverable action — the device notices the pairing is gone and starts
+    // offering its claim code again, so it can simply be re-claimed. A server
+    // that reports nothing (older build, or a failed upload) changes neither.
+    ClaimStatus claimStatus = ClaimStatus::Unknown;
+    bool currentUploaded = uploadLine(json, &claimStatus);
+    if (claimStatus == ClaimStatus::Claimed) markClaimRegistered();
+    else if (claimStatus == ClaimStatus::Unclaimed) clearClaimRegistered();
 
-  if (!currentUploaded) {
-    if (sdOk) {
-      Serial.println("[CYCLE] Live upload failed; adding measurement to retry cache");
-      appendCacheLine(json);
-    } else {
-      Serial.println("[CYCLE] Live upload failed and no SD card is available; measurement not cached");
+    if (!currentUploaded) {
+      if (sdOk) {
+        Serial.println("[CYCLE] Live upload failed; adding measurement to retry cache");
+        appendCacheLine(json);
+      } else {
+        Serial.println("[CYCLE] Live upload failed and no SD card is available; measurement not cached");
+      }
+    } else if (sdOk) {
+      uploadCachedLines();
     }
-  } else if (sdOk) {
-    uploadCachedLines();
-  }
+
+  }  // doc and json are released here, before any command runs.
 
   if (scaleCalibrationReportPending()) reportScaleCalibration();
 
