@@ -205,6 +205,16 @@ extern uint32_t rtcRelayMagic;
 // rather than "firmware transfer" for a recording. See RelayKind in
 // hivehub_network.cpp.
 extern uint32_t rtcRelayKind;
+// A relay's command result that failed to POST — typically because the relay
+// left the heap too low for another TLS session — held for the next cycle so
+// the dashboard learns the real reason instead of a backend timeout's guess.
+// See postRelayResult() in hivehub_network.cpp.
+#define RTC_PENDING_RESULT_MSG_LEN 192
+extern uint32_t rtcPendingResultMagic;
+extern uint32_t rtcPendingResultCommandId;
+extern uint32_t rtcPendingResultSuccess;
+extern uint32_t rtcPendingResultTries;
+extern char rtcPendingResultMsg[RTC_PENDING_RESULT_MSG_LEN];
 // Set when a `start_provisioning` command has to reboot the hub to open the
 // portal, so the BLE discovery scan gets a NimBLE port lifetime it is allowed
 // to scan in. Consumed once, at the top of setup(). RTC_NOINIT_ATTR, for the

@@ -12,6 +12,7 @@
 
 #include "audio_ring.h"
 #include "ble_stack.h"
+#include "heap_diag.h"
 #include "hivehub_network.h"  // crc32Update
 
 #if ENABLE_BLE_SCAN
@@ -234,13 +235,15 @@ bool begin(const String& mac, uint16_t durationDs, int8_t gainDb) {
     return false;
   }
 
-  // Bring BLE up BEFORE the ring, not after. Both want memory from a heap that
-  // already holds WiFi and an open TLS session, and on the classic ESP32 there
-  // is far less of it than on the C6 — the BT controller alone wants tens of
-  // kilobytes. Of the two, the ring is the one that can be made smaller and
-  // still produce a recording, so it gets what is left rather than first
-  // refusal. Ordered the other way, a hub that could have recorded with a
-  // half-size buffer instead failed to start the radio at all.
+  // Bring BLE up here, with the caller's TLS session already open, and NOT
+  // ahead of it. 0.30.6 hoisted this above the socket on the theory that the
+  // controller is the least flexible allocation and should bid first; the
+  // field answered in one cycle with "TLS connect to the backend failed" 1.28 s
+  // after the command was claimed, against a 15 s connect timeout — mbedtls
+  // failing to allocate, before it reached the network. See the long note in
+  // hivehub_network.cpp: mbedtls needs two 16 kB CONTIGUOUS record buffers on
+  // this framework, and contiguity is what a resident BT controller destroys.
+  // The fragile allocation goes first; this one is the robust one.
   if (!blestack::acquire()) {
     s_lastError = "BLE stack would not start (out of memory with WiFi and TLS up?)";
     Serial.printf("[HI-AUD] %s (free heap %u, largest block %u)\n",
@@ -250,12 +253,22 @@ bool begin(const String& mac, uint16_t durationDs, int8_t gainDb) {
   }
   NimBLEDevice::setMTU(247);  // 240 PCM bytes per notification once granted
 
+  // What the heap looks like with BOTH the TLS session and the controller
+  // resident — the number every question on this path turns out to need, and
+  // the one 0.30.6 had no way to print. logDiag(), not probe(): nothing is
+  // streaming yet, but checkIntegrity() walks every block and this runs inside
+  // the node's ten-second arm window once the connect below happens.
+  heapdiag::logDiag("audio-radio-up");
+
   // Size the ring against what the heap can actually give, not against what the
-  // config asks for. HIVEINSIDE_AUDIO_RING_BYTES is a cushion — how long a TLS
-  // write may stall before audio is lost — so halving it costs gaps under load,
-  // while insisting on the full figure costs the whole recording. Never take
-  // more than half the largest contiguous block: mbedtls still has to allocate
-  // record buffers underneath this for every chunk of the upload.
+  // config asks for. This runs last of the three big allocations on this path —
+  // controller, TLS session, ring — which is the right way round: it is the
+  // only one of them that can shrink and still produce a recording.
+  // HIVEINSIDE_AUDIO_RING_BYTES is a cushion — how long a TLS write may stall
+  // before audio is lost — so halving it costs gaps under load, while insisting
+  // on the full figure costs the whole recording. Never take more than half the
+  // largest contiguous block: mbedtls still has to allocate record buffers
+  // underneath this for every chunk of the upload.
   size_t want = HIVEINSIDE_AUDIO_RING_BYTES;
   const size_t largest = ESP.getMaxAllocHeap();
   while (want > HIVEINSIDE_AUDIO_RING_MIN_BYTES && want > largest / 2) {
