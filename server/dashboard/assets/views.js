@@ -4245,6 +4245,10 @@ function deleteMeasurementsCard(state) {
 // "Your account": let the logged-in user change their own password.
 function accountCard(state) {
   const u = state.authUser || {};
+  const sso = state.sso || {};
+  // The password form only makes sense for an account that has a password and
+  // a server that still accepts password sign-in.
+  const canChangePassword = sso.password_login !== false && u.has_password !== false;
 
   // Contact email — where insights-based alerts will be sent once notifications
   // are wired up. Optional; can be cleared by saving an empty field.
@@ -4253,6 +4257,8 @@ function accountCard(state) {
   const emailForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Alert email"), emailInput),
     el("p", { class: "note" }, "Used to notify you about colony insights (swarm, robbing, winter risk…). Leave blank to receive none."),
+    sso.enabled ? el("p", { class: "note" },
+      `This is also the address ${sso.provider_name} sign-in matches you by: changing it to one your ${sso.provider_name} account does not report locks you out of single sign-on.`) : null,
     el("div", { class: "form-actions" }, emailBtn));
   emailForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -4267,14 +4273,22 @@ function accountCard(state) {
     finally { emailBtn.disabled = false; }
   });
 
+  const signedInRows = el("div", { class: "rows" },
+    el("div", { class: "row" }, el("span", { class: "k" }, "Signed in as"), el("span", { class: "v" }, u.username || DASH)),
+    el("div", { class: "row" }, el("span", { class: "k" }, "Role"), el("span", { class: "v" }, u.role || DASH)),
+    u.auth === "oidc"
+      ? el("div", { class: "row" }, el("span", { class: "k" }, "Signed in via"), el("span", { class: "v" }, sso.provider_name || "single sign-on"))
+      : null);
+  if (!canChangePassword) {
+    return el("div", { class: "card" }, el("h2", {}, "Your account"), signedInRows, emailForm);
+  }
+
   const curPw = el("input", { type: "password", autocomplete: "current-password" });
   const newPw = el("input", { type: "password", autocomplete: "new-password" });
   const newPw2 = el("input", { type: "password", autocomplete: "new-password" });
   const btn = el("button", { class: "btn", type: "submit" }, "Change password");
   const form = el("form", {},
-    el("div", { class: "rows" },
-      el("div", { class: "row" }, el("span", { class: "k" }, "Signed in as"), el("span", { class: "v" }, u.username || DASH)),
-      el("div", { class: "row" }, el("span", { class: "k" }, "Role"), el("span", { class: "v" }, u.role || DASH))),
+    signedInRows,
     el("div", { class: "form-row" }, el("label", {}, "Current password"), curPw),
     el("div", { class: "form-row" }, el("label", {}, "New password"), newPw),
     el("div", { class: "form-row" }, el("label", {}, "Confirm new password"), newPw2),
@@ -4413,7 +4427,10 @@ function usersCard(state) {
           try { await state.actions.deleteUser(usr.id); state.toast("User removed", "success"); refresh(); }
           catch (err) { state.toast(err.message, "error"); del.disabled = false; }
         });
-        const label = usr.email ? `${usr.username} · ${usr.role} · ${usr.email}` : `${usr.username} · ${usr.role}`;
+        const parts = [usr.username, usr.role];
+        if (usr.email) parts.push(usr.email);
+        if (usr.has_password === false) parts.push("SSO only");
+        const label = parts.join(" · ");
         return el("div", { class: "row" },
           el("span", { class: "k" }, label),
           el("span", { class: "v" }, del));
@@ -4424,9 +4441,17 @@ function usersCard(state) {
     }
   };
 
+  // With single sign-on on, an account may go without a password (it then signs
+  // in through the provider, matched by email); with password sign-in switched
+  // off, every new account is like that and the password field disappears.
+  const sso = state.sso || {};
+  const passwordOptional = !!sso.enabled;
+  const passwordShown = sso.password_login !== false;
   const nu = el("input", { type: "text", autocomplete: "off", placeholder: "username" });
-  const ne = el("input", { type: "email", autocomplete: "off", placeholder: "email (optional)" });
-  const np = el("input", { type: "password", autocomplete: "new-password", placeholder: "password (min 8)" });
+  const ne = el("input", { type: "email", autocomplete: "off",
+    placeholder: sso.enabled ? `email (${sso.provider_name} sign-in address)` : "email (optional)" });
+  const np = el("input", { type: "password", autocomplete: "new-password",
+    placeholder: passwordOptional ? "password (min 8, empty = SSO only)" : "password (min 8)" });
   const nr = el("select", { class: "full" },
     el("option", { value: "viewer" }, "Viewer (read-only)"),
     el("option", { value: "admin" }, "Admin (full control)"));
@@ -4434,16 +4459,19 @@ function usersCard(state) {
   const addForm = el("form", {},
     el("div", { class: "form-row" }, el("label", {}, "Username"), nu),
     el("div", { class: "form-row" }, el("label", {}, "Email"), ne),
-    el("div", { class: "form-row" }, el("label", {}, "Password"), np),
+    passwordShown ? el("div", { class: "form-row" }, el("label", {}, "Password"), np) : null,
     el("div", { class: "form-row" }, el("label", {}, "Role"), nr),
     el("div", { class: "form-actions" }, addBtn));
   addForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    if (np.value.length < 8) { state.toast("Password must be at least 8 characters", "error"); return; }
+    const pw = passwordShown ? np.value : "";
+    if (pw && pw.length < 8) { state.toast("Password must be at least 8 characters", "error"); return; }
+    if (!pw && !passwordOptional) { state.toast("Password must be at least 8 characters", "error"); return; }
+    if (!pw && !ne.value.trim()) { state.toast("Single sign-on accounts need an email address", "error"); return; }
     if (nu.value.trim().length < 3) { state.toast("Username must be at least 3 characters", "error"); return; }
     addBtn.disabled = true;
     try {
-      await state.actions.createUser(nu.value.trim(), np.value, nr.value, ne.value.trim() || null);
+      await state.actions.createUser(nu.value.trim(), pw || null, nr.value, ne.value.trim() || null);
       state.toast("User created", "success");
       nu.value = np.value = ne.value = "";
       refresh();
@@ -4454,6 +4482,8 @@ function usersCard(state) {
   refresh();
   return el("div", { class: "card" }, el("h2", {}, "Dashboard users"),
     el("p", { class: "note" }, "Viewers can see all data; admins can also change configuration, calibration, firmware and users."),
+    sso.enabled ? el("p", { class: "note" },
+      `${sso.provider_name} sign-in matches users by email address; it never creates accounts, so add a user here (with their ${sso.provider_name} email) before they can sign in.`) : null,
     listEl,
     el("h3", { style: "margin:.8rem 0 .2rem" }, "Add a user"),
     addForm);

@@ -66,6 +66,9 @@ const state = {
   // { publish: bool } — whether ENABLE_PUBLIC_EMBEDS is on, which decides
   // whether the Device & admin page offers the "Publish data" panel at all.
   features: {},
+  // Single sign-on (OIDC, e.g. authentik), from /auth/status:
+  // { enabled, provider_name, password_login, login_url }.
+  sso: { enabled: false, password_login: true },
 };
 
 // ── selection helpers ─────────────────────────────────────────────────────────
@@ -391,6 +394,7 @@ function buildState() {
     deviceChannels: (id) => (id === activeId && d.deviceId === activeId ? d.channels : null),
     authUser: state.authUser,
     features: state.features,
+    sso: state.sso,
     toast,
     reload: loadData,
     actions: {
@@ -672,7 +676,11 @@ function wireEvents() {
   ui.refreshBtn.addEventListener("click", () => loadData({ full: true }));
   if (ui.logoutBtn) {
     ui.logoutBtn.addEventListener("click", async () => {
-      try { await auth.logout(); } catch (_) { /* ignore — clear locally anyway */ }
+      let r = null;
+      try { r = await auth.logout(); } catch (_) { /* ignore — clear locally anyway */ }
+      // SSO session: continue to the provider's logout, which sends the browser
+      // back to the dashboard afterwards.
+      if (r && r.redirect) { window.location.assign(r.redirect); return; }
       state.authUser = null;
       state.features = {};
       state.data = null;
@@ -718,14 +726,46 @@ function authField(labelText, input) {
   return el("label", { class: "auth-field" }, el("span", {}, labelText), input);
 }
 
+// Why a single-sign-on attempt failed, keyed by the ?sso_error= code the
+// callback redirects back with (see server/oidc.py).
+function ssoErrorMessage(code) {
+  const name = state.sso.provider_name || "the identity provider";
+  const messages = {
+    unknown_user: `Your ${name} account's email address does not belong to any dashboard user. Ask an administrator to add a user with that email.`,
+    ambiguous: "Several dashboard users share your email address. Ask an administrator to give each account its own address.",
+    email_unverified: `${name} reports your email address as not verified.`,
+    no_email: `${name} did not send an email address. Check that the "email" scope is granted to this application.`,
+    denied: `Sign-in was cancelled or ${name} denied access to this application.`,
+    state: "The sign-in took too long or was started in another browser. Please try again.",
+    disabled: "Single sign-on is not enabled on this server.",
+  };
+  return messages[code] || `Sign-in with ${name} failed. Please try again or contact an administrator.`;
+}
+
+function ssoButton() {
+  return el("a", { class: "btn sso-btn", href: state.sso.login_url },
+    `Sign in with ${state.sso.provider_name}`);
+}
+
 function renderLogin(opts = {}) {
+  const errLine = el("p", { class: "auth-error" }, opts.message || "");
+  const sso = state.sso.enabled;
+  if (!state.sso.password_login) {
+    // SSO only: no password form at all.
+    showAuthScreen(el("div", { class: "auth-card" },
+      el("h1", {}, "HiveHub Dashboard"),
+      el("p", { class: "auth-sub" }, "Sign in to view and manage your hives."),
+      errLine,
+      ssoButton()));
+    return;
+  }
   const u = el("input", { type: "text", autocomplete: "username", required: true });
   const p = el("input", { type: "password", autocomplete: "current-password", required: true });
-  const btn = el("button", { class: "btn", type: "submit" }, "Sign in");
-  const errLine = el("p", { class: "auth-error" }, opts.message || "");
+  const btn = el("button", { class: sso ? "btn ghost" : "btn", type: "submit" }, "Sign in");
   const form = el("form", { class: "auth-card" },
     el("h1", {}, "HiveHub Dashboard"),
     el("p", { class: "auth-sub" }, "Sign in to view and manage your hives."),
+    ...(sso ? [ssoButton(), el("p", { class: "auth-divider" }, "or with a password")] : []),
     authField("Username", u),
     authField("Password", p),
     errLine,
@@ -735,7 +775,7 @@ function renderLogin(opts = {}) {
     btn.disabled = true; errLine.textContent = "";
     try {
       const r = await auth.login(u.value, p.value);
-      state.authUser = r.user;
+      state.authUser = { ...r.user, auth: "password" };
       state.features = r.features || {};
       await startApp();
     } catch (err) {
@@ -744,10 +784,11 @@ function renderLogin(opts = {}) {
     }
   });
   showAuthScreen(form);
-  u.focus();
+  if (!sso) u.focus();
 }
 
 function renderSetup() {
+  if (!state.sso.password_login) { renderSsoSetup(); return; }
   const u = el("input", { type: "text", autocomplete: "username", required: true });
   const em = el("input", { type: "email", autocomplete: "email", placeholder: "you@example.com" });
   const p = el("input", { type: "password", autocomplete: "new-password", required: true });
@@ -771,9 +812,41 @@ function renderSetup() {
     btn.disabled = true; errLine.textContent = "";
     try {
       const r = await auth.setup(u.value, p.value, em.value);
-      state.authUser = r.user;
+      state.authUser = { ...r.user, auth: "password" };
       state.features = r.features || {};
       await startApp();
+    } catch (err) {
+      errLine.textContent = err.message || "Setup failed";
+      btn.disabled = false;
+    }
+  });
+  showAuthScreen(form);
+  u.focus();
+}
+
+// First run with password login disabled: the admin account is created without
+// a password, then claimed by signing in through the SSO provider with the same
+// email address.
+function renderSsoSetup() {
+  const name = state.sso.provider_name;
+  const u = el("input", { type: "text", autocomplete: "username", required: true });
+  const em = el("input", { type: "email", autocomplete: "email", required: true, placeholder: "you@example.com" });
+  const btn = el("button", { class: "btn", type: "submit" }, `Create admin and sign in with ${name}`);
+  const errLine = el("p", { class: "auth-error" });
+  const form = el("form", { class: "auth-card" },
+    el("h1", {}, "Welcome to HiveHub"),
+    el("p", { class: "auth-sub" },
+      `Create the first administrator. You then sign in with ${name}, which must report exactly this email address.`),
+    authField("Username", u),
+    authField(`Email (your ${name} address)`, em),
+    errLine,
+    el("div", { class: "form-actions" }, btn));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    btn.disabled = true; errLine.textContent = "";
+    try {
+      await auth.setup(u.value, null, em.value);
+      window.location.assign(state.sso.login_url);
     } catch (err) {
       errLine.textContent = err.message || "Setup failed";
       btn.disabled = false;
@@ -829,8 +902,18 @@ async function init() {
         : "Could not reach the HiveHub API: " + err.message));
     return;
   }
+  if (status.sso) state.sso = status.sso;
+  // Back from a failed SSO attempt: show why, and drop the code from the URL so
+  // a reload does not show it again.
+  const params = new URLSearchParams(window.location.search);
+  const ssoError = params.get("sso_error");
+  if (ssoError) {
+    params.delete("sso_error");
+    const qs = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (qs ? "?" + qs : "") + window.location.hash);
+  }
   if (status.setup_required) { renderSetup(); return; }
-  if (!status.authenticated) { renderLogin(); return; }
+  if (!status.authenticated) { renderLogin(ssoError ? { message: ssoErrorMessage(ssoError) } : {}); return; }
   state.authUser = status.user;
   state.features = status.features || {};
   await startApp(status.devices);

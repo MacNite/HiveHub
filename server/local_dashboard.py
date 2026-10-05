@@ -14,16 +14,19 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
+from psycopg import errors as pg_errors
 
 from auth import (
     create_dashboard_session_token,
     create_dashboard_user,
+    current_dashboard_session,
     dashboard_admin_count,
+    dashboard_email_taken,
     dashboard_user_count,
-    decode_dashboard_session_token,
     delete_dashboard_user,
     get_dashboard_user_by_username,
+    get_dashboard_users_by_email,
     list_dashboard_users,
     require_dashboard_admin,
     require_dashboard_session,
@@ -34,6 +37,7 @@ from auth import (
     set_dashboard_user_password,
     touch_dashboard_user_login,
     verify_password,
+    UNUSABLE_PASSWORD,
     _public_dashboard_user,
 )
 from recordings import (
@@ -51,8 +55,8 @@ from commands import (
     latest_hiveinside_relays,
     queue_relay_firmware_update,
 )
+import oidc
 from config import (
-    DASHBOARD_SESSION_COOKIE,
     ENABLE_PUBLIC_EMBEDS,
     NOTIFY_MIN_SEVERITY,
     VAPID_PUBLIC_KEY,
@@ -184,7 +188,7 @@ def dashboard_features() -> dict:
 @router.get("/api/v1/local/auth/status", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
 def local_auth_status(request: Request):
     """Tell the dashboard whether to show the setup wizard, login, or the app."""
-    payload = decode_dashboard_session_token(request.cookies.get(DASHBOARD_SESSION_COOKIE, ""))
+    payload = current_dashboard_session(request)
     user = None
     if payload:
         # Read the live row so the email (which can change after login) is fresh.
@@ -194,10 +198,15 @@ def local_auth_status(request: Request):
             if record
             else {"username": payload["username"], "role": payload["role"]}
         )
+    if user is not None:
+        user["auth"] = payload.get("auth", "password")
     result = {
         "setup_required": dashboard_user_count() == 0,
         "authenticated": bool(payload),
         "user": user,
+        # Pre-login: whether to offer "Sign in with <provider>" and/or the
+        # password form.
+        "sso": oidc.sso_features(),
     }
     if payload:
         # Ship the device list with the auth check so an already-signed-in
@@ -209,17 +218,34 @@ def local_auth_status(request: Request):
 
 @router.post("/api/v1/local/auth/setup", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
 def local_auth_setup(body: DashboardSetupIn, response: Response):
-    """First-run wizard: create the initial admin. No-op once any account exists."""
+    """First-run wizard: create the initial admin. No-op once any account exists.
+
+    With password login disabled (SSO only) the admin is created without a
+    password and no session is issued: the dashboard sends the browser through
+    the SSO login, which then has to map the given e-mail to this account.
+    """
     if dashboard_user_count() > 0:
         raise HTTPException(status_code=409, detail="Setup has already been completed")
-    user = create_dashboard_user(body.username, body.password, "admin", body.email)
-    touch_dashboard_user_login(user["id"])
-    set_dashboard_session_cookie(response, create_dashboard_session_token(user))
-    return {"user": _public_dashboard_user(user), "features": dashboard_features()}
+    if oidc.password_login_enabled():
+        if not body.password:
+            raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+        user = create_dashboard_user(body.username, body.password, "admin", body.email)
+        touch_dashboard_user_login(user["id"])
+        set_dashboard_session_cookie(response, create_dashboard_session_token(user))
+        return {"user": _public_dashboard_user(user), "features": dashboard_features()}
+    if not body.email:
+        raise HTTPException(
+            status_code=422,
+            detail=f"An email address is required: it is how {oidc.OIDC_PROVIDER_NAME} sign-in finds this account",
+        )
+    user = create_dashboard_user(body.username, None, "admin", body.email)
+    return {"user": _public_dashboard_user(user), "sso_login": True}
 
 
 @router.post("/api/v1/local/auth/login", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
 def local_auth_login(body: DashboardLoginIn, response: Response):
+    if not oidc.password_login_enabled():
+        raise HTTPException(status_code=403, detail="Password sign-in is disabled; use single sign-on")
     user = get_dashboard_user_by_username(body.username)
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -229,9 +255,77 @@ def local_auth_login(body: DashboardLoginIn, response: Response):
 
 
 @router.post("/api/v1/local/auth/logout", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
-def local_auth_logout(response: Response):
+def local_auth_logout(request: Request, response: Response):
+    """Clear the session. For an SSO session the response also carries the
+    provider's end-session URL, so the dashboard can sign the user out there
+    too (RP-initiated logout) instead of leaving the provider session alive."""
+    payload = current_dashboard_session(request)
     clear_dashboard_session_cookie(response)
-    return {"ok": True}
+    result = {"ok": True}
+    if payload and payload.get("auth") == "oidc" and oidc.oidc_configured():
+        url = oidc.end_session_url(request, payload.get("idt"))
+        if url:
+            result["redirect"] = url
+    return result
+
+
+# ── Single sign-on (OpenID Connect, e.g. authentik) ──────────────────────────
+# Both endpoints are plain browser navigations (not fetch calls), so failures
+# are reported by redirecting back to the dashboard with ?sso_error=<code>.
+
+
+@router.get("/api/v1/local/auth/oidc/login", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
+def local_auth_oidc_login(request: Request):
+    if not oidc.oidc_configured():
+        return RedirectResponse(oidc.dashboard_error_redirect("disabled"), status_code=303)
+    response = RedirectResponse("", status_code=303)
+    try:
+        response.headers["location"] = oidc.start_login(request, response)
+    except oidc.OIDCError as exc:
+        oidc.logger.warning("SSO login could not start: %s", exc)
+        return RedirectResponse(oidc.dashboard_error_redirect(exc.code), status_code=303)
+    return response
+
+
+@router.get("/api/v1/local/auth/oidc/callback", dependencies=LOCAL_DASHBOARD_AUTH_DEP)
+def local_auth_oidc_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+):
+    def fail(code_: str) -> RedirectResponse:
+        resp = RedirectResponse(oidc.dashboard_error_redirect(code_), status_code=303)
+        oidc.clear_flow_cookie(resp)
+        return resp
+
+    if not oidc.oidc_configured():
+        return fail("disabled")
+    if error:
+        # The provider refused (user cancelled, application policy denied, …).
+        oidc.logger.info("SSO provider returned error %s: %s", error, error_description[:300])
+        return fail("denied" if error == "access_denied" else "provider")
+    try:
+        email, id_token = oidc.complete_login(request, code, state)
+    except oidc.OIDCError as exc:
+        oidc.logger.warning("SSO login failed (%s): %s", exc.code, exc)
+        return fail(exc.code)
+    matches = get_dashboard_users_by_email(email)
+    if not matches:
+        oidc.logger.info("SSO login refused: no dashboard account has the email %s", email)
+        return fail("unknown_user")
+    if len(matches) > 1:
+        oidc.logger.warning("SSO login refused: several dashboard accounts share the email %s", email)
+        return fail("ambiguous")
+    user = matches[0]
+    touch_dashboard_user_login(user["id"])
+    response = RedirectResponse(oidc.DASHBOARD_PATH, status_code=303)
+    oidc.clear_flow_cookie(response)
+    set_dashboard_session_cookie(
+        response, create_dashboard_session_token(user, auth_method="oidc", id_token=id_token)
+    )
+    return response
 
 
 @router.post("/api/v1/local/auth/password")
@@ -239,6 +333,8 @@ def local_auth_change_password(
     body: DashboardChangePasswordIn, session: dict = Depends(require_dashboard_session)
 ):
     """Change the logged-in user's own password (re-auth with current password)."""
+    if not oidc.password_login_enabled():
+        raise HTTPException(status_code=403, detail="Password sign-in is disabled; use single sign-on")
     user = get_dashboard_user_by_username(session["username"])
     if not user or not verify_password(body.current_password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
@@ -259,7 +355,17 @@ def local_auth_update_email(
     user = get_dashboard_user_by_username(session["username"])
     if not user:
         raise HTTPException(status_code=404, detail="Account not found")
-    set_dashboard_user_email(user["id"], body.email)
+    if oidc.oidc_configured() and not body.email and user["password_hash"] == UNUSABLE_PASSWORD:
+        # The e-mail is the only way an SSO-only account can sign in.
+        raise HTTPException(
+            status_code=400, detail="This account signs in via single sign-on, so it needs an email address"
+        )
+    if body.email and dashboard_email_taken(body.email, exclude_id=user["id"]):
+        raise HTTPException(status_code=409, detail="That email address is already used by another account")
+    try:
+        set_dashboard_user_email(user["id"], body.email)
+    except pg_errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="That email address is already used by another account")
     return {"ok": True, "email": body.email}
 
 
@@ -323,12 +429,29 @@ def local_list_dashboard_users():
 
 @router.post("/api/v1/local/auth/users", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_create_dashboard_user(body: DashboardCreateUserIn):
-    """Create a new dashboard account with the admin or viewer role (admin only)."""
+    """Create a new dashboard account with the admin or viewer role (admin only).
+
+    Without a password the account is SSO-only: it signs in through the OIDC
+    provider, matched by its e-mail. That is only allowed while SSO is enabled,
+    and when password login is disabled every new account is SSO-only.
+    """
+    password = body.password if oidc.password_login_enabled() else None
+    if not password:
+        if not oidc.oidc_configured():
+            raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+        if not body.email:
+            raise HTTPException(
+                status_code=422, detail="Single sign-on accounts need an email address to be matched by"
+            )
     if get_dashboard_user_by_username(body.username):
         raise HTTPException(status_code=409, detail="That username is already taken")
-    return _public_dashboard_user(
-        create_dashboard_user(body.username, body.password, body.role, body.email)
-    )
+    if body.email and dashboard_email_taken(body.email):
+        raise HTTPException(status_code=409, detail="That email address is already used by another account")
+    try:
+        user = create_dashboard_user(body.username, password, body.role, body.email)
+    except pg_errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="That username or email address is already in use")
+    return _public_dashboard_user(user)
 
 
 @router.delete("/api/v1/local/auth/users/{user_id}")

@@ -904,9 +904,12 @@ def normalize_optional_email(value: Optional[str]) -> Optional[str]:
 
 
 class DashboardSetupIn(BaseModel):
-    """First-run wizard payload: creates the initial admin account."""
+    """First-run wizard payload: creates the initial admin account.
+
+    The password may only be omitted when password login is disabled in favour
+    of SSO; the e-mail is then required (it is the SSO identity)."""
     username: str = Field(..., min_length=3, max_length=64)
-    password: str = Field(..., min_length=8, max_length=256)
+    password: Optional[str] = Field(default=None, min_length=8, max_length=256)
     email: Optional[str] = Field(default=None, max_length=254)
 
     _norm_email = field_validator("email")(lambda cls, v: normalize_optional_email(v))
@@ -918,8 +921,10 @@ class DashboardLoginIn(BaseModel):
 
 
 class DashboardCreateUserIn(BaseModel):
+    """Omitting the password creates an SSO-only account (allowed only while SSO
+    is enabled, and then the e-mail is required)."""
     username: str = Field(..., min_length=3, max_length=64)
-    password: str = Field(..., min_length=8, max_length=256)
+    password: Optional[str] = Field(default=None, min_length=8, max_length=256)
     role: Literal["admin", "viewer"] = "viewer"
     email: Optional[str] = Field(default=None, max_length=254)
 

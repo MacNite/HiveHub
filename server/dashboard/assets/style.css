@@ -590,6 +590,8 @@ select:focus-visible, input:focus-visible, canvas:focus-visible {
   border: 1px solid var(--line); border-radius: 10px; background: var(--card); width: 100%;
 }
 .auth-error { color: var(--danger); font-size: .85rem; min-height: 1.1em; margin: .1rem 0 .4rem; }
+.sso-btn { display: block; text-align: center; text-decoration: none; }
+.auth-divider { margin: .7rem 0 .3rem; text-align: center; color: var(--ink-faint); font-size: .8rem; }
 
 /* ── Publish data (public embeds) ───────────────────────────── */
 /* Two columns: the publish form on the left at a fixed, form-sized width, and

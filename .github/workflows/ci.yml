@@ -141,7 +141,8 @@ jobs:
                             test-data/test_hiveheart_fft.py \
                             test-data/test_mqtt_ha_discovery.py \
                             test-data/test_relay_ota_gate.py test-data/test_publish.py \
-                            test-data/test_channel_links.py
+                            test-data/test_channel_links.py \
+                            test-data/test_oidc_sso.py
       # The mock server ships verbatim copies of the production insights engine
       # and its FFT helper: its Dockerfile build context is test-data/mock-server,
       # so it cannot reach ../../server and the files have to be duplicated. Left
