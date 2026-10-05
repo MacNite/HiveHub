@@ -92,6 +92,11 @@ def dashboard_session_secret() -> str:
     return _dashboard_secret_cache
 
 
+# Stored instead of a hash for SSO-only accounts (created without a password):
+# it never parses as algo$iters$salt$hash, so verify_password always fails.
+UNUSABLE_PASSWORD = "!"
+
+
 def hash_password(password: str) -> str:
     """Salted PBKDF2-HMAC-SHA256 hash, formatted algo$iters$salt$hash."""
     salt = secrets.token_bytes(16)
@@ -113,16 +118,23 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
-def create_dashboard_session_token(user: dict) -> str:
+def create_dashboard_session_token(
+    user: dict, auth_method: str = "password", id_token: Optional[str] = None
+) -> str:
+    """auth_method is "password" or "oidc". For SSO sessions the provider's ID
+    token is kept (signed, HttpOnly) as the id_token_hint for logout."""
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user["id"]),
         "username": user["username"],
         "role": user["role"],
         "scope": "dashboard",
+        "auth": auth_method,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=DASHBOARD_SESSION_TTL_HOURS)).timestamp()),
     }
+    if id_token:
+        payload["idt"] = id_token
     return jwt.encode(payload, dashboard_session_secret(), algorithm="HS256")
 
 
@@ -160,6 +172,7 @@ def _public_dashboard_user(user: dict) -> dict:
         "username": user["username"],
         "role": user["role"],
         "email": user.get("email"),
+        "has_password": user.get("password_hash", UNUSABLE_PASSWORD) != UNUSABLE_PASSWORD,
         "created_at": user.get("created_at"),
         "last_login_at": user.get("last_login_at"),
     }
@@ -204,6 +217,27 @@ def get_dashboard_user_by_username(username: str) -> Optional[dict]:
     return _dashboard_user_row(row) if row else None
 
 
+def get_dashboard_users_by_email(email: str) -> list[dict]:
+    """Accounts whose e-mail matches case-insensitively. At most two are returned:
+    enough for the SSO login to tell "exactly one" from "ambiguous" on a
+    database where the unique index could not be created."""
+    if not email:
+        return []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, username, password_hash, role, email, created_at, last_login_at "
+                "FROM dashboard_users WHERE lower(email) = lower(%s) ORDER BY id LIMIT 2;",
+                (email.strip(),),
+            )
+            rows = cur.fetchall()
+    return [_dashboard_user_row(r) for r in rows]
+
+
+def dashboard_email_taken(email: Optional[str], exclude_id: Optional[int] = None) -> bool:
+    return any(u["id"] != exclude_id for u in get_dashboard_users_by_email(email or ""))
+
+
 def list_dashboard_users() -> list[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -216,15 +250,21 @@ def list_dashboard_users() -> list[dict]:
 
 
 def create_dashboard_user(
-    username: str, password: str, role: str, email: Optional[str] = None
+    username: str, password: Optional[str], role: str, email: Optional[str] = None
 ) -> dict:
+    """password=None creates an SSO-only account (it cannot sign in with a password)."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO dashboard_users (username, password_hash, role, email) "
                 "VALUES (%s, %s, %s, %s) "
                 "RETURNING id, username, password_hash, role, email, created_at, last_login_at;",
-                (username.strip(), hash_password(password), role, email),
+                (
+                    username.strip(),
+                    hash_password(password) if password else UNUSABLE_PASSWORD,
+                    role,
+                    email,
+                ),
             )
             row = cur.fetchone()
             conn.commit()
@@ -270,6 +310,20 @@ def touch_dashboard_user_login(user_id: int) -> None:
             conn.commit()
 
 
+def current_dashboard_session(request: Request) -> Optional[dict]:
+    """The decoded session from the request's cookie, or None."""
+    payload = decode_dashboard_session_token(request.cookies.get(DASHBOARD_SESSION_COOKIE, ""))
+    if not payload:
+        return None
+    # Once password login is switched off, sessions it issued earlier stop
+    # working too (tokens from before SSO existed carry no "auth" claim).
+    from oidc import password_login_enabled  # oidc imports this module
+
+    if payload.get("auth", "password") != "oidc" and not password_login_enabled():
+        return None
+    return payload
+
+
 def require_dashboard_session(request: Request) -> dict:
     """Gate dashboard data/control endpoints behind a valid login session.
 
@@ -279,7 +333,7 @@ def require_dashboard_session(request: Request) -> dict:
     """
     if not ENABLE_LOCAL_DASHBOARD:
         raise HTTPException(status_code=404, detail="Not Found")
-    payload = decode_dashboard_session_token(request.cookies.get(DASHBOARD_SESSION_COOKIE, ""))
+    payload = current_dashboard_session(request)
     if not payload:
         raise HTTPException(status_code=401, detail="Authentication required")
     return payload

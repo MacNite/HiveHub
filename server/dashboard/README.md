@@ -26,6 +26,13 @@ it is protected by **username + password login**:
 - **Alert email:** each account can store a contact **email** (optional, set from
   **Device & admin → Your account** or when an admin creates a user). It is the
   destination for insights-based alerts once alert notifications are enabled.
+- **Single sign-on (optional):** with `OIDC_ENABLED=true` the login page also
+  offers **Sign in with authentik** (any OpenID Connect provider works). The
+  provider's e-mail address is matched to an existing account's email — SSO
+  never creates accounts and never changes roles. Admins can create
+  **SSO-only** accounts by leaving the password empty, and
+  `OIDC_DISABLE_PASSWORD_LOGIN=true` turns password sign-in off entirely. See
+  [docs/sso-authentik.md](../../docs/sso-authentik.md).
 
 This makes it safe to expose to the internet, but serving it over **HTTPS** (set
 `DASHBOARD_COOKIE_SECURE=true`) and/or behind a reverse proxy is still

@@ -28,6 +28,8 @@ export const auth = {
   status: () => req("/status"),
   setup: (username, password, email) => req("/setup", { method: "POST", ...jsonBody({ username, password, email }) }),
   login: (username, password) => req("/login", { method: "POST", ...jsonBody({ username, password }) }),
+  // For a single-sign-on session the reply carries `redirect`: the provider's
+  // end-session URL, so the user is signed out there as well.
   logout: () => req("/logout", { method: "POST" }),
   changePassword: (current_password, new_password) =>
     req("/password", { method: "POST", ...jsonBody({ current_password, new_password }) }),

@@ -1,6 +1,7 @@
 """Database pool, connection helper and schema bootstrap (init_db)."""
 
 import hashlib
+import logging
 
 from psycopg_pool import ConnectionPool
 
@@ -805,3 +806,37 @@ def init_db():
                 """
             )
             conn.commit()
+
+            _ensure_dashboard_email_unique(cur)
+            conn.commit()
+
+
+def _ensure_dashboard_email_unique(cur) -> None:
+    """Make dashboard_users.email unique (case-insensitive, NULLs allowed).
+
+    The e-mail is the identity single sign-on maps to, so two accounts sharing
+    one would make an SSO login ambiguous. A database that already holds
+    duplicates cannot get the index: rather than refusing to start (and taking
+    measurement ingestion down with the dashboard), that is logged loudly, and
+    SSO refuses to sign in the duplicated addresses until they are fixed.
+    """
+    cur.execute(
+        """
+        SELECT lower(email), count(*) FROM dashboard_users
+        WHERE email IS NOT NULL AND email <> ''
+        GROUP BY lower(email) HAVING count(*) > 1;
+        """
+    )
+    dupes = cur.fetchall()
+    if dupes:
+        logging.getLogger("hivescale.db").error(
+            "dashboard_users: these email addresses are used by several accounts, so the "
+            "unique email index was NOT created and SSO sign-in is refused for them: %s. "
+            "Give each account its own address and restart.",
+            ", ".join(f"{e} ({n}x)" for e, n in dupes),
+        )
+        return
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS dashboard_users_email_lower_key "
+        "ON dashboard_users (lower(email)) WHERE email IS NOT NULL AND email <> '';"
+    )

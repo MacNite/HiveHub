@@ -34,6 +34,19 @@ services:
       # it to false only for plain-HTTP local testing, where a secure cookie
       # would otherwise never be sent and login would appear to fail.
       DASHBOARD_COOKIE_SECURE: '${DASHBOARD_COOKIE_SECURE:-true}'
+      # Single sign-on for the dashboard via authentik / OpenID Connect. Users
+      # are matched to existing dashboard accounts by e-mail; see
+      # docs/sso-authentik.md.
+      OIDC_ENABLED: '${OIDC_ENABLED:-false}'
+      OIDC_ISSUER: '${OIDC_ISSUER:-}'
+      OIDC_CLIENT_ID: '${OIDC_CLIENT_ID:-}'
+      OIDC_CLIENT_SECRET: '${OIDC_CLIENT_SECRET:-}'
+      OIDC_PROVIDER_NAME: '${OIDC_PROVIDER_NAME:-authentik}'
+      OIDC_SCOPES: '${OIDC_SCOPES:-openid email profile}'
+      OIDC_REDIRECT_URI: '${OIDC_REDIRECT_URI:-}'
+      OIDC_POST_LOGOUT_REDIRECT_URI: '${OIDC_POST_LOGOUT_REDIRECT_URI:-}'
+      OIDC_REQUIRE_EMAIL_VERIFIED: '${OIDC_REQUIRE_EMAIL_VERIFIED:-true}'
+      OIDC_DISABLE_PASSWORD_LOGIN: '${OIDC_DISABLE_PASSWORD_LOGIN:-false}'
       # "Publish data": lets a dashboard admin publish ONE chart at a time under
       # an unguessable link that is served without a login, for embedding in a
       # website (see docs/publish-embed.md). Nothing is public until somebody

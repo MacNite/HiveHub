@@ -41,6 +41,43 @@ DASHBOARD_COOKIE_SECURE = os.environ.get("DASHBOARD_COOKIE_SECURE", "false").str
     "yes",
     "on",
 )
+# Single sign-on for the local dashboard via OpenID Connect (written against
+# authentik, but any standards-compliant provider works). The backend runs the
+# Authorization Code flow with PKCE as a confidential client, validates the ID
+# token against the provider's JWKS, and then issues the normal dashboard
+# session cookie — no provider token ever reaches the browser. Users are mapped
+# to EXISTING dashboard accounts by e-mail address (case-insensitive); an
+# unknown address is refused, and the role always comes from the local account.
+# OIDC_ISSUER is the provider's issuer URL, for authentik
+# https://auth.example.com/application/o/<application-slug>/ — every endpoint is
+# discovered from its /.well-known/openid-configuration.
+OIDC_ENABLED = os.environ.get("OIDC_ENABLED", "false").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+OIDC_ISSUER = os.environ.get("OIDC_ISSUER", "").strip()
+OIDC_CLIENT_ID = os.environ.get("OIDC_CLIENT_ID", "").strip()
+OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
+OIDC_SCOPES = os.environ.get("OIDC_SCOPES", "openid email profile").strip()
+# Label on the login button ("Sign in with <label>").
+OIDC_PROVIDER_NAME = os.environ.get("OIDC_PROVIDER_NAME", "authentik").strip() or "authentik"
+# Callback URL registered at the provider. Defaults to
+# PUBLIC_BASE_URL + /api/v1/local/auth/oidc/callback.
+OIDC_REDIRECT_URI = os.environ.get("OIDC_REDIRECT_URI", "").strip()
+# Where the provider sends the browser after RP-initiated logout. Defaults to
+# PUBLIC_BASE_URL + /dashboard/.
+OIDC_POST_LOGOUT_REDIRECT_URI = os.environ.get("OIDC_POST_LOGOUT_REDIRECT_URI", "").strip()
+# Refuse logins whose email_verified claim is not true. authentik reports
+# email_verified=false for users unless the "email" scope mapping says
+# otherwise — set this to false if you trust the addresses in your authentik.
+OIDC_REQUIRE_EMAIL_VERIFIED = os.environ.get(
+    "OIDC_REQUIRE_EMAIL_VERIFIED", "true"
+).strip().lower() in ("1", "true", "yes", "on")
+# Only takes effect while OIDC is enabled and configured (so it can never lock
+# everybody out): hides the password form and refuses password logins.
+OIDC_DISABLE_PASSWORD_LOGIN = os.environ.get(
+    "OIDC_DISABLE_PASSWORD_LOGIN", "false"
+).strip().lower() in ("1", "true", "yes", "on")
+OIDC_HTTP_TIMEOUT_SECONDS = int(os.environ.get("OIDC_HTTP_TIMEOUT_SECONDS", "10"))
 # Public data embeds ("Publish data", see server/publish.py). An admin can
 # publish a chart of selected hives from the dashboard; the server then serves
 # exactly that slice — and nothing else — without a login, under
