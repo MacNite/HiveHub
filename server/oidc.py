@@ -48,6 +48,7 @@ from config import (
     OIDC_REQUIRE_EMAIL_VERIFIED,
     OIDC_SCOPES,
     PUBLIC_BASE_URL,
+    SERVER_VERSION,
 )
 
 logger = logging.getLogger("hivescale.oidc")
@@ -124,9 +125,18 @@ def post_logout_redirect_uri(request: Request) -> str:
 # ── provider HTTP ────────────────────────────────────────────────────────────
 
 
+# urllib's default "Python-urllib/3.x" is blocked by Cloudflare's Browser
+# Integrity Check (error 1010) when the provider sits behind Cloudflare.
+_USER_AGENT = f"HiveHub/{SERVER_VERSION} (OpenID Connect client)"
+
+
 def _http_json(url: str, data: Optional[dict] = None, headers: Optional[dict] = None) -> dict:
     body = urllib.parse.urlencode(data).encode() if data is not None else None
-    req = urllib.request.Request(url, data=body, headers={"Accept": "application/json", **(headers or {})})
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Accept": "application/json", "User-Agent": _USER_AGENT, **(headers or {})},
+    )
     try:
         with urllib.request.urlopen(req, timeout=OIDC_HTTP_TIMEOUT_SECONDS) as resp:
             return json.loads(resp.read().decode("utf-8"))
