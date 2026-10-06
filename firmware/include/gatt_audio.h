@@ -34,6 +34,10 @@
 //   → finish(&stats) → cleanup()
 // cleanup() releases the NimBLE stack and the ring, and is safe to call at any
 // point after begin() — including after a failed begin().
+//
+// begin() brings the radio up itself, and the caller should already have its
+// TLS session open when it does. 0.30.6 inverted that and the handshake failed
+// underneath the controller; hivehub_network.cpp carries the field evidence.
 #pragma once
 
 #include <Arduino.h>
@@ -76,6 +80,10 @@ const char* errorText(uint8_t error);
 // Connect, authenticate and start capture. `durationDs` is deciseconds, 0 for
 // open-ended. `gainDb` is clamped by the node to -20..+20. Returns false with
 // lastError() set; the caller must still call cleanup().
+//
+// The node arms a 10-second window at connect and cancels it only when START
+// claims the link, so everything between those two points is on a clock: do
+// not put unrelated work inside this call.
 bool begin(const String& mac, uint16_t durationDs, int8_t gainDb);
 
 // Drain up to `max` PCM bytes. Returns 0 when nothing has arrived yet — that is

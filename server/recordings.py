@@ -32,6 +32,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
+from starlette.requests import ClientDisconnect
 
 from auth import require_api_key, require_device_key
 from commands import create_command
@@ -74,6 +75,14 @@ MAX_PCM_SLICE = 256 * 1024
 # gone, not slow.
 RECORDING_REQUESTED_TIMEOUT_MIN = 45
 RECORDING_STREAMING_TIMEOUT_MIN = 5
+
+# What expire_stale_recordings() writes when the hub never reported. These are
+# guesses, and finalize_from_command_result() lets the hub's own verdict replace
+# them when it turns up late — a hub that could not post its result straight
+# after a session holds it and delivers it on its next cycle.
+SWEEP_NO_AUDIO_MSG = "the hub started uploading but no audio arrived"
+SWEEP_NEVER_PICKED_UP_MSG = ("the hub never picked this request up \u2014 offline, "
+                             "or the command was dropped")
 
 
 def _path_for(device_id: str, recording_id: int) -> Path:
@@ -215,26 +224,23 @@ def expire_stale_recordings() -> None:
                 UPDATE hive_recordings
                 SET status = 'failed',
                     completed_at = now(),
-                    error = COALESCE(error,
-                        'the hub started uploading but no audio arrived')
+                    error = COALESCE(error, %s)
                 WHERE status = 'streaming'
                   AND bytes = 0
                   AND requested_at < now() - (%s || ' minutes')::interval;
                 """,
-                (RECORDING_STREAMING_TIMEOUT_MIN,),
+                (SWEEP_NO_AUDIO_MSG, RECORDING_STREAMING_TIMEOUT_MIN),
             )
             cur.execute(
                 """
                 UPDATE hive_recordings
                 SET status = 'failed',
                     completed_at = now(),
-                    error = COALESCE(error,
-                        'the hub never picked this request up \u2014 offline, or the '
-                        'command was dropped')
+                    error = COALESCE(error, %s)
                 WHERE status = 'requested'
                   AND requested_at < now() - (%s || ' minutes')::interval;
                 """,
-                (RECORDING_REQUESTED_TIMEOUT_MIN,),
+                (SWEEP_NEVER_PICKED_UP_MSG, RECORDING_REQUESTED_TIMEOUT_MIN),
             )
             conn.commit()
 
@@ -283,6 +289,24 @@ def finalize_from_command_result(device_id: str, command_id: int,
             if cur.rowcount:
                 logger.info("recording for command %s closed by command result "
                             "(success=%s)", command_id, success)
+            elif not success:
+                # Late: the sweep already failed the row with a guess. The hub's
+                # reason is better than the guess, so it replaces it — but only
+                # a sweep message, never a verdict /finalize wrote.
+                cur.execute(
+                    """
+                    UPDATE hive_recordings
+                    SET error = %s
+                    WHERE command_id = %s AND device_id = %s
+                      AND status = 'failed'
+                      AND error IN (%s, %s);
+                    """,
+                    (failed_msg, command_id, device_id,
+                     SWEEP_NO_AUDIO_MSG, SWEEP_NEVER_PICKED_UP_MSG),
+                )
+                if cur.rowcount:
+                    logger.info("recording for command %s: late command result "
+                                "replaced the stale-sweep message", command_id)
             conn.commit()
 
 
@@ -465,22 +489,41 @@ async def stream_recording(device_id: str, recording_id: int, request: Request):
 
     written = 0
     truncated = False
+    disconnected = False
     with open(path, "wb") as fh:
-        async for chunk in request.stream():
-            if not chunk:
-                continue
-            if written + len(chunk) > MAX_RECORDING_BYTES:
-                # Keep what fits and stop reading. The node bounds itself at 60 s,
-                # so this only fires for a hub that has gone wrong — and half a
-                # recording plus an explicit note beats an unbounded write.
-                chunk = chunk[: max(0, MAX_RECORDING_BYTES - written)]
-                truncated = True
-            if chunk:
-                fh.write(chunk)
-                fh.flush()
-                written += len(chunk)
-            if truncated:
-                break
+        try:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                if written + len(chunk) > MAX_RECORDING_BYTES:
+                    # Keep what fits and stop reading. The node bounds itself at
+                    # 60 s, so this only fires for a hub that has gone wrong —
+                    # and half a recording plus an explicit note beats an
+                    # unbounded write.
+                    chunk = chunk[: max(0, MAX_RECORDING_BYTES - written)]
+                    truncated = True
+                if chunk:
+                    fh.write(chunk)
+                    fh.flush()
+                    written += len(chunk)
+                if truncated:
+                    break
+        except ClientDisconnect:
+            # The hub hung up before the body ended — or, behind a reverse
+            # proxy, simply did not wait for this response: Traefik cancels the
+            # upstream request (logging a 499) the moment its client goes, even
+            # after a complete body. A hub whose BLE session fails to start
+            # sends the terminating chunk and closes at once, so this is the
+            # ordinary shape of that failure, not a server fault.
+            #
+            # Letting it propagate cost twice: a traceback in the log for every
+            # failed session, and the byte count below never written, so audio
+            # that DID land before a mid-session drop was recorded as 0 bytes
+            # and later swept as "no audio arrived". Keep what arrived. The
+            # row's error is deliberately left alone: the hub's command result
+            # carries the real reason, and finalize_from_command_result only
+            # fills an error that is still empty.
+            disconnected = True
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -495,6 +538,11 @@ async def stream_recording(device_id: str, recording_id: int, request: Request):
                      recording_id),
                 )
             conn.commit()
+    if disconnected:
+        logger.warning("recording %s: hub disconnected after %s bytes",
+                       recording_id, written)
+        # Nobody is left to read this; it is returned for symmetry and tests.
+        return {"status": "disconnected", "bytes": written}
     logger.info("recording %s: received %s bytes%s", recording_id, written,
                 " (truncated)" if truncated else "")
     return {"status": "ok", "bytes": written}

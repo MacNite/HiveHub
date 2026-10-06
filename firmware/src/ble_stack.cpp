@@ -5,6 +5,7 @@
     GATT_OTA_ENABLED
 
 #include <NimBLEDevice.h>
+#include <esp_bt.h>
 
 namespace blestack {
 namespace {
@@ -12,6 +13,40 @@ bool     s_up = false;
 uint32_t s_generation = 0;
 // Port lifetime in which a scan last ran. 0 = no scan yet this boot.
 uint32_t s_scanGeneration = 0;
+
+// Give back what a FAILED NimBLEDevice::init() left behind.
+//
+// init() brings the ESP-IDF controller up — esp_bt_controller_init() then
+// esp_bt_controller_enable() — before it reaches the NimBLE host, so a failure
+// at the host layer returns false with the controller still holding its
+// allocation. Nothing unwinds it on its own: NimBLEDevice::deinit() guards on
+// the library's own m_initialized flag, which a failed init never set, so it is
+// a no-op here; and release() below never runs because s_up was never set
+// either. The memory is stranded until the next reset.
+//
+// A field log from a 30-pin hub shows exactly what that costs. The audio relay
+// asked for the radio with WiFi and a TLS session resident, got
+//
+//     E NimBLEDevice: esp_nimble_hci_init() failed; err=257   (ESP_ERR_NO_MEM)
+//
+// and the cycle went on: free heap 91 kB at the start of the attempt, 71 kB at
+// the end of the cycle with everything else torn down, and a minimum free heap
+// for the cycle of 1456 bytes. The failed recording was the harmless half of
+// that. The command-result POST and the OTA check that follow it each open a
+// fresh TLS session, and they ran on ~1.4 kB of headroom.
+//
+// Deliberately NOT esp_bt_controller_mem_release(): that hands the BLE memory
+// back permanently and the next cycle's measurement scan would find no radio.
+// Disable + deinit returns the controller to IDLE, where a later acquire() —
+// this cycle's or the next one's — can try again.
+void unwindFailedInit() {
+  if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
+    esp_bt_controller_disable();
+  }
+  if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED) {
+    esp_bt_controller_deinit();
+  }
+}
 }  // namespace
 
 bool acquire() {
@@ -22,13 +57,22 @@ bool acquire() {
   // classic ESP32, whose BT controller wants tens of kilobytes and which has
   // far less DRAM than the C6 to begin with. The audio relay in particular asks
   // for the stack with WiFi connected AND a TLS session already open, so this
-  // is the tightest moment in the whole firmware.
+  // is the tightest moment in the whole firmware. That order is deliberate and
+  // was tested the other way round in 0.30.6: see gatt_audio.cpp: mbedtls needs
+  // contiguous 16 kB record buffers and loses that race to a resident
+  // controller, so the controller is the one that bids last.
   //
   // Returning here rather than pressing on is the point: none of NimBLE's host
   // API is usable after a failed init, and calling getScan() or createClient()
   // against an uninitialised host is a fault, not an error code.
   if (!NimBLEDevice::init("")) {
     Serial.println("[BLE] stack failed to start (no memory for the controller?)");
+    // s_up false means no lifetime of ours is running, so there is nothing live
+    // to pull out from under: whatever init() got as far as allocating is
+    // unreachable and ours to give back. (A stack that WAS already up makes
+    // init() return true, so this branch cannot be reached with s_up set --
+    // the guard is there so a future caller cannot make it so.)
+    if (!s_up) unwindFailedInit();
     return false;
   }
   if (!s_up) {

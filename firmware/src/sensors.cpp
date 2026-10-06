@@ -602,6 +602,23 @@ void buildMeasurementDoc(JsonDocument& doc) {
 #endif
   MicMeasurement micResult;
   if (wiredMicUsed) micResult = readMicSamples();
+  // Release the I2S channel the moment the samples are in hand, rather than
+  // leaving it to the deep-sleep prep in storage_power.cpp.
+  //
+  // The channel holds dma_desc_num * dma_frame_num * slots * 4 B — 8 kB with
+  // the settings in mics.cpp — of DMA-capable internal RAM, which is exactly
+  // the memory the BT controller needs when the audio relay asks for the radio
+  // later in the same cycle. Held to deep sleep it was resident through the
+  // whole of that, and on the classic ESP32 it is resident on top of a heap the
+  // 2048-point double-precision FFT above has just finished fragmenting. The
+  // C6 pays neither cost: config.h forces ENABLE_INMP441_MICS off there, which
+  // is a large part of why the same relay starts on one board and not the other.
+  //
+  // Unconditional and idempotent: shutdownMicsI2s() returns immediately when
+  // nothing is installed, which covers the BLE-override path above. The next
+  // cycle is a fresh boot out of deep sleep, and readMicSamples() installs the
+  // channel itself, so nothing here needs to put it back.
+  shutdownMicsI2s();
 #endif
 
   // ── BeeCounter (entrance gates) — BLE/GATT only ────────────────────────────
