@@ -93,5 +93,6 @@ bool updateHiveInside(const String& mac, const String& firmwareUrl,
 bool updateBeeCounter(const String& mac, const String& firmwareUrl,
                       uint32_t expectedCrc32 = 0, String* outMsg = nullptr);
 void checkForOtaUpdate();
-void postCommandResult(int commandId, bool success, const String& message);
+// Returns false when the POST did not get a 2xx; most callers can ignore it.
+bool postCommandResult(int commandId, bool success, const String& message);
 void checkCommands();

@@ -274,6 +274,147 @@ check(f"every hive_recordings migration column is also in init_db "
       not _unapplied)
 
 
+
+# ── The hub hanging up mid-upload ──────────────────────────────────────────
+#
+# A hub whose BLE session fails to start closes the upload ~200 ms in, and
+# behind Traefik even a complete body arrives as a disconnect because the hub
+# does not wait for the response. That used to escape stream_recording as an
+# unhandled ClientDisconnect: a traceback per failed session, and the byte
+# count never written, so audio that had landed was recorded as 0 bytes.
+import asyncio  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
+
+from starlette.requests import ClientDisconnect  # noqa: E402
+
+
+class _FakeCursor:
+    def __init__(self, log):
+        self.log = log
+        self.rowcount = 1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.log.append((" ".join(sql.split()), params))
+
+    def fetchone(self):
+        return ("requested",)
+
+
+class _FakeConn:
+    def __init__(self, log):
+        self.log = log
+
+    def cursor(self):
+        return _FakeCursor(self.log)
+
+    def commit(self):
+        pass
+
+
+class _DisconnectingRequest:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    async def stream(self):
+        for c in self.chunks:
+            yield c
+        raise ClientDisconnect()
+
+
+def _run_stream(chunks, recording_id):
+    log = []
+
+    @contextmanager
+    def fake_get_conn():
+        yield _FakeConn(log)
+
+    real = recordings.get_conn
+    recordings.get_conn = fake_get_conn
+    try:
+        out = asyncio.run(recordings.stream_recording(
+            "hive-test", recording_id, _DisconnectingRequest(chunks)))
+    finally:
+        recordings.get_conn = real
+    return out, log
+
+
+for _label, _chunks in (("before any audio", []),
+                        ("mid-session", [b"\x01\x02" * 100, b"\x03" * 56])):
+    _expect = sum(len(c) for c in _chunks)
+    try:
+        _out, _log = _run_stream(_chunks, 9001)
+        _raised = None
+    except Exception as exc:  # noqa: BLE001 - the regression IS an escape
+        _out, _log, _raised = None, [], exc
+    check(f"a hub disconnecting {_label} does not escape stream_recording "
+          f"({type(_raised).__name__ if _raised else 'handled'})",
+          _raised is None)
+    _bytes_updates = [p for sql, p in _log if sql.startswith(
+        "UPDATE hive_recordings SET bytes")]
+    check(f"a hub disconnecting {_label} still records the {_expect} bytes "
+          f"that arrived",
+          bool(_bytes_updates) and _bytes_updates[-1][0] == _expect
+          and _out == {"status": "disconnected", "bytes": _expect})
+    check(f"a hub disconnecting {_label} leaves the error for the hub's own "
+          f"command result to fill",
+          not any(sql.startswith("UPDATE hive_recordings SET error")
+                  for sql, _ in _log))
+    try:
+        _path_for("hive-test", 9001).unlink()
+    except OSError:
+        pass
+
+
+# ── A command result that arrives after the stale sweep ────────────────────
+#
+# A hub that could not post its result right after a failed session holds it
+# for the next cycle, by which time the sweep has failed the row with a guess.
+# The hub's own reason must replace the guess — and only the guess.
+class _LateCursor(_FakeCursor):
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        # The in-flight UPDATE finds nothing: the sweep already closed the row.
+        self.rowcount = 0 if "status IN ('requested', 'streaming')" in sql else 1
+
+
+class _LateConn(_FakeConn):
+    def cursor(self):
+        return _LateCursor(self.log)
+
+
+def _run_late(success, message):
+    log = []
+
+    @contextmanager
+    def fake_get_conn():
+        yield _LateConn(log)
+
+    real = recordings.get_conn
+    recordings.get_conn = fake_get_conn
+    try:
+        recordings.finalize_from_command_result("hive-test", 77, success, message)
+    finally:
+        recordings.get_conn = real
+    return log
+
+
+_reason = "BLE stack would not start [heap free 16284, largest 13812, min 1456]"
+_late = [(sql, p) for sql, p in _run_late(False, _reason)
+         if sql.startswith("UPDATE hive_recordings SET error")]
+check("a late failed command result replaces the stale-sweep message",
+      len(_late) == 1 and _late[0][1][0] == _reason
+      and recordings.SWEEP_NO_AUDIO_MSG in _late[0][1]
+      and "status = 'failed'" in _late[0][0])
+check("a late successful command result does not rewrite a failed row",
+      not any(sql.startswith("UPDATE hive_recordings SET error")
+              for sql, _ in _run_late(True, "recorded 1 B")))
+
 if _failures:
     raise SystemExit(f"{_failures} check(s) failed")
 print("\nAll recording checks passed.")
