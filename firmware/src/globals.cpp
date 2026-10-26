@@ -134,6 +134,15 @@ RTC_NOINIT_ATTR uint32_t rtcRelayMagic;
 // power-on leaves here is never believed.
 RTC_NOINIT_ATTR uint32_t rtcRelayKind;
 
+// A relay result that could not be POSTed, carried to the next cycle instead of
+// being lost. See postRelayResult() in hivehub_network.cpp. Same rules as the
+// relay marker: magic written last, checked first.
+RTC_NOINIT_ATTR uint32_t rtcPendingResultMagic;
+RTC_NOINIT_ATTR uint32_t rtcPendingResultCommandId;
+RTC_NOINIT_ATTR uint32_t rtcPendingResultSuccess;
+RTC_NOINIT_ATTR uint32_t rtcPendingResultTries;
+RTC_NOINIT_ATTR char rtcPendingResultMsg[RTC_PENDING_RESULT_MSG_LEN];
+
 // A `start_provisioning` request that had to reboot to get a NimBLE port
 // lifetime its BLE scan is allowed to run in. See portal.cpp.
 RTC_NOINIT_ATTR uint32_t rtcPortalBootMagic;
