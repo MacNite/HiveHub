@@ -36,7 +36,7 @@ pio run -e xiao_esp32c6
 | SD MOSI | D10 | 18 | SPI MOSI (XIAO default MOSI) |
 | Inspection button | D2 | 2 | Button to GND, INPUT_PULLUP. One press toggles [inspection mode](inspection-mode.md) |
 | Setup button | — | 9 | The XIAO's **on-board USER/BOOT button**. Short press opens the provisioning AP, long press factory-resets |
-| (unused) | D0 | 0 | Free |
+| Setup button (optional) | D0 | 0 | Button to GND, INPUT_PULLUP. **Off by default** — enable with `#define ENABLE_EXTERNAL_SETUP_BUTTON 1` in `secrets.h`. A press opens the provisioning AP and wakes the hub from deep sleep to do it; no long-press factory reset. Free when not enabled. See [External setup button on D0](inspection-mode.md#external-setup-button-on-d0-optional) |
 
 > **The buttons swapped in firmware 0.25.0.** D2 used to be the setup button.
 > The one external, weatherproofable button on a hub sealed in an enclosure

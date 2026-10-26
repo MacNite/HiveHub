@@ -145,6 +145,9 @@ void setup() {
   releaseSleepPinHolds();
   configureC6Antenna();
   pinMode(SETUP_BUTTON_PIN, INPUT_PULLUP);
+#if HAS_EXTERNAL_SETUP_BUTTON
+  pinMode(EXTERNAL_SETUP_BUTTON_PIN, INPUT_PULLUP);
+#endif
 #ifdef CONFIG_IDF_TARGET_ESP32C6
   // Fallback for the case where the status register comes back empty on a wake
   // we know was a GPIO wake: read the pins instead. A firm press is often still
@@ -158,22 +161,30 @@ void setup() {
     const uint64_t reportedMask = gpioWakeMask;
     const bool setupPinIsDown = digitalRead(SETUP_BUTTON_PIN) == LOW;
     if (setupPinIsDown) gpioWakeMask |= 1ULL << SETUP_BUTTON_PIN;
+#if HAS_EXTERNAL_SETUP_BUTTON
+    const bool extSetupPinIsDown = digitalRead(EXTERNAL_SETUP_BUTTON_PIN) == LOW;
+    if (extSetupPinIsDown) gpioWakeMask |= 1ULL << EXTERNAL_SETUP_BUTTON_PIN;
+#else
+    const bool extSetupPinIsDown = false;
+#endif
 #if HAS_INSPECTION_BUTTON
     const bool inspectionPinIsDown = digitalRead(INSPECTION_BUTTON_PIN) == LOW;
     if (inspectionPinIsDown) gpioWakeMask |= 1ULL << INSPECTION_BUTTON_PIN;
 
     // A quick tap can be over before setup() runs.  If the C6 also supplied an
-    // empty wake-status register, neither live pin can identify it.  Only these
-    // two GPIOs are enabled as wake sources; prefer the weatherproof external
+    // empty wake-status register, no live pin can identify it.  Only the
+    // buttons are enabled as wake sources; prefer the weatherproof external
     // inspection button in that ambiguous case.  Opening inspection mode is
-    // safe and reversible, while treating it as the on-board setup button would
-    // strand the hub in its provisioning portal.
-    if (gpioWakeMask == 0 && !setupPinIsDown && !inspectionPinIsDown) {
+    // safe and reversible, while treating it as a setup button would strand
+    // the hub in its provisioning portal.
+    if (gpioWakeMask == 0 && !setupPinIsDown && !extSetupPinIsDown &&
+        !inspectionPinIsDown) {
       gpioWakeMask = 1ULL << INSPECTION_BUTTON_PIN;
       Serial.println(
           "[SETUP] Empty GPIO wake status after button release; assuming inspection button");
     }
 #endif
+    (void)extSetupPinIsDown;
     if (gpioWakeMask != reportedMask) {
       Serial.printf("[SETUP] GPIO wake status 0x%llX; augmented mask 0x%llX from pin levels\n",
                     (unsigned long long)reportedMask,
@@ -209,13 +220,17 @@ void setup() {
   // must be reflected in the cycle it woke, not one cycle later.
   inspection::begin(wakeReason, gpioWakeMask);
 
-  // Setup button — provisioning AP / factory reset. On the C6 both buttons wake
+  // Setup button — provisioning AP / factory reset. On the C6 all buttons wake
   // through the same GPIO cause, so the mask decides; a wake on the inspection
   // button must NOT open the portal, or every inspection would strand the hub
   // in AP mode for the portal timeout.
   const bool setupWake =
 #ifdef CONFIG_IDF_TARGET_ESP32C6
-      (gpioWakeMask & (1ULL << SETUP_BUTTON_PIN)) != 0;
+      (gpioWakeMask & (1ULL << SETUP_BUTTON_PIN)) != 0
+#if HAS_EXTERNAL_SETUP_BUTTON
+      || (gpioWakeMask & (1ULL << EXTERNAL_SETUP_BUTTON_PIN)) != 0
+#endif
+      ;
 #else
       (wakeReason & BIT(ESP_SLEEP_WAKEUP_EXT0)) != 0;
 #endif
@@ -227,7 +242,11 @@ void setup() {
   // ahead of the first measurement cycle, where the discovery scan owns the
   // NimBLE port lifetime.
   const bool portalBoot = consumePortalBootRequest();
-  const bool setupPinDown = digitalRead(SETUP_BUTTON_PIN) == LOW;
+  const bool setupPinDown = digitalRead(SETUP_BUTTON_PIN) == LOW
+#if HAS_EXTERNAL_SETUP_BUTTON
+      || digitalRead(EXTERNAL_SETUP_BUTTON_PIN) == LOW
+#endif
+      ;
 
   if (portalBoot || setupPinDown || setupWake) {
     Serial.println(portalBoot

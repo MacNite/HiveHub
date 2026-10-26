@@ -53,6 +53,9 @@ void releaseSleepPinHolds() {
 #ifdef CONFIG_IDF_TARGET_ESP32C6
   // On C6 the button pull-up is held via gpio_hold_en(); release it normally.
   gpio_hold_dis((gpio_num_t)SETUP_BUTTON_PIN);
+#if HAS_EXTERNAL_SETUP_BUTTON
+  gpio_hold_dis((gpio_num_t)EXTERNAL_SETUP_BUTTON_PIN);
+#endif
   inspection::releaseWakeHold();
 #else
   // EXT0 wake config turns the button into an RTC IO. Return it to normal GPIO.
@@ -204,8 +207,15 @@ void configureButtonWake() {
   gpio_hold_en((gpio_num_t)SETUP_BUTTON_PIN);
   inspection::prepareWakePin();
 
-  const uint64_t requestedWakeMask =
+  uint64_t requestedWakeMask =
       (1ULL << SETUP_BUTTON_PIN) | inspection::wakePinMask();
+#if HAS_EXTERNAL_SETUP_BUTTON
+  // The optional D0 setup button is on an LP-IO pad, so unlike GPIO9 it can
+  // actually wake the hub. Same pull-up + hold treatment as the inspection pin.
+  gpio_pullup_en((gpio_num_t)EXTERNAL_SETUP_BUTTON_PIN);
+  gpio_hold_en((gpio_num_t)EXTERNAL_SETUP_BUTTON_PIN);
+  requestedWakeMask |= 1ULL << EXTERNAL_SETUP_BUTTON_PIN;
+#endif
   uint64_t armableWakeMask = 0;
   uint64_t droppedWakeMask = 0;
   for (int pin = 0; pin < GPIO_NUM_MAX; pin++) {

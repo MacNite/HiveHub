@@ -107,14 +107,45 @@ considering for an apiary the public can reach.
 > If you would rather not wait at all, use **Start AP
 > mode** in the dashboard — that is the intended route for a sealed hub, and it
 > needs nobody at the enclosure. A physical button that opens the AP *instantly*
-> would have to live on GPIO0–GPIO7; the external inspection button on D2 is the
-> only one of those brought out today.
+> would have to live on GPIO0–GPIO7 — which is what the optional D0 setup button
+> below is.
 
 **The 30-pin ESP32 DevKit is unchanged.** Its only spare button is BOOT on
 GPIO0, a strapping pin whose failure mode is a beekeeper in a bee suit staring
 at a hub sitting in the bootloader, so it keeps GPIO27 as the setup button and
 has no inspection button. Inspection mode itself still works there through the
 dashboard and the API.
+
+### External setup button on D0 (optional)
+
+If you want a physical AP button that works straight from deep sleep, wire a
+momentary normally-open button between **D0 and GND** and add this to
+`secrets.h`:
+
+```cpp
+#define ENABLE_EXTERNAL_SETUP_BUTTON 1
+```
+
+* **A press opens the provisioning AP.** GPIO0 has an LP-IO pad, so it is armed
+  as a deep-sleep wake source alongside D2: a press wakes the hub and the AP is
+  up a few seconds later, with no measurement cycle in between. A press while
+  the hub is awake works too.
+* **It is not a strapping pin on the C6** (those are GPIO4/5/8/9/15), so holding
+  it across a power-up or a RESET boots normally — unlike BOOT/USER on GPIO9.
+  (GPIO0 *is* a strapping pin on the classic 30-pin ESP32; that does not apply
+  here.)
+* **No factory reset.** Holding D0 for any length of time only opens the AP. A
+  stuck or wet button on the outside of a box must not be able to wipe the hub,
+  so the ten-second factory reset stays on the on-board USER button.
+* **The AP has no password.** Mount the button where a passer-by cannot reach
+  it — inside the enclosure, or keyed.
+* On a long lead, add an external ~10 kΩ pull-up from D0 to 3.3 V (the internal
+  pull-up is weak) so noise cannot wake the hub into AP mode.
+* If the C6 ever reports a GPIO wake with an empty status register and every
+  button is already released, the firmware still assumes the inspection button
+  (the safe, reversible choice). In that rare case, press D0 again.
+* Off by default, and ignored on the 30-pin board. D0 stays free when it is not
+  enabled.
 
 ## Auto-end
 

@@ -70,6 +70,11 @@
 // #define WAKE_BUTTON_FROM_DEEP_SLEEP 0            // ignore the setup button as a wake source
 // #define MIN_DEEP_SLEEP_MS           (30UL*1000UL) // floor on a single sleep, in ms
 
+// XIAO ESP32-C6 only: optional external setup button between D0 and GND. A
+// press opens the provisioning AP (and wakes the hub to do it); it has no
+// long-press factory reset. See EXTERNAL_SETUP_BUTTON_PIN in config.h.
+// #define ENABLE_EXTERNAL_SETUP_BUTTON 1
+
 // ==============================
 // INMP441 STEREO MICROPHONES
 // ==============================
