@@ -853,9 +853,11 @@
 //            This pin used to be the setup button; the swap frees the one
 //            external, weatherproofable button for the thing a beekeeper
 //            actually presses at the hive stand.
-// Both are button-to-GND with INPUT_PULLUP. Only D2 wakes the hub from deep
-// sleep: C6 deep-sleep GPIO wakeup is an LP-IO feature and only GPIO0..GPIO7
-// have that pad, so GPIO9 can never be armed as a wake source (an earlier
+//   D0     — optional external setup button, AP only, off by default (see
+//            EXTERNAL_SETUP_BUTTON_PIN below). Wakes the hub like D2 does.
+// All are button-to-GND with INPUT_PULLUP. Only D2 (and D0, if enabled) can
+// wake the hub from deep sleep: C6 deep-sleep GPIO wakeup is an LP-IO feature
+// and only GPIO0..GPIO7 have that pad, so GPIO9 can never be armed as a wake source (an earlier
 // firmware passed it anyway, which made esp_deep_sleep_enable_gpio_wakeup()
 // reject the whole mask and silently disarmed D2 too — see
 // configureButtonWake()). GPIO9 is also the ESP32-C6 boot-mode strapping pin:
@@ -876,7 +878,40 @@
 // press toggles inspection mode (see inspection.h). Any normally-open switch
 // works: a plain pushbutton, or a keyed one if the apiary is public.
 #define INSPECTION_BUTTON_PIN 2   // D2
+
+// Optional external setup button on D0 — momentary, button-to-GND,
+// INPUT_PULLUP. Off by default; enable per device in secrets.h with
+//   #define ENABLE_EXTERNAL_SETUP_BUTTON 1
+// A press opens the provisioning AP, exactly like a press on the on-board USER
+// button, but with two differences that make it the better choice for a
+// button brought out to the enclosure wall:
+//   * GPIO0 has an LP-IO pad, so unlike GPIO9 it CAN wake the hub from deep
+//     sleep — a press opens the AP straight away, no waiting for a wake;
+//   * GPIO0 is not an ESP32-C6 strapping pin (those are GPIO4/5/8/9/15), so a
+//     press held across a power-up or RESET boots normally instead of landing
+//     in the serial bootloader. (GPIO0 IS a strapping pin on the classic
+//     ESP32 — that warning in the 30-pin section above does not apply here.)
+// It deliberately has NO long-press factory reset: a stuck or wet button on
+// the outside of a box must not be able to wipe the hub. Factory reset stays
+// on the on-board USER button. The AP it opens has no password, so mount it
+// where a passer-by cannot reach it, and add an external ~10 kΩ pull-up to
+// 3.3 V on a long lead (the internal pull-up is weak).
+#ifndef ENABLE_EXTERNAL_SETUP_BUTTON
+#define ENABLE_EXTERNAL_SETUP_BUTTON 0
+#endif
+#if ENABLE_EXTERNAL_SETUP_BUTTON
+#define EXTERNAL_SETUP_BUTTON_PIN 0   // D0
+#endif
 #endif // HIVEHUB_BOARD_XIAO_C6 || CONFIG_IDF_TARGET_ESP32C6
+
+// Only the C6 build defines EXTERNAL_SETUP_BUTTON_PIN; on the 30-pin board
+// ENABLE_EXTERNAL_SETUP_BUTTON is ignored (its setup button is already
+// external, on GPIO27).
+#if defined(EXTERNAL_SETUP_BUTTON_PIN)
+#define HAS_EXTERNAL_SETUP_BUTTON 1
+#else
+#define HAS_EXTERNAL_SETUP_BUTTON 0
+#endif
 
 // ==============================
 // INSPECTION MODE

@@ -1339,6 +1339,24 @@ void startRequestedProvisioningPortal() {
   startProvisioningPortal();
 }
 
+#if HAS_EXTERNAL_SETUP_BUTTON
+// Press state of the optional D0 setup button (see EXTERNAL_SETUP_BUTTON_PIN).
+// Separate from the USER button's because D0 has no long-press action: it
+// fires once per press, on the far side of the debounce window.
+static bool extSetupWasDown = false;
+static bool extSetupHandled = false;
+static unsigned long extSetupDownMs = 0;
+#endif
+
+// True while any setup button is held. Both are active-low.
+static bool anySetupButtonDown() {
+  if (digitalRead(SETUP_BUTTON_PIN) == LOW) return true;
+#if HAS_EXTERNAL_SETUP_BUTTON
+  if (digitalRead(EXTERNAL_SETUP_BUTTON_PIN) == LOW) return true;
+#endif
+  return false;
+}
+
 void pollSetupButton() {
   // With deep sleep enabled, loop() — and therefore handleButton() — is never
   // reached: setup() runs one cycle and sleeps. That left the setup button with
@@ -1356,12 +1374,12 @@ void pollSetupButton() {
   // cycle ends. One digitalRead per call, so it is cheap to sprinkle through
   // the cycle's blocking stages.
   if (provisioningActive) return;
-  if (digitalRead(SETUP_BUTTON_PIN) != LOW) return;
+  if (!anySetupButtonDown()) return;
   // Confirm rather than debounce across calls: consecutive polls sit seconds
   // apart around blocking stages, which is far too coarse a window to require a
   // press to span.
   delay(BUTTON_DEBOUNCE_MS);
-  if (digitalRead(SETUP_BUTTON_PIN) != LOW) return;
+  if (!anySetupButtonDown()) return;
 
   if (!provisioningRequested) {
     Serial.println("[BUTTON] Setup button pressed during the cycle: the provisioning "
@@ -1389,6 +1407,13 @@ void markSetupButtonHandled() {
   buttonWasDown = true;
   longPressHandled = true;
   buttonDownMs = millis();
+#if HAS_EXTERNAL_SETUP_BUTTON
+  // The D0 button has no long press to protect against, but a press that has
+  // already opened (or queued) the portal must not count again on its release.
+  extSetupWasDown = digitalRead(EXTERNAL_SETUP_BUTTON_PIN) == LOW;
+  extSetupHandled = true;
+  extSetupDownMs = millis();
+#endif
 }
 
 void stopProvisioningPortal() {
@@ -1404,6 +1429,25 @@ void stopProvisioningPortal() {
 void handleButton() {
   bool down = digitalRead(SETUP_BUTTON_PIN) == LOW;
   unsigned long now = millis();
+
+#if HAS_EXTERNAL_SETUP_BUTTON
+  // Optional D0 setup button: AP only. No factory reset however long it is
+  // held — that stays on the on-board USER button below.
+  const bool extDown = digitalRead(EXTERNAL_SETUP_BUTTON_PIN) == LOW;
+  if (!extDown) {
+    extSetupWasDown = false;
+    extSetupHandled = false;
+  } else if (!extSetupWasDown) {
+    extSetupWasDown = true;
+    extSetupDownMs = now;
+  } else if (!extSetupHandled && now - extSetupDownMs >= BUTTON_DEBOUNCE_MS) {
+    extSetupHandled = true;
+    if (!provisioningActive) {
+      Serial.println("[BUTTON] External setup button (D0) pressed: start provisioning AP");
+      startProvisioningPortal();
+    }
+  }
+#endif
 
   if (down && !buttonWasDown) {
     buttonWasDown = true;
