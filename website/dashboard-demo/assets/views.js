@@ -49,15 +49,45 @@ function targetFromFilename(name) {
   return "";
 }
 
-// True when dotted version `a` is strictly newer than `b`, compared component by
-// component as NUMBERS — "0.10.0" is newer than "0.9.9", which a string compare
-// gets backwards. Mirrors server/firmware.py parse_version: non-digits are
-// stripped per component and a missing component counts as 0, so "0.4" < "0.4.1".
+// True when version `a` is strictly newer than `b`, ordered the way SemVer
+// orders them. Mirrors server/firmware.py parse_version: release components
+// compare as NUMBERS ("0.10.0" > "0.9.9") with a missing one counting as 0, a
+// pre-release ("1.2.3-rc1") sorts before its release, build metadata ("+b7") is
+// ignored, and a malformed version ranks below a well-formed one.
+const SEMVER = /^\s*v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]*)?\s*$/;
+
+function versionKey(v) {
+  const s = String(v || "");
+  const m = SEMVER.exec(s);
+  const pad = (r) => { while (r.length < 3) r.push(0); return r; };
+  if (!m) {
+    return { release: pad(s.split(".").map((p) => parseInt(p.replace(/\D/g, ""), 10) || 0)), rank: -1, pre: [] };
+  }
+  return {
+    release: pad(m[1].split(".").map(Number)),
+    rank: m[2] ? 0 : 1,
+    pre: m[2] ? m[2].split(".") : [],
+  };
+}
+
+function compareIdent(a, b) {
+  const an = /^\d+$/.test(a), bn = /^\d+$/.test(b);
+  if (an && bn) return Number(a) - Number(b);
+  if (an !== bn) return an ? -1 : 1;   // numeric identifiers sort first
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function versionIsNewer(a, b) {
-  const parse = (v) => String(v || "").split(".").map((p) => parseInt(p.replace(/\D/g, ""), 10) || 0);
-  const x = parse(a), y = parse(b);
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const d = (x[i] || 0) - (y[i] || 0);
+  const x = versionKey(a), y = versionKey(b);
+  for (let i = 0; i < Math.max(x.release.length, y.release.length); i++) {
+    const d = (x.release[i] || 0) - (y.release[i] || 0);
+    if (d) return d > 0;
+  }
+  if (x.rank !== y.rank) return x.rank > y.rank;
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+    if (i >= x.pre.length) return false;  // fewer identifiers = lower precedence
+    if (i >= y.pre.length) return true;
+    const d = compareIdent(x.pre[i], y.pre[i]);
     if (d) return d > 0;
   }
   return false;
@@ -697,7 +727,6 @@ function deviceContextNote(state, what) {
     el("span", {}, " — switch with “Device details” in the top bar."));
 }
 
-// latest non-null among a list of candidate keys (first match wins)
 // ── Last known sensor readings ───────────────────────────────────────────────
 // A snapshot card answers "what is this hive doing?", so it has to show the
 // newest value the sensor actually reported — not merely whatever landed in the
@@ -733,6 +762,11 @@ const MAX_STALE_MS = 24 * 3600000;
 // Assumed cycle when the history is too short to measure one (a device with a
 // single reading so far).
 const DEFAULT_CYCLE_MS = 60 * 60000;
+
+// How old a value may get before it counts as stale for this device.
+function staleLimitMs(measurements) {
+  return Math.min(Math.max(STALE_CYCLES * uploadIntervalMs(measurements), MIN_STALE_MS), MAX_STALE_MS);
+}
 
 function rowTime(m) {
   const t = m && m.measured_at ? new Date(m.measured_at).getTime() : NaN;
@@ -772,20 +806,23 @@ function inspectionMasked(m, hive) {
 // The newest reading for a ref, with `pick(row)` choosing the value out of each
 // row: the standalone latest reading first, then the loaded history newest →
 // oldest. Returns { value, at, stale } — `at` is the reading's own timestamp and
-// `stale` says it did not come from the newest upload — or null when nothing
-// reported it recently enough to still be meaningful.
+// `stale` says it is not current: either it did not come from the newest upload,
+// or the newest upload itself is older than the stale allowance (the whole hub
+// went quiet, so its last values must not read as live) — or null when the hub
+// kept uploading without this value for longer than that allowance.
 function refReadingBy(ref, pick) {
   const rows = [ref.latest, ...(ref.measurements || [])].filter(Boolean);
   if (!rows.length) return null;
   const newest = rows.reduce((t, m) => Math.max(t, rowTime(m) ?? -Infinity), -Infinity);
-  const limit = Math.min(Math.max(STALE_CYCLES * uploadIntervalMs(ref.measurements), MIN_STALE_MS), MAX_STALE_MS);
+  const limit = staleLimitMs(ref.measurements);
+  const now = Date.now();
   for (const m of rows) {
     const v = pick(m);
     if (v != null) {
       const at = rowTime(m);
       if (at == null || !Number.isFinite(newest)) return { value: v, at: m.measured_at || null, stale: false };
       if (newest - at > limit) return null;
-      return { value: v, at: m.measured_at || null, stale: at < newest };
+      return { value: v, at: m.measured_at || null, stale: at < newest || now - at > limit };
     }
     // A blanked row is a deliberate silence, not a missed cycle: stop rather
     // than reach around the inspection for an older value.
@@ -975,6 +1012,7 @@ function renderOverview(root, state) {
   // and raw DOM append() would otherwise stringify it into a "null" text node.
   root.append(...[
     viewHead("Overview", subtitle),
+    offlineNote(state),
     deviceContextNote(state, "Battery, signal and status"),
     el("div", { class: "grid" }, ...cards),
     el("div", { class: "grid wide", style: "margin-top:1rem" },
@@ -1002,9 +1040,39 @@ function highestAlertCard(ins) {
 }
 
 // ── generic time-series view ─────────────────────────────────────────────────
+// A note naming every charted device whose newest upload is older than its
+// stale allowance, or null. The device-level cards (ambient, battery, signal…)
+// show the hub's latest row as it is, so without this an offline hub looked
+// exactly like a live one.
+function offlineNote(state) {
+  const ids = state.multiDevice
+    ? [...new Set((state.selection || []).map((s) => s.deviceId))]
+    : [state.activeDeviceId];
+  const silent = [];
+  for (const id of ids) {
+    const latest = state.deviceLatest ? state.deviceLatest(id) : null;
+    const t = rowTime(latest);
+    if (t == null) continue;
+    const history = state.deviceMeasurements ? state.deviceMeasurements(id) : [];
+    if (Date.now() - t > staleLimitMs(history)) silent.push({ id, at: latest.measured_at });
+  }
+  if (!silent.length) return null;
+  const parts = [];
+  silent.forEach(({ id, at }, i) => {
+    const last = i === silent.length - 1;
+    parts.push(el("b", {}, state.deviceName ? state.deviceName(id) : id),
+      el("span", {}, `last uploaded ${relAge(at)}${last ? "." : ","}`));
+  });
+  return el("div", { class: "device-context-note stale-note", role: "status" },
+    el("span", {}, "No recent data:"), ...parts,
+    el("span", {}, "Values shown are the last reported."));
+}
+
 function tsView(title, desc, state, { cards = [], charts = [] }) {
   const root = el("div", {});
   root.append(viewHead(title, desc));
+  const offline = offlineNote(state);
+  if (offline) root.append(offline);
   if (cards.length) root.append(el("div", { class: "grid" }, ...cards));
   if (charts.length) root.append(el("div", { class: "grid wide", style: "margin-top:1rem" }, ...charts));
   return root;

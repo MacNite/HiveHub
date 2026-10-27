@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Backend server version. Bump on releases; reported in the OpenAPI metadata
 # (/docs) and by GET /health so a deployment's version is visible remotely.
-SERVER_VERSION = "0.6.2"
+SERVER_VERSION = "0.6.3"
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 API_KEY = os.environ["API_KEY"]
@@ -161,6 +161,13 @@ INSIGHTS_RECONCILE_INTERVAL_SECONDS = int(
 INSIGHTS_HISTORY_LOOKBACK_DAYS = int(
     os.environ.get("INSIGHTS_HISTORY_LOOKBACK_DAYS", "14")
 )
+# Where the apiary is, for the rules' local-time windows (late-afternoon
+# robbing, daytime swarms, night-time vibration, calendar days) and seasons.
+# A device's own night-mode timezone wins when it is one of the dashboard's
+# presets; otherwise this IANA zone applies (default: the container's TZ, then
+# UTC). The season rules assume the northern hemisphere unless told otherwise.
+INSIGHTS_TIMEZONE = os.environ.get("INSIGHTS_TIMEZONE", "").strip() or os.environ.get("TZ", "").strip()
+INSIGHTS_HEMISPHERE = os.environ.get("INSIGHTS_HEMISPHERE", "north").strip().lower()
 
 
 def _env_bool(name: str, default: str = "false") -> bool:

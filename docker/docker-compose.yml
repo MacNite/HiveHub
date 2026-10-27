@@ -72,6 +72,10 @@ services:
       # bounds a SINGLE upload; the node stops itself at 60 s and this is the
       # backstop for a hub that does not.
       MAX_RECORDING_BYTES: '${MAX_RECORDING_BYTES:-4194304}'
+      # Where the apiary is, for the insight rules' local-time windows and
+      # seasons (empty = a device's night-mode zone, else TZ above).
+      INSIGHTS_TIMEZONE: '${INSIGHTS_TIMEZONE:-}'
+      INSIGHTS_HEMISPHERE: '${INSIGHTS_HEMISPHERE:-north}'
       # ── Optional MQTT bridge (Home Assistant etc.) — disabled by default ──
       MQTT_ENABLED: '${MQTT_ENABLED:-false}'
       MQTT_HOST: '${MQTT_HOST:-localhost}'

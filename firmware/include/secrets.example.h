@@ -166,8 +166,9 @@
 // MULTI-HIVE PRE-SEED (optional, up to 16 hives)
 // ==============================
 // Firmware v0.20.0+ generalises HiveHub to a dynamic registry of up to
-// MAX_HIVES hives (16 supported wired scales), each with one scale source and at most one in-hive
-// sensor — see hive_config.h and docs/multi-hive.md. The provisioning portal
+// MAX_HIVES hives (16 supported wired scales), each with one scale source and up
+// to three in-hive sensors, one per lane (beacon or DS18B20, counter, heart) —
+// see ble_lanes.h, hive_config.h and docs/multi-hive.md. The provisioning portal
 // (hold the setup button after flashing) configures this registry directly and
 // is the recommended way to set it up. To pre-seed it from secrets.h instead
 // (so a device already knows every hive on FIRST BOOT, before ever visiting

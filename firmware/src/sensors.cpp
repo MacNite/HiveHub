@@ -67,19 +67,23 @@ void initializeTime(bool wokeFromDeepSleep) {
 // long evenings when there is most of it. The TZ string carries the DST rules,
 // so the window tracks the clock on the wall all year.
 
-// Push the configured POSIX TZ into the C library, when it changes. Cheap and
+// Push the configured POSIX TZ into the C library, when it differs. Cheap and
 // idempotent: called from the accessor below rather than from a setup path, so
 // no ordering between "config arrived" and "window evaluated" can leave a stale
 // zone in place.
+//
+// It compares against the live TZ variable rather than remembering what it set
+// last: configTime(0, 0, ...) — run by every NTP sync — quietly puts the process
+// back on UTC, and a cached "already applied" would then evaluate the night
+// window in UTC until the next reboot.
+//
+// Nothing else may read local time: upload timestamps are built from gmtime_r
+// (timestampNow), so the zone set here can never leak into them.
 static void applyNightTimezone() {
-  static String applied = "\x01";   // impossible value: forces the first apply
-  if (applied == nightTimezone) return;
-  applied = nightTimezone;
-  if (nightTimezone.length()) {
-    setenv("TZ", nightTimezone.c_str(), 1);
-  } else {
-    setenv("TZ", "UTC0", 1);
-  }
+  const char* want = nightTimezone.length() ? nightTimezone.c_str() : "UTC0";
+  const char* have = getenv("TZ");
+  if (have && strcmp(have, want) == 0) return;
+  setenv("TZ", want, 1);
   tzset();
   Serial.printf("[TIME] Timezone set to %s\n",
                 nightTimezone.length() ? nightTimezone.c_str() : "UTC");
@@ -127,11 +131,19 @@ String timestampNow() {
     }
   }
 
+  // System clock (NTP). getLocalTime() only waits for a valid clock here; the
+  // timestamp itself is formatted from gmtime_r, because local time is whatever
+  // zone applyNightTimezone() last set and the "Z" below promises UTC. Using
+  // getLocalTime's result, as this did, shifted the timestamp by the zone's
+  // offset once night mode had applied a non-UTC zone in the same awake cycle.
   struct tm tmNow;
   if (getLocalTime(&tmNow, 100)) {
-    char buf[25];
-    snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ", tmNow.tm_year + 1900, tmNow.tm_mon + 1, tmNow.tm_mday, tmNow.tm_hour, tmNow.tm_min, tmNow.tm_sec);
-    return String(buf);
+    const time_t epoch = time(nullptr);
+    if (gmtime_r(&epoch, &tmNow) != nullptr) {
+      char buf[25];
+      snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ", tmNow.tm_year + 1900, tmNow.tm_mon + 1, tmNow.tm_mday, tmNow.tm_hour, tmNow.tm_min, tmNow.tm_sec);
+      return String(buf);
+    }
   }
 
   return String("1970-01-01T00:00:00Z");

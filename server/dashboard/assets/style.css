@@ -246,6 +246,7 @@ select:disabled { opacity: .7; cursor: not-allowed; }
   font-size: .84rem; color: var(--ink-soft);
 }
 .device-context-note b { color: var(--ink); }
+.device-context-note.stale-note { border-color: var(--warn); color: var(--warn); }
 
 .range-group { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--card); }
 .range-group button {

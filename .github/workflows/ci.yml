@@ -46,12 +46,33 @@ jobs:
           path: firmware/dist/
           if-no-files-found: error
 
-  # The GATT clients (HiveTraffic counter, HiveHeart / wireless HiveScale) are
-  # off by default, so the builds above never compile them. Build the C6 once
-  # with both switched on so a change there cannot ship uncompiled. The images
-  # are not packaged: this variant only has to compile.
-  firmware-build-gatt-clients:
+  # Optional features are off by default, so the builds above never compile
+  # them. Build the C6 once per supported combination so a change there cannot
+  # ship uncompiled: the GATT clients (HiveTraffic counter, HiveHeart / wireless
+  # HiveScale), and the wired DS18B20 probes with each alternative ambient
+  # sensor (exactly one may be enabled). Their libraries are the commented-out
+  # lib_deps lines in platformio.ini, at the same pins. The images are not
+  # packaged: these variants only have to compile.
+  firmware-build-variants:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gatt-clients
+            flags: -DENABLE_WIRELESS_BEECOUNTER=1 -DENABLE_BEEHIVE_GATT=1
+            libs: ""
+          - name: ds18b20-bme280
+            flags: -DENABLE_DS18B20_HIVE_TEMP=1 -DENABLE_SHT4X_AMBIENT=0 -DENABLE_BME280_AMBIENT=1
+            libs: >-
+              https://github.com/PaulStoffregen/OneWire.git#800f26f3ee6eb446a72e013785cac3700e54cc13
+              milesburton/DallasTemperature@3.11.0
+              "adafruit/Adafruit BME280 Library@2.2.4"
+          - name: sht3x
+            flags: -DENABLE_SHT4X_AMBIENT=0 -DENABLE_SHT3X_AMBIENT=1
+            libs: >-
+              "adafruit/Adafruit SHT31 Library@2.2.2"
+    name: firmware-build-variant (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -59,9 +80,15 @@ jobs:
           python-version: "3.12"
       - name: Install PlatformIO
         run: pip install platformio "esptool~=4.8"
-      - name: Build xiao_esp32c6 with the GATT clients enabled
+      - name: Add the variant's libraries
+        if: matrix.libs != ''
+        working-directory: firmware
+        run: |
+          eval "set -- ${{ matrix.libs }}"
+          for lib in "$@"; do pio pkg install -e xiao_esp32c6 --no-save --library "$lib"; done
+      - name: Build xiao_esp32c6 (${{ matrix.name }})
         env:
-          PLATFORMIO_BUILD_FLAGS: -DENABLE_WIRELESS_BEECOUNTER=1 -DENABLE_BEEHIVE_GATT=1
+          PLATFORMIO_BUILD_FLAGS: ${{ matrix.flags }}
         run: pio run -e xiao_esp32c6
         working-directory: firmware
 
@@ -157,6 +184,10 @@ jobs:
           # counter rates use real elapsed time, windows must be covered.
           python3 test-data/test_insight_data_quality.py
           python3 test-data/test_inspection_masking.py
+          python3 test-data/test_measurement_id.py
+          python3 test-data/test_claim_code_reporting.py
+          python3 test-data/test_version_order.py
+          python3 test-data/test_counter_differencing.py
           python3 test-data/test_sd_import.py
           python3 test-data/test_data_export.py
           python3 test-data/test_bee_counter_banks.py
@@ -192,8 +223,8 @@ jobs:
           # pool) and auth-before-parse on the upload routes.
           python3 test-data/test_backend_db.py --require-db
 
-  # The website/configurator and dashboard have no test suite yet; keep them at
-  # least syntactically sound so a broken script cannot ship unnoticed.
+  # Keep the website/configurator and dashboard scripts at least syntactically
+  # sound so a broken script cannot ship unnoticed, and run the portal tests.
   website-js-check:
     runs-on: ubuntu-latest
     steps:
@@ -204,3 +235,9 @@ jobs:
           for f in website/assets/*.js website/dashboard-demo/assets/*.js server/dashboard/assets/*.js; do
             node --check "$f"
           done
+      # The provisioning portal's pairing page, extracted from portal.cpp and
+      # run in jsdom. Without jsdom the suite only prints SKIP.
+      - name: Portal pairing tests
+        run: |
+          npm install --no-save --silent jsdom@30.1.2
+          node test-data/test_portal_pairing.js

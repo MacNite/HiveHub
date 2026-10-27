@@ -20,14 +20,41 @@ from schemas import FirmwareReleaseIn, normalize_firmware_target
 router = APIRouter()
 
 
+_SEMVER = re.compile(r"^\s*v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]*)?\s*$")
+
+
 def parse_version(v: str) -> tuple:
+    """A sort key for a firmware version, ordered the way SemVer orders them.
+
+    Release components compare as numbers ("0.10.0" > "0.9.9"; a missing one
+    counts as 0, so "0.4" == "0.4.0" < "0.4.1"). A pre-release ("1.2.3-rc1")
+    sorts BEFORE its release and after the one before it; build metadata
+    ("+b7") is ignored. Stripping non-digits per component, as this used to,
+    read "1.2.3-rc1" as 1.2.31 — newer than 1.2.4 — so a device on a release
+    candidate was never offered the final release.
+
+    Anything that is not a dotted-number version falls back to the old
+    digit-stripping, ranked below any well-formed version of the same numbers.
+    """
+    m = _SEMVER.match(v or "")
+    if m:
+        release = [int(x) for x in m.group(1).split(".")]
+        pre = m.group(2)
+        pre_key = tuple(
+            (0, int(ident), "") if ident.isdigit() else (1, 0, ident)
+            for ident in (pre.split(".") if pre else ())
+        )
+        # A release ranks above every pre-release of the same numbers.
+        return (_pad(release), 0 if pre else 1, pre_key)
     parts = []
-    for p in v.split("."):
-        try:
-            parts.append(int("".join(ch for ch in p if ch.isdigit()) or "0"))
-        except ValueError:
-            parts.append(0)
-    return tuple(parts)
+    for p in (v or "").split("."):
+        parts.append(int("".join(ch for ch in p if ch.isdigit()) or "0"))
+    return (_pad(parts), -1, ())
+
+
+def _pad(release: list) -> tuple:
+    """Release numbers padded to three, so 1.2 and 1.2.0 compare equal."""
+    return tuple(release + [0] * (3 - len(release)))
 
 
 def latest_release_for_owner(target: str, owner_user_id: Optional[str],

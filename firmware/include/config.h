@@ -138,18 +138,20 @@
 // ==============================
 // HiveHub historically served exactly two hives (two HX711 load cells, two
 // DS18B20 probes, two BLE slots). v0.20.0 generalises this to a dynamic registry
-// of up to MAX_HIVES hives, each carrying one scale source and at most one
-// non-scale in-hive sensor, configured from the provisioning portal and stored as a per-hive JSON blob in
-// NVS (see firmware/src/hive_config.cpp).
+// of up to MAX_HIVES hives, each carrying one scale source and up to three
+// in-hive sensors, one per lane (see ble_lanes.h), configured from the
+// provisioning portal and stored as a per-hive JSON blob in NVS (see
+// firmware/src/hive_config.cpp).
 //
 //   - Scales: HX711 (legacy pins) and/or NAU7802 I2C channels via the
 //     NAU7802 + TCA9548A path below. See the wired-channel topology note on
 //     MAX_SCALES — all-NAU7802 tops out at 16; 18 needs the 2 HX711 channels.
 //   - Wired temperature: up to MAX_HIVES DS18B20 on the single ONE_WIRE_PIN bus,
 //     addressed by ROM (not by index) so each probe maps to a specific hive.
-//   - In-hive sensors: one non-scale BLE/GATT sensor OR one DS18B20 per hive.
-//     BLE HiveScale selected as a scale source is stored separately from that
-//     in-hive sensor; serial GATT reads are still capped per cycle (see below).
+//   - In-hive sensors, one per lane: a beacon (HolyIot / RuuviTag /
+//     HiveInside) OR a wired DS18B20, plus a HiveTraffic counter, plus a
+//     HiveHeart. A BLE HiveScale selected as the scale source is its own lane.
+//     Serial GATT reads are capped per cycle and rotate across wakes (below).
 #ifndef MAX_HIVES
 #define MAX_HIVES 18
 #endif

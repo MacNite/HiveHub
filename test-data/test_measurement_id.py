@@ -3,8 +3,14 @@
 Run: cd server && python3 ../test-data/test_measurement_id.py
 """
 
-from schemas import MeasurementIn
-from measurements import measurement_insert_params
+import os
+
+# measurements imports the server config, which requires these at import time.
+os.environ.setdefault("API_KEY", "test-api-key-0123456789abcdef")
+os.environ.setdefault("DATABASE_URL", "postgresql://ci-not-used/ci")
+
+from schemas import MeasurementIn  # noqa: E402
+from measurements import measurement_insert_params  # noqa: E402
 
 
 payload = MeasurementIn.model_validate(

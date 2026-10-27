@@ -2,7 +2,7 @@
 
 Firmware **v0.20.0** generalises HiveHub from a fixed two-hive device into a
 dynamic registry of **up to 16 hives**, each with one scale source and up to
-three in-hive BLE sensors. This page covers the new hardware paths, the
+three in-hive sensors. This page covers the new hardware paths, the
 hive-centric provisioning portal, the BLE budget, and the data model.
 
 ---
@@ -135,10 +135,12 @@ keeps the pre-0.20 two-slot migration behavior described above.
 
 ## BLE budget
 
-A passive BLE **scan** hears every nearby **beacon** in one window. The portal
-now limits each hive to one non-scale in-hive BLE/GATT sensor, matching the
-backend's single nested `ble` object per `hive_readings` row; up to 16 hives can
-still each have one beacon without extra scan windows.
+A passive BLE **scan** hears every nearby **beacon** in one window. Each hive
+takes up to three in-hive sensors, one per lane (`firmware/include/ble_lanes.h`):
+one beacon (HolyIot, RuuviTag or HiveInside — they share the hive's single
+nested `ble` object — or a wired DS18B20 in its place), one HiveTraffic counter
+and one HiveHeart. A wireless HiveScale chosen as the scale source is its own
+lane. Every hive can have a beacon without extra scan windows.
 
 **GATT** sensors (GATT-mode HiveInside, HiveHeart, wireless HiveScale, HiveTraffic)
 each need a **serial connect → read → disconnect** of seconds, so reading many of
