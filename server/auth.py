@@ -8,7 +8,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, Request, Response
-from jose import jwt, JWTError
+import jwt
+from jwt import PyJWTError as JWTError
 
 from config import (
     API_KEY,
@@ -130,6 +131,8 @@ def create_dashboard_session_token(
         "role": user["role"],
         "scope": "dashboard",
         "auth": auth_method,
+        # Bumped on password change: tokens carrying an older value stop working.
+        "sv": int(user.get("session_version") or 0),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=DASHBOARD_SESSION_TTL_HOURS)).timestamp()),
     }
@@ -198,18 +201,29 @@ def dashboard_admin_count(exclude_id: Optional[int] = None) -> int:
             return int(cur.fetchone()[0])
 
 
+_USER_COLUMNS = "id, username, password_hash, role, email, created_at, last_login_at, session_version"
+
+
 def _dashboard_user_row(r) -> dict:
     return {
         "id": r[0], "username": r[1], "password_hash": r[2], "role": r[3],
-        "email": r[4], "created_at": r[5], "last_login_at": r[6],
+        "email": r[4], "created_at": r[5], "last_login_at": r[6], "session_version": r[7],
     }
+
+
+def get_dashboard_user_by_id(user_id: int) -> Optional[dict]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT {_USER_COLUMNS} FROM dashboard_users WHERE id = %s;", (user_id,))
+            row = cur.fetchone()
+    return _dashboard_user_row(row) if row else None
 
 
 def get_dashboard_user_by_username(username: str) -> Optional[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, role, email, created_at, last_login_at "
+                f"SELECT {_USER_COLUMNS} "
                 "FROM dashboard_users WHERE lower(username) = lower(%s);",
                 (username,),
             )
@@ -226,7 +240,7 @@ def get_dashboard_users_by_email(email: str) -> list[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, role, email, created_at, last_login_at "
+                f"SELECT {_USER_COLUMNS} "
                 "FROM dashboard_users WHERE lower(email) = lower(%s) ORDER BY id LIMIT 2;",
                 (email.strip(),),
             )
@@ -242,7 +256,7 @@ def list_dashboard_users() -> list[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, role, email, created_at, last_login_at "
+                f"SELECT {_USER_COLUMNS} "
                 "FROM dashboard_users ORDER BY created_at;"
             )
             rows = cur.fetchall()
@@ -258,7 +272,7 @@ def create_dashboard_user(
             cur.execute(
                 "INSERT INTO dashboard_users (username, password_hash, role, email) "
                 "VALUES (%s, %s, %s, %s) "
-                "RETURNING id, username, password_hash, role, email, created_at, last_login_at;",
+                f"RETURNING {_USER_COLUMNS};",
                 (
                     username.strip(),
                     hash_password(password) if password else UNUSABLE_PASSWORD,
@@ -290,14 +304,21 @@ def delete_dashboard_user(user_id: int) -> bool:
     return deleted > 0
 
 
-def set_dashboard_user_password(user_id: int, password: str) -> None:
+def set_dashboard_user_password(user_id: int, password: str) -> Optional[dict]:
+    """Store a new password and revoke every session issued before it.
+
+    Returns the updated account so the caller can re-issue its own session."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE dashboard_users SET password_hash = %s WHERE id = %s;",
+                "UPDATE dashboard_users SET password_hash = %s, "
+                "session_version = session_version + 1 WHERE id = %s "
+                f"RETURNING {_USER_COLUMNS};",
                 (hash_password(password), user_id),
             )
+            row = cur.fetchone()
             conn.commit()
+    return _dashboard_user_row(row) if row else None
 
 
 def touch_dashboard_user_login(user_id: int) -> None:
@@ -321,7 +342,17 @@ def current_dashboard_session(request: Request) -> Optional[dict]:
 
     if payload.get("auth", "password") != "oidc" and not password_login_enabled():
         return None
-    return payload
+    # The signature only proves the token was issued, not that it still stands:
+    # the account may have been deleted (or re-created under the same name) or
+    # its password changed since. Check the live row on every request, and take
+    # username and role from it rather than from the token.
+    try:
+        user = get_dashboard_user_by_id(int(payload.get("sub")))
+    except (TypeError, ValueError):
+        return None
+    if not user or int(payload.get("sv", 0)) != int(user.get("session_version") or 0):
+        return None
+    return {**payload, "username": user["username"], "role": user["role"]}
 
 
 def require_dashboard_session(request: Request) -> dict:
@@ -352,7 +383,10 @@ def require_user_id(authorization: str = Header(default="")) -> str:
         raise HTTPException(status_code=401, detail="Authorization: Bearer <token> header required")
     token = authorization[7:]
     try:
-        payload = jwt.decode(token, HIVEPAL_JWT_SECRET, algorithms=["HS256"])
+        # HivePal may issue a numeric sub, and its clock is not ours: keep the
+        # claims checks to signature + exp, as before the move to PyJWT.
+        payload = jwt.decode(token, HIVEPAL_JWT_SECRET, algorithms=["HS256"],
+                             options={"verify_sub": False, "verify_iat": False})
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     user_id = payload.get("sub")

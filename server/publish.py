@@ -48,6 +48,7 @@ from db import get_conn
 from measurements import (
     CHART_MEASUREMENT_COLUMNS,
     execute_measurement_query,
+    fetch_chart_rows,
     serialize_chart_measurements,
 )
 from schemas import PublishedChartIn, PublishedChartUpdateIn
@@ -609,7 +610,7 @@ def _load_public_chart(token: str, count_view: bool) -> dict:
 
 def _measurements_for(device_ids: list[str], start_at: datetime, max_points: int) -> dict[str, list[dict]]:
     """Chart rows per device over the published period, newest first."""
-    out: dict[str, list[dict]] = {}
+    rows: dict[str, list[dict]] = {}
     with get_conn() as conn:
         with conn.cursor() as cur:
             for device_id in device_ids:
@@ -621,8 +622,9 @@ def _measurements_for(device_ids: list[str], start_at: datetime, max_points: int
                     max_points,
                     max_points,
                 )
-                out[device_id] = serialize_chart_measurements(cur)
-    return out
+                rows[device_id] = fetch_chart_rows(cur)
+    # Serialized only once the connection is back in the pool: see fetch_chart_rows.
+    return {device_id: serialize_chart_measurements(r) for device_id, r in rows.items()}
 
 
 def build_public_payload(chart: dict) -> dict:

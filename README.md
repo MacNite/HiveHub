@@ -364,7 +364,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `FIRMWARE_DIR` | Optional | Firmware binary directory, default `/app/firmware` |
 | `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | Optional | DB connection pool bounds (default `1` / `10`) |
 | `RATE_LIMIT_ENABLED` / `RATE_LIMIT_DEFAULT` | Optional | Per-client-IP rate limit (default on, `120/minute`) |
-| `MAX_BODY_BYTES` / `MAX_FIRMWARE_BYTES` | Optional | Request-body and firmware-upload size caps (default 256 KiB / 16 MiB) |
+| `MAX_BODY_BYTES` / `MAX_FIRMWARE_BYTES` / `HIVEHUB_SD_IMPORT_MAX_FILE_SIZE` | Optional | Request-body, firmware-upload and SD-import size caps (default 256 KiB / 16 MiB / 250 MiB). Upload routes authenticate before reading their body. |
 | `ENABLE_LOCAL_DASHBOARD` | Optional | Serve the built-in **login-protected** dashboard at `/dashboard` and its `/api/v1/local/*` API (default off). It serves every device on the server behind one login, so keep it off on multi-tenant deployments. |
 | `DASHBOARD_SESSION_SECRET` / `DASHBOARD_SESSION_TTL_HOURS` / `DASHBOARD_COOKIE_SECURE` | Optional | Dashboard login-session settings: signing secret (auto-generated and persisted when blank), session lifetime (default `168` h), HTTPS-only cookie flag |
 | `ENABLE_PUBLIC_EMBEDS` | Optional | Allow the dashboard's **Device & admin → Publish data** panel to serve individual published charts without a login, for embedding in a website (default on; nothing is public until an admin publishes it, and the panel is hidden when this is off). See [Publish data](docs/publish-embed.md). |
@@ -484,7 +484,9 @@ Enabled only when `ENABLE_LOCAL_DASHBOARD=true`; every route returns `404` when
 disabled. Access is gated by **username + password login** (HttpOnly session
 cookie): the first visit runs a setup wizard that creates the initial admin
 account, read endpoints need any valid session, and write/control endpoints
-need the `admin` role. The API is **not scoped per user** — one login covers
+need the `admin` role. Every request re-checks the session against the live
+account, so deleting an account or changing its password signs out the
+sessions issued before. The API is **not scoped per user** — one login covers
 every device on the server — so keep it off on multi-tenant deployments. These
 endpoints power the built-in `/dashboard` UI; see
 [server/dashboard/README.md](server/dashboard/README.md).

@@ -1,4 +1,3 @@
-import os
 import time
 from datetime import datetime
 from typing import Any, Iterable, Literal, Optional
@@ -6,13 +5,10 @@ from typing import Any, Iterable, Literal, Optional
 from fastapi import (
     APIRouter,
     Depends,
-    File,
-    Form,
     HTTPException,
     Query,
     Request,
     Response,
-    UploadFile,
 )
 from fastapi.responses import RedirectResponse, StreamingResponse
 from psycopg import errors as pg_errors
@@ -59,6 +55,7 @@ import oidc
 from config import (
     ENABLE_PUBLIC_EMBEDS,
     NOTIFY_MIN_SEVERITY,
+    SD_IMPORT_MAX_FILE_SIZE,
     VAPID_PUBLIC_KEY,
 )
 from data_export import (
@@ -84,6 +81,7 @@ from devices import (
     update_device_config,
 )
 from firmware import (
+    FIRMWARE_UPLOAD_OPENAPI,
     get_approved_firmware_version,
     get_device_board,
     latest_beecounter_release,
@@ -91,6 +89,7 @@ from firmware import (
     latest_release_for_owner,
     other_board_releases,
     parse_version,
+    read_firmware_upload_form,
     set_approved_firmware_version,
     store_firmware_upload,
 )
@@ -107,6 +106,7 @@ from measurements import (
     MEASUREMENT_SELECT_COLUMNS,
     bulk_import_measurements,
     execute_measurement_query,
+    fetch_chart_rows,
     serialize_chart_measurements,
     serialize_measurements,
 )
@@ -145,6 +145,7 @@ from inspections import (
     stop_inspection_for_device,
     update_inspection,
 )
+from uploads import form_bool, form_file, multipart_openapi, read_upload_bytes, read_upload_form
 from sd_import import (
     distinct_source_device_ids,
     group_records_by_device,
@@ -330,15 +331,27 @@ def local_auth_oidc_callback(
 
 @router.post("/api/v1/local/auth/password")
 def local_auth_change_password(
-    body: DashboardChangePasswordIn, session: dict = Depends(require_dashboard_session)
+    body: DashboardChangePasswordIn,
+    response: Response,
+    session: dict = Depends(require_dashboard_session),
 ):
-    """Change the logged-in user's own password (re-auth with current password)."""
+    """Change the logged-in user's own password (re-auth with current password).
+
+    Every other session of the account is revoked; this browser gets a fresh
+    one so the user stays signed in here."""
     if not oidc.password_login_enabled():
         raise HTTPException(status_code=403, detail="Password sign-in is disabled; use single sign-on")
     user = get_dashboard_user_by_username(session["username"])
     if not user or not verify_password(body.current_password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    set_dashboard_user_password(user["id"], body.new_password)
+    updated = set_dashboard_user_password(user["id"], body.new_password)
+    if updated:
+        set_dashboard_session_cookie(
+            response,
+            create_dashboard_session_token(
+                updated, auth_method=session.get("auth", "password"), id_token=session.get("idt")
+            ),
+        )
     return {"ok": True}
 
 
@@ -581,7 +594,8 @@ def local_list_measurements(
             execute_measurement_query(
                 cur, CHART_MEASUREMENT_COLUMNS, where_parts, params, limit, max_points
             )
-            return serialize_chart_measurements(cur)
+            rows = fetch_chart_rows(cur)
+    return serialize_chart_measurements(rows)
 
 
 @router.get("/api/v1/local/devices/{device_id}/measurements/latest", dependencies=LOCAL_DASHBOARD_DEP)
@@ -790,24 +804,13 @@ def local_export_measurements(
     )
 
 
-# SD backup uploads are fully buffered in memory, so cap the upload size to
-# avoid excessive memory usage / DoS from oversized files. Overridable via env
-# var to allow tuning without a code change (mirrors the HivePal proxy's cap).
-SD_IMPORT_MAX_FILE_SIZE = int(
-    os.environ.get("HIVEHUB_SD_IMPORT_MAX_FILE_SIZE", str(250 * 1024 * 1024))
-)
-
-
 @router.post(
     "/api/v1/local/devices/{device_id}/measurements/import",
     dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+    openapi_extra=multipart_openapi({"file": "binary", "force": "boolean", "route_by_device": "boolean"},
+                                    required=["file"]),
 )
-async def local_import_sd_measurements(
-    device_id: str,
-    file: UploadFile = File(...),
-    force: bool = Form(False),
-    route_by_device: bool = Form(False),
-):
+async def local_import_sd_measurements(device_id: str, request: Request):
     """Import measurements from an SD-card backup pulled off the scale in AP mode.
 
     Accepts either the raw ``measurements.ndjson`` or the
@@ -834,17 +837,14 @@ async def local_import_sd_measurements(
     claim/check-in flow, and inventing one from an uploaded file would fabricate
     a device with no key and no owner.
     """
-    data = await file.read()
+    # Parsed here, after the admin check, not as File()/Form() parameters: see uploads.py.
+    form = await read_upload_form(request)
+    file = form_file(form)
+    force = form_bool(form, "force", False)
+    route_by_device = form_bool(form, "route_by_device", False)
+    data = await read_upload_bytes(file, SD_IMPORT_MAX_FILE_SIZE, "SD file")
     if not data:
         raise HTTPException(status_code=400, detail="No SD data file provided")
-    if len(data) > SD_IMPORT_MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                f"SD file exceeds the {SD_IMPORT_MAX_FILE_SIZE // (1024 * 1024)} MB "
-                "upload limit"
-            ),
-        )
 
     records, skipped = parse_sd_measurements(data, file.filename)
 
@@ -1389,21 +1389,16 @@ def local_firmware_status(device_id: str):
     }
 
 
-@router.post("/api/v1/local/devices/{device_id}/firmware", dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
-async def local_upload_firmware(
-    device_id: str,
-    file: UploadFile = File(...),
-    version: str = Form(...),
-    target: str = Form("hivescale"),
-    active: bool = Form(True),
-    board: str = Form(""),
-):
+@router.post("/api/v1/local/devices/{device_id}/firmware", dependencies=LOCAL_DASHBOARD_ADMIN_DEP,
+             openapi_extra=FIRMWARE_UPLOAD_OPENAPI)
+async def local_upload_firmware(device_id: str, request: Request):
     """Upload a firmware binary and register it as a GLOBAL release.
 
     In single-owner local mode there is no per-user scoping, so the release is
     left owner-less (owner_user_id=None) and every device on this server can pick
     it up after it is approved.
     """
+    file, version, target, active, board = await read_firmware_upload_form(request)
     return await store_firmware_upload(
         device_id, file, version, target, active, board, owner_user_id=None
     )

@@ -6,7 +6,8 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import psycopg
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from auth import (
     require_api_key,
@@ -27,6 +28,7 @@ from inspections import (
 )
 from sd_import import split_new_and_duplicate
 from tempcomp import TEMP_SOURCE_FIELD, apply_compensation
+from uploads import parse_json_body
 
 router = APIRouter()
 
@@ -497,10 +499,12 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
 @router.post(
     "/api/v1/app/devices/{device_id}/measurements/import",
     dependencies=[Depends(require_hivepal_service_key)],
+    openapi_extra={"requestBody": {"required": True, "content": {"application/json": {
+        "schema": {"$ref": "#/components/schemas/MeasurementImportIn"}}}}},
 )
-def import_measurements(
+async def import_measurements(
     device_id: str,
-    payload: MeasurementImportIn,
+    request: Request,
     user_id: str = Depends(require_user_id),
 ):
     """Bulk-import measurements parsed from a device's SD card backup.
@@ -515,8 +519,10 @@ def import_measurements(
     as the natural key and existing rows are skipped, so duplicates inside the
     file and rows already stored are both counted and ignored.
     """
-    require_device_role(user_id, device_id, ["owner", "admin"])
-    return bulk_import_measurements(device_id, payload.measurements)
+    await run_in_threadpool(require_device_role, user_id, device_id, ["owner", "admin"])
+    # Parsed only now, once the caller is known: see uploads.py.
+    payload = await parse_json_body(request, MeasurementImportIn)
+    return await run_in_threadpool(bulk_import_measurements, device_id, payload.measurements)
 
 
 def bulk_import_measurements(
@@ -1551,18 +1557,28 @@ def serialize_measurements(rows) -> list[dict]:
     return mask_inspection_readings(difference_bee_counter_intervals(measurements))
 
 
-def serialize_chart_measurements(cur) -> list[dict]:
-    """Map the slim CHART_MEASUREMENT_COLUMNS result set to API dicts.
+def fetch_chart_rows(cur) -> list[dict]:
+    """Read the slim CHART_MEASUREMENT_COLUMNS result set into dicts by column
+    name (rather than the positional mapping used for the full row).
 
-    Builds dicts by column name (rather than the positional mapping used for the
-    full row), seeds the compensated-weight defaults that measurement_row_to_dict
-    would normally set, then runs the same compensation / bee-counter / per-hive
-    transforms so the chart payload stays consistent with the full read APIs.
-    """
+    Kept apart from serialize_chart_measurements so the caller can release its
+    pooled connection first: the enrichment there checks out connections of its
+    own, and holding one while waiting for another lets a burst of chart
+    requests drain the pool and block each other until the pool timeout."""
     cols = [c.name for c in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def serialize_chart_measurements(rows: list[dict]) -> list[dict]:
+    """Turn fetch_chart_rows() output into API dicts.
+
+    Seeds the compensated-weight defaults that measurement_row_to_dict would
+    normally set, then runs the same compensation / bee-counter / per-hive
+    transforms so the chart payload stays consistent with the full read APIs.
+    Opens its own connections: call it with no pooled connection held.
+    """
     measurements: list[dict] = []
-    for r in cur.fetchall():
-        m = dict(zip(cols, r))
+    for m in rows:
         # Mirror measurement_row_to_dict: default compensated weights to the raw
         # weight so the keys always exist; attach_temperature_compensation()
         # overrides them when a coefficient is configured.

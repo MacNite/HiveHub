@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Backend server version. Bump on releases; reported in the OpenAPI metadata
 # (/docs) and by GET /health so a deployment's version is visible remotely.
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.6.1"
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 API_KEY = os.environ["API_KEY"]
@@ -132,6 +132,14 @@ MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_BYTES", str(256 * 1024)))
 # Firmware uploads are large by design and are capped separately, while being
 # streamed to disk, inside the upload endpoint itself.
 MAX_FIRMWARE_BYTES = int(os.environ.get("MAX_FIRMWARE_BYTES", str(16 * 1024 * 1024)))
+# SD backup uploads are held in memory while they are parsed, so they are capped
+# too (mirrors the HivePal proxy's cap). Also bounds the HivePal JSON import body.
+SD_IMPORT_MAX_FILE_SIZE = int(
+    os.environ.get("HIVEHUB_SD_IMPORT_MAX_FILE_SIZE", str(250 * 1024 * 1024))
+)
+# Head-room for the multipart framing around an uploaded file, so the body-size
+# guard can cap an upload request at its file limit plus this.
+UPLOAD_ENVELOPE_BYTES = 1024 * 1024
 
 # ── Insights history / alert lifecycle reconciliation ────────────────────────
 # Sensor-based insights (server/insights.py) are recomputed on demand and never

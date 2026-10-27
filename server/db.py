@@ -753,6 +753,12 @@ def init_db():
                 ALTER TABLE dashboard_users
                     ADD COLUMN IF NOT EXISTS email TEXT;
 
+                -- Carried in every session token and checked on each request;
+                -- bumping it (password change) revokes the sessions issued
+                -- before. See migrations/033_dashboard_session_version.sql.
+                ALTER TABLE dashboard_users
+                    ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0;
+
                 -- Small key/value store for dashboard-wide settings, currently the
                 -- auto-generated session signing secret (so logins survive restarts
                 -- without requiring DASHBOARD_SESSION_SECRET to be configured).

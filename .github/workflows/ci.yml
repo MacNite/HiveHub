@@ -118,7 +118,8 @@ jobs:
       - name: Install server dependencies
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q build-essential python3-dev
-          pip install -r server/requirements.txt pytest
+          # httpx2: Starlette's TestClient transport (test_backend_db.py).
+          pip install -r server/requirements.txt pytest httpx2==2.13.1
       - name: Run server test suite
         env:
           DATABASE_URL: postgresql://ci-not-used/ci
@@ -158,11 +159,15 @@ jobs:
       # --require-db turns an unreachable database into a failure rather than a
       # skip, so a broken service container can never leave this job green while
       # silently testing nothing.
-      - name: Run pairing lifecycle tests against PostgreSQL
+      - name: Run database-backed tests against PostgreSQL
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hivehub_test
           PYTHONPATH: server
-        run: python3 test-data/test_pairing_lifecycle.py --require-db
+        run: |
+          python3 test-data/test_pairing_lifecycle.py --require-db
+          # Session revocation, pool-connection nesting (run on a one-connection
+          # pool) and auth-before-parse on the upload routes.
+          python3 test-data/test_backend_db.py --require-db
 
   # The website/configurator and dashboard have no test suite yet; keep them at
   # least syntactically sound so a broken script cannot ship unnoticed.

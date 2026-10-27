@@ -16,6 +16,7 @@ The domain logic lives in the sibling modules:
 - local_dashboard.py    self-host dashboard API (/api/v1/local/*)
 - publish.py            published charts: admin API + public embeds (/embed/*)
 """
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,10 +59,37 @@ limiter = Limiter(
     headers_enabled=True,
 )
 
+def startup():
+    db_pool.open()
+    FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
+    RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+    init_db()
+    start_notification_worker()
+    start_insight_reconciler()
+    mqtt_publisher.start()
+
+
+def shutdown():
+    stop_insight_reconciler()
+    stop_notification_worker()
+    mqtt_publisher.stop()
+    db_pool.close()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    startup()
+    try:
+        yield
+    finally:
+        shutdown()
+
+
 app = FastAPI(
     title="HiveHub API",
     description="HTTP endpoint for ESP32-based dual hive scales.",
     version=SERVER_VERSION,
+    lifespan=lifespan,
 )
 
 # Rate limiting (slowapi): keyed on the real client IP, emits standard RateLimit
@@ -89,25 +117,6 @@ if RATE_LIMIT_ENABLED:
 # broke the HiveInside relay outright ("invalid firmware content length -1").
 # See SelectiveGZipMiddleware.
 app.add_middleware(SelectiveGZipMiddleware, minimum_size=1024)
-
-
-@app.on_event("startup")
-def startup():
-    db_pool.open()
-    FIRMWARE_DIR.mkdir(parents=True, exist_ok=True)
-    RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-    init_db()
-    start_notification_worker()
-    start_insight_reconciler()
-    mqtt_publisher.start()
-
-
-@app.on_event("shutdown")
-def shutdown():
-    stop_insight_reconciler()
-    stop_notification_worker()
-    mqtt_publisher.stop()
-    db_pool.close()
 
 
 @app.get("/health")

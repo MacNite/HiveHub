@@ -4,7 +4,7 @@ firmware upload/approval and calibration triggers."""
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from auth import require_device_role, require_hivepal_service_key, require_user_id
 from recordings import (
@@ -33,6 +33,7 @@ from devices import (
     update_device_config,
 )
 from firmware import (
+    FIRMWARE_UPLOAD_OPENAPI,
     get_approved_firmware_version,
     get_device_board,
     latest_beecounter_release,
@@ -40,6 +41,7 @@ from firmware import (
     latest_release_for_owner,
     other_board_releases,
     parse_version,
+    read_firmware_upload_form,
     set_approved_firmware_version,
     store_firmware_upload,
 )
@@ -427,14 +429,11 @@ def fit_temp_compensation_from_app(
 @router.post(
     "/api/v1/app/devices/{device_id}/firmware",
     dependencies=[Depends(require_hivepal_service_key)],
+    openapi_extra=FIRMWARE_UPLOAD_OPENAPI,
 )
 async def upload_firmware_from_app(
     device_id: str,
-    file: UploadFile = File(...),
-    version: str = Form(...),
-    target: str = Form("hivescale"),
-    active: bool = Form(True),
-    board: str = Form(""),
+    request: Request,
     user_id: str = Depends(require_user_id),
 ):
     """Upload a firmware binary from HivePal and register it as a release.
@@ -456,6 +455,9 @@ async def upload_firmware_from_app(
     # it up. Fall back to the uploader (an admin acting on an owner-less device)
     # so a release always has an owner and never silently becomes global.
     owner_user_id = get_device_owner_id(device_id) or user_id
+    # Parsed here, after the auth checks above, not as File()/Form() parameters:
+    # see uploads.py.
+    file, version, target, active, board = await read_firmware_upload_form(request)
     return await store_firmware_upload(
         device_id, file, version, target, active, board, owner_user_id
     )
