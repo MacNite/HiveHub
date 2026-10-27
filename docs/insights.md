@@ -55,6 +55,16 @@ rather than about gaps, interventions or stale data.
   `COUNTER_MAX_INTERVAL_MULT` (3) times the usual poll spacing out of its
   peak test. Daily totals split an interval that spans midnight across both
   days.
+- **Counter coverage changes start a new comparison.** A different counter,
+  a changed emitter-bank mask or a lost port expander makes the counts before
+  and after incomparable, so only traffic counted with the current coverage
+  feeds the rules. Readings taken while a counter was idled for the night are a
+  deliberately blind period, not zero traffic.
+- **Local time and hemisphere.** Time-of-day windows (daytime swarms,
+  late-afternoon robbing, night-time vibration) and calendar days use the
+  apiary's local time: the device's night-mode timezone preset, else
+  `INSIGHTS_TIMEZONE`, else the container's `TZ`. The season rules follow
+  `INSIGHTS_HEMISPHERE` (`north` by default; `south` shifts them by six months).
 - **Acoustic evidence is one recent reading from a working microphone.** All
   bands come from the newest reading that carries them, no older than
   `MIC_EVIDENCE_MAX_AGE_HOURS` (3 h), and a newer reading reporting the mic as

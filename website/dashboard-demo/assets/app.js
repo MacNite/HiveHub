@@ -520,7 +520,33 @@ function renderActiveDeviceField() {
   ui.activeDeviceSelect.value = state.activeDeviceId;
 }
 
+// ── unsaved edits ─────────────────────────────────────────────────────────────
+// render() rebuilds the whole content area from the loaded state, so a form
+// someone is filling in (calibration, hive names, an inspection note, a
+// password) is rebuilt from the saved values — and the 60s auto-refresh did
+// that in the middle of typing. The refresh now waits while a form field in
+// the content has focus or holds input that was not yet saved; leaving the
+// view (any render) ends the edit.
+let contentDirty = false;
+const EDIT_FIELDS = "input:not([type=button]):not([type=submit]):not([type=reset]), textarea, select";
+
+function editingInProgress() {
+  if (contentDirty) return true;
+  const a = document.activeElement;
+  return !!(a && ui.content.contains(a) && a.matches(EDIT_FIELDS));
+}
+
+function autoRefresh() {
+  if (document.hidden || state.loading) return;
+  if (editingInProgress()) {
+    setStatus("Auto-refresh paused while you edit — Refresh reloads now");
+    return;
+  }
+  loadData();
+}
+
 function render() {
+  contentDirty = false;
   renderSidebar();
   clearCharts();
   const group = GROUPS.find((g) => g.id === state.group) || GROUPS[0];
@@ -597,7 +623,10 @@ function wireEvents() {
   // Canvas charts don't inherit CSS colours, so redraw them when the theme flips.
   window.addEventListener("themechange", () => requestAnimationFrame(drawCharts));
   // auto-refresh every 60s
-  setInterval(() => { if (!document.hidden && !state.loading) loadData(); }, 60000);
+  ui.content.addEventListener("input", (e) => {
+    if (e.target.matches && e.target.matches(EDIT_FIELDS)) contentDirty = true;
+  });
+  setInterval(autoRefresh, 60000);
 }
 
 async function init() {

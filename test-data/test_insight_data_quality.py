@@ -15,6 +15,11 @@ I3  Counter rates are counts per actual elapsed time. A steady 600 bees/h with
     looked like a burst to the swarm rule.
 I5  A minimum point count is not coverage. Eight readings over seven minutes
     were reported as "24h hive temp held at 35 degC".
+I4  A change in what the counter covers (another counter, fewer emitter banks,
+    a dead port expander) is not a change in the colony, and night-idle
+    readings are a blind period, not zero traffic.
+I6  Time-of-day rules run in the apiary's local time, and the seasons follow
+    its hemisphere.
 
 Run: PYTHONPATH=server python3 test-data/test_insight_data_quality.py
 """
@@ -175,6 +180,74 @@ check("foraging needs a covered day too",
       insights.detect_foraging_intensity(
           insights._extract_series(rows(NOW - timedelta(hours=1), 6, 10, scale_1_weight_kg=lambda i: 50 + i),
                                    "scale_1_weight_kg"), 1, NOW) is None)
+
+
+# ---------------------------------------------------------------------------
+print("\n=== I4. Counter coverage changes start a new comparison ===")
+
+# 14 days of steady outbound traffic; on day 10 one of three emitter banks is
+# switched off, so the counter sees two thirds of the bees from then on.
+start = NOW - timedelta(days=14)
+cov_rows = []
+for i in range(14 * 24):
+    at = start + timedelta(hours=i)
+    banks = 7 if at < start + timedelta(days=10) else 3
+    cov_rows.append({"measured_at": at, "bee_counter_1_ok": True, "bee_counter_1_banks": banks,
+                     "bee_counter_1_interval_out": 300.0 if banks == 7 else 200.0})
+out_all = insights._extract_counter_series(cov_rows, 1, "out")
+check("the coverage change is found",
+      insights._counter_coverage_start(cov_rows, 1) == start + timedelta(days=10))
+decline_before, _, _ = insights._forager_decline_frac_per_day(out_all, NOW, 14, 0.0)
+check("(precondition) across the change it looks like a forager decline",
+      decline_before is not None and decline_before > 0.02)
+cut = [p for p in out_all if p[0] > insights._counter_coverage_start(cov_rows, 1)]
+decline_after, _, _ = insights._forager_decline_frac_per_day(cut, NOW, 14, 0.0)
+check("within the current coverage there is none", decline_after is None or abs(decline_after) < 0.01)
+check("a field missing on one side is not a change",
+      insights._counter_coverage_start([dict(cov_rows[0], bee_counter_1_banks=None)] + cov_rows[1:3], 1) is None)
+
+idle = [
+    {"measured_at": NOW - timedelta(minutes=30), "bee_counter_1_ok": True, "bee_counter_1_total_out": 100},
+    {"measured_at": NOW - timedelta(minutes=20), "bee_counter_1_ok": True, "bee_counter_1_total_out": 100,
+     "bee_counter_1_idle_s": 1800},
+    {"measured_at": NOW - timedelta(minutes=10), "bee_counter_1_ok": True, "bee_counter_1_total_out": 130},
+]
+check("night-idle readings add no zero-traffic points",
+      [v for _, v in insights._extract_counter_series(idle, 1, "out")] == [30.0])
+swap = [
+    {"measured_at": NOW - timedelta(minutes=20), "bee_counter_1_ok": True, "bee_counter_1_total_out": 5000,
+     "bee_counter_1_mac": "AA"},
+    {"measured_at": NOW - timedelta(minutes=10), "bee_counter_1_ok": True, "bee_counter_1_total_out": 900000,
+     "bee_counter_1_mac": "BB"},
+]
+check("a replaced counter is not read as one huge interval",
+      insights._extract_counter_series(swap, 1, "out") == [])
+
+
+# ---------------------------------------------------------------------------
+print("\n=== I6. Local time and hemisphere ===")
+from zoneinfo import ZoneInfo  # noqa: E402
+
+# Robbing is a warning in the local late afternoon (15-19 h). 15:30 in Sydney
+# is 04:30 UTC, which the engine used to read as early morning.
+sydney = ZoneInfo("Australia/Sydney")
+local_afternoon = datetime(2026, 1, 15, 15, 30, tzinfo=sydney).astimezone(timezone.utc)
+rob = rows(local_afternoon - timedelta(hours=2), 13, 10, scale_1_weight_kg=lambda i: 50.0 - 0.1 * i)
+utc_alert = {a.id: a for a in insights.compute_insights(rob, now=local_afternoon)}["robbing-ch1"]
+local_alert = {a.id: a for a in insights.compute_insights(
+    rob, now=local_afternoon, site=insights.SiteProfile(tz=sydney))}["robbing-ch1"]
+check("in UTC the local afternoon reads as morning (precondition)", utc_alert.severity == "watch")
+check("with the apiary's zone it is the late afternoon", local_alert.severity == "warning")
+
+january = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+south = insights.SiteProfile(southern_hemisphere=True)
+token = insights._SITE.set(south)
+try:
+    check("January is the active season in the southern hemisphere", insights._is_active_season(january))
+    check("... and July its winter", insights._is_winter(datetime(2026, 7, 15, tzinfo=timezone.utc)))
+finally:
+    insights._SITE.reset(token)
+check("the default stays northern", not insights._is_active_season(january))
 
 
 if FAILURES:

@@ -96,10 +96,11 @@ Sources for the thresholds used below
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any, Iterable, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -565,12 +566,51 @@ def _span_hours(series: Series) -> float:
     return (series[-1][0] - series[0][0]).total_seconds() / 3600.0 if len(series) >= 2 else 0.0
 
 
+# ---------------------------------------------------------------------------
+# Where the apiary is: local time of day and season
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SiteProfile:
+    """Where an apiary is, as far as the rules care.
+
+    Timestamps stay UTC; only the rule windows are evaluated locally — "late
+    afternoon" robbing, daytime swarms, night-time vibration and calendar days
+    — and the season follows the hemisphere. The default (UTC, northern
+    hemisphere) is what the engine assumed everywhere before.
+    """
+    tz: tzinfo = timezone.utc
+    southern_hemisphere: bool = False
+
+
+# Set by compute_insights() for the duration of one pass, so every detector
+# sees the same site without each one growing a parameter.
+_SITE: contextvars.ContextVar[SiteProfile] = contextvars.ContextVar(
+    "insights_site", default=SiteProfile()
+)
+
+
+def _local(when: datetime) -> datetime:
+    """``when`` in the apiary's local time."""
+    return when.astimezone(_SITE.get().tz)
+
+
+def _season_month(when: datetime) -> int:
+    """The local month, shifted by half a year in the southern hemisphere so
+    the rules below can speak in northern months."""
+    month = _local(when).month
+    if _SITE.get().southern_hemisphere:
+        month = (month + 5) % 12 + 1
+    return month
+
+
 def _is_active_season(when: datetime) -> bool:
-    return 3 <= when.month <= 9
+    return 3 <= _season_month(when) <= 9
 
 
 def _is_winter(when: datetime) -> bool:
-    return when.month >= 10 or when.month <= 2
+    month = _season_month(when)
+    return month >= 10 or month <= 2
 
 
 # ---------------------------------------------------------------------------
@@ -802,7 +842,7 @@ def _night_window(series: Series, end: datetime, days: float) -> Series:
     start = end - timedelta(days=days)
     return [
         (t, v) for t, v in series
-        if start < t <= end and lo <= t.hour < hi
+        if start < t <= end and lo <= _local(t).hour < hi
     ]
 
 
@@ -911,10 +951,17 @@ def _extract_counter_series(
     deltas are computed. The total baseline advances on every row that carries
     a usable total — even rows that used the device interval — so a stream that
     switches transports stays consistent across the boundary.
+
+    Rows taken while the counter was idled for the night (``idle_s`` > 0) are
+    a deliberately blind period, not zero traffic: they advance the baseline
+    but add no point. A reading from a different counter (``mac`` changed)
+    restarts the baseline instead of being read as a reboot.
     """
     ok_field = f"bee_counter_{channel}_ok"
     interval_field = f"bee_counter_{channel}_interval_{direction}"
     total_field = f"bee_counter_{channel}_total_{direction}"
+    idle_field = f"bee_counter_{channel}_idle_s"
+    mac_field = f"bee_counter_{channel}_mac"
 
     def _as_float(v: Any) -> Optional[float]:
         if v is None:
@@ -938,9 +985,19 @@ def _extract_counter_series(
 
     out: Series = []
     prev_total: Optional[float] = None
+    prev_mac: Optional[str] = None
     for ts, m in rows:
         interval_val = _as_float(m.get(interval_field))
         cur_total = _as_float(m.get(total_field))
+        mac = m.get(mac_field)
+        if mac and prev_mac and mac != prev_mac:
+            prev_total = None
+        if mac:
+            prev_mac = mac
+        if (_as_float(m.get(idle_field)) or 0) > 0:
+            if cur_total is not None:
+                prev_total = cur_total
+            continue
 
         # Fall back to differencing the monotonic lifetime total when the
         # device did not report a per-interval count (the BLE/totals-only path).
@@ -961,6 +1018,41 @@ def _extract_counter_series(
             out.append((ts, interval_val))
 
     return out
+
+
+# What a counter covers: which counter it is, which emitter banks are lit, how
+# many port expanders answer. A change means the counts before and after are not
+# comparable — eight gates switched off read exactly like a third fewer bees.
+_COUNTER_COVERAGE_FIELDS = ("mac", "banks", "mcps_healthy", "num_gates")
+
+
+def _counter_coverage_start(
+    measurements: Iterable[dict[str, Any]], channel: ChannelRef
+) -> Optional[datetime]:
+    """When the counter's current coverage began, or None if it never changed.
+
+    A field that is absent on one side (older firmware, a row without it) is
+    unknown, not a change.
+    """
+    rows = []
+    for m in measurements:
+        if not m.get(f"bee_counter_{channel}_ok"):
+            continue
+        ts = _as_datetime(m.get("measured_at"))
+        if ts is not None:
+            rows.append((ts, m))
+    rows.sort(key=lambda p: p[0])
+    known: dict[str, Any] = {}
+    start: Optional[datetime] = None
+    for ts, m in rows:
+        for field in _COUNTER_COVERAGE_FIELDS:
+            value = m.get(f"bee_counter_{channel}_{field}")
+            if value is None:
+                continue
+            if field in known and known[field] != value:
+                start = ts
+            known[field] = value
+    return start
 
 
 def _bucket_by_day(series: Series, end: datetime, days: int) -> Series:
@@ -989,7 +1081,8 @@ def _bucket_by_day(series: Series, end: datetime, days: int) -> Series:
     counts: dict[datetime, int] = {}
 
     def _day(t: datetime) -> datetime:
-        return t.replace(hour=0, minute=0, second=0, microsecond=0)
+        # The apiary's calendar day, not the UTC one.
+        return _local(t).replace(hour=0, minute=0, second=0, microsecond=0)
 
     for i, (t, v) in enumerate(series):
         if t <= start or t > end:
@@ -1193,7 +1286,7 @@ def detect_swarm_event(
     drop, t_start, t_end = _max_drop(last_2h, SWARM_WEIGHT_WINDOW_MIN)
     if drop is None or drop < SWARM_WEIGHT_DROP_KG:
         return None
-    hour = now.hour
+    hour = _local(now).hour
     in_daytime = SWARM_DAYTIME_HOURS[0] <= hour < SWARM_DAYTIME_HOURS[1]
     severity: AlertSeverity = "critical" if in_daytime else "warning"
     confidence = min(1.0, 0.6 + (drop - SWARM_WEIGHT_DROP_KG) * 0.1)
@@ -1669,7 +1762,7 @@ def detect_robbing(
     if drop is not None and drop >= SWARM_WEIGHT_DROP_KG:
         return None
 
-    hour = last_2h[-1][0].hour
+    hour = _local(last_2h[-1][0]).hour
     in_afternoon = ROBBING_LATE_AFTERNOON_HOURS[0] <= hour < ROBBING_LATE_AFTERNOON_HOURS[1]
     severity: AlertSeverity = "warning" if in_afternoon else "watch"
     confidence = 0.5 + (0.2 if in_afternoon else 0.0)
@@ -2261,6 +2354,21 @@ def detect_hiveheart_spectrum_shift(
 def compute_insights(
     measurements: list[dict[str, Any]],
     now: Optional[datetime] = None,
+    site: Optional[SiteProfile] = None,
+) -> list[Alert]:
+    """Run every detector; see _compute_insights. ``site`` places the apiary
+    (local time zone, hemisphere) for the rules' time-of-day, calendar-day and
+    season windows; the default is UTC in the northern hemisphere."""
+    token = _SITE.set(site or SiteProfile())
+    try:
+        return _compute_insights(measurements, now)
+    finally:
+        _SITE.reset(token)
+
+
+def _compute_insights(
+    measurements: list[dict[str, Any]],
+    now: Optional[datetime] = None,
 ) -> list[Alert]:
     """
     Run all detectors against both scale channels and return a flat list of
@@ -2306,6 +2414,14 @@ def compute_insights(
         )
         bee_in = _extract_counter_series(measurements, channel, "in")
         bee_out = _extract_counter_series(measurements, channel, "out")
+        # Compare like with like: only traffic counted with the counter's
+        # current coverage (same counter, banks and expanders) feeds the rules.
+        # The reading at the change itself is dropped too: its interval spans
+        # both coverages.
+        coverage_start = _counter_coverage_start(measurements, channel)
+        if coverage_start is not None:
+            bee_in = [p for p in bee_in if p[0] > coverage_start]
+            bee_out = [p for p in bee_out if p[0] > coverage_start]
         accel_swarm = _accel_band_series(measurements, channel, "swarm")
         accel_rms = _accel_rms_series(measurements, channel)
         hiveheart_fft = _hiveheart_fft_series(measurements, channel)

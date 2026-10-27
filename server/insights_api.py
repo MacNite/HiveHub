@@ -4,20 +4,23 @@ HivePal insight endpoints."""
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg
 from fastapi import APIRouter, Depends, Query
 
 from auth import require_device_role, require_hivepal_service_key, require_user_id
 from config import (
+    INSIGHTS_HEMISPHERE,
     INSIGHTS_HISTORY_LOOKBACK_DAYS,
     INSIGHTS_RECONCILE_ENABLED,
     INSIGHTS_RECONCILE_INTERVAL_SECONDS,
+    INSIGHTS_TIMEZONE,
     NOTIFY_MIN_SEVERITY,
     logger,
 )
 from db import get_conn
-from insights import compute_insights, summarize
+from insights import SiteProfile, compute_insights, summarize
 from notifications import (
     SEVERITY_RANK,
     AlertEvent,
@@ -233,6 +236,40 @@ def persist_insights(device_id: str, alerts: list, computed_at: datetime) -> Non
         enqueue_alert_events(events_to_send)
 
 
+# The night-mode timezone a device stores is a POSIX TZ string (the ESP32 has no
+# tz database), picked from the dashboard's presets (views.js TZ_PRESETS). Each
+# preset names one IANA zone; a custom string falls back to INSIGHTS_TIMEZONE.
+POSIX_TZ_TO_IANA = {
+    "CET-1CEST,M3.5.0,M10.5.0/3": "Europe/Berlin",
+    "GMT0BST,M3.5.0/1,M10.5.0": "Europe/London",
+    "EET-2EEST,M3.5.0/3,M10.5.0/4": "Europe/Helsinki",
+    "EST5EDT,M3.2.0,M11.1.0": "America/New_York",
+    "CST6CDT,M3.2.0,M11.1.0": "America/Chicago",
+    "MST7MDT,M3.2.0,M11.1.0": "America/Denver",
+    "PST8PDT,M3.2.0,M11.1.0": "America/Los_Angeles",
+}
+
+
+def _zone(name: str):
+    try:
+        return ZoneInfo(name) if name else None
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning("insights: unknown time zone %r, using UTC", name)
+        return None
+
+
+def site_profile_for(device_id: str) -> SiteProfile:
+    """The apiary's local time zone and hemisphere for one device's insights."""
+    device_tz = ""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT timezone FROM device_configs WHERE device_id = %s;", (device_id,))
+            row = cur.fetchone()
+            device_tz = (row[0] or "").strip() if row else ""
+    tz = _zone(POSIX_TZ_TO_IANA.get(device_tz, "")) or _zone(INSIGHTS_TIMEZONE) or timezone.utc
+    return SiteProfile(tz=tz, southern_hemisphere=INSIGHTS_HEMISPHERE == "south")
+
+
 def reconcile_device_insights(
     device_id: str, lookback_days: int = INSIGHTS_HISTORY_LOOKBACK_DAYS
 ) -> int:
@@ -255,7 +292,7 @@ def reconcile_device_insights(
             )
             rows = cur.fetchall()
     measurements = measurements_for_insights(rows)
-    alerts = compute_insights(measurements, now=end_at)
+    alerts = compute_insights(measurements, now=end_at, site=site_profile_for(device_id))
     persist_insights(device_id, alerts, end_at)
     return len(alerts)
 
@@ -447,7 +484,7 @@ def get_device_insights(
             rows = cur.fetchall()
 
     measurements = measurements_for_insights(rows)
-    alerts = compute_insights(measurements, now=end_at)
+    alerts = compute_insights(measurements, now=end_at, site=site_profile_for(device_id))
     return {
         "device_id": device_id,
         "computed_at": end_at.isoformat(),
@@ -487,7 +524,7 @@ def get_device_insights_summary(
             rows = cur.fetchall()
 
     measurements = measurements_for_insights(rows)
-    alerts = compute_insights(measurements, now=end_at)
+    alerts = compute_insights(measurements, now=end_at, site=site_profile_for(device_id))
     # Opportunistically keep the persisted history fresh on every summary hit,
     # in addition to the background reconciler. Never let a persistence error
     # break the read.
@@ -560,7 +597,7 @@ def compute_local_insights_summary(device_id: str) -> dict:
             )
             rows = cur.fetchall()
     measurements = measurements_for_insights(rows)
-    alerts = compute_insights(measurements, now=end_at)
+    alerts = compute_insights(measurements, now=end_at, site=site_profile_for(device_id))
     try:
         persist_insights(device_id, alerts, end_at)
     except Exception:

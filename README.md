@@ -370,6 +370,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `ENABLE_PUBLIC_EMBEDS` | Optional | Allow the dashboard's **Device & admin → Publish data** panel to serve individual published charts without a login, for embedding in a website (default on; nothing is public until an admin publishes it, and the panel is hidden when this is off). See [Publish data](docs/publish-embed.md). |
 | `TRUST_PROXY_HEADERS` | Optional | Trust `CF-Connecting-IP` / `X-Forwarded-For` for rate-limit client IPs (default `false`; set `true` only behind a reverse proxy that overwrites these headers, otherwise a direct client can spoof them to dodge the limiter) |
 | `INSIGHTS_RECONCILE_*` | Optional | Background insight-history reconciliation (see `server/.env.example`) |
+| `INSIGHTS_TIMEZONE` / `INSIGHTS_HEMISPHERE` | Optional | The apiary's IANA time zone (default: a device's night-mode zone, else the container's `TZ`, else UTC) and hemisphere (`north` / `south`) for the insight rules' time-of-day and season windows |
 | `SMTP_*` / `NOTIFY_MIN_SEVERITY` | Optional | E-mail channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
 | `WEB_PUSH_ENABLED` / `VAPID_*` | Optional | Web Push channel for insight alert notifications (off by default — see [Insight alert notifications](docs/notifications.md)) |
 | `MQTT_*` | Optional | MQTT bridge to Home Assistant / Node-RED / openHAB (off by default — see [MQTT / Home Assistant integration](#mqtt--home-assistant-integration)) |

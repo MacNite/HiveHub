@@ -1226,6 +1226,11 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
       bogus delta.
     * A counter reboot or uint32 wrap (``total_now < total_prev``) is attributed
       as ``total_now`` so the restart from zero is not seen as a huge negative.
+    * Each device is differenced on its own: a result set spanning several hubs
+      (the master-key latest endpoint) used to difference hub A's counter against
+      hub B's. And a reading from a different counter (``bee_counter_{n}_mac``
+      changed) starts a new baseline instead of being read as a reboot, which
+      would have credited the new counter's whole lifetime total as one interval.
 
     The dicts are mutated in place; the caller's ordering is preserved (we sort a
     shallow copy by ``measured_at`` only to compute the deltas). Run this *after*
@@ -1238,14 +1243,20 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     )
     for ch in range(1, MAX_HIVES + 1):
         ok_key = f"bee_counter_{ch}_ok"
+        mac_key = f"bee_counter_{ch}_mac"
         for direction in ("in", "out"):
             interval_key = f"bee_counter_{ch}_interval_{direction}"
             total_key = f"bee_counter_{ch}_total_{direction}"
-            prev_total = None
+            # Per device: (previous total, the counter it came from).
+            prev: dict = {}
             for m in ordered:
                 if not m.get(ok_key):
                     continue
                 cur_total = m.get(total_key)
+                mac = m.get(mac_key)
+                prev_total, prev_mac = prev.get(m.get("device_id"), (None, None))
+                if mac and prev_mac and mac != prev_mac:
+                    prev_total = None  # a different counter: no baseline yet
                 if m.get(interval_key) is None and cur_total is not None:
                     if prev_total is None:
                         pass  # no baseline yet — can't attribute the first reading
@@ -1254,7 +1265,7 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
                     else:
                         m[interval_key] = cur_total  # reboot / wrap
                 if cur_total is not None:
-                    prev_total = cur_total
+                    prev[m.get("device_id")] = (cur_total, mac or prev_mac)
     return measurements
 
 
@@ -1494,6 +1505,16 @@ def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
         put(f"bee_counter_{n}_total_out", c.get("total_out"))
         put(f"bee_counter_{n}_interval_in", c.get("interval_in"))
         put(f"bee_counter_{n}_interval_out", c.get("interval_out"))
+        # Which physical counter this is: a different one starts a new count.
+        put(f"bee_counter_{n}_mac", c.get("mac"))
+        # What it covers, and whether it was idled for the night (see the
+        # HiveBeeCounterIn notes in schemas.py). The insight engine compares
+        # traffic only within one coverage and skips idle readings.
+        put(f"bee_counter_{n}_banks", c.get("banks"))
+        put(f"bee_counter_{n}_mcps_healthy",
+            c.get("mcps_healthy") if c.get("mcps_healthy") is not None else c.get("gates_healthy"))
+        put(f"bee_counter_{n}_num_gates", c.get("num_gates"))
+        put(f"bee_counter_{n}_idle_s", c.get("idle_s"))
 
 
 _HIVEHEART_FLAT_FFT_RE = re.compile(r"^hiveheart_(\d+)_fft$")
