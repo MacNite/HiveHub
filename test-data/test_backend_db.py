@@ -12,7 +12,9 @@ mock-based suites cannot see:
 - the upload routes (SD import, firmware) authenticate before they parse the
   body, and still accept a real upload once authenticated;
 - the bulk/SD import de-duplicates on measurement_id like live ingest, and a
-  timestamp without a UTC offset is stored as UTC instead of failing.
+  timestamp without a UTC offset is stored as UTC instead of failing;
+- an inspection stored in the database cuts the insight engine's weight series
+  even when the hub took no reading while the hive was open.
 
 Usage:
     DATABASE_URL=postgresql://... PYTHONPATH=server python3 test_backend_db.py
@@ -86,7 +88,8 @@ def check(label, got, want):
 def reset():
     with get_conn() as conn:
         with conn.cursor() as cur:
-            for table in ("hive_readings", "measurements", "device_configs", "device_members",
+            for table in ("hive_readings", "measurements", "device_inspections",
+                          "device_configs", "device_members",
                           "firmware_releases", "devices", "dashboard_users"):
                 cur.execute(f"DELETE FROM {table};")
             conn.commit()
@@ -331,8 +334,49 @@ def test_import_dedups_on_measurement_id():
           (raced.get("inserted"), raced.get("duplicates")), (0, 2))
 
 
+def test_inspection_cuts_insight_series():
+    print("=== a stored inspection keeps a removed super from reading as a swarm ===")
+    import insights
+    from measurements import MEASUREMENT_SELECT_COLUMNS, measurements_for_insights
+
+    reset()
+    seed_device()
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    # 2 h at 50 kg, the hive open for 10 min with no reading, then 48 kg.
+    rows = [m(timestamp=(now - timedelta(minutes=120 - 10 * i)).isoformat(), scale_1_weight_kg=50.0)
+            for i in range(9)]
+    rows += [m(timestamp=(now - timedelta(minutes=25 - 10 * i)).isoformat(), scale_1_weight_kg=48.0)
+             for i in range(3)]
+    bulk_import_measurements(DEVICE, rows)
+
+    def alerts():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {MEASUREMENT_SELECT_COLUMNS} FROM measurements "
+                    "WHERE device_id = %s ORDER BY measured_at ASC;",
+                    (DEVICE,),
+                )
+                fetched = cur.fetchall()
+        return {a.id for a in insights.compute_insights(measurements_for_insights(fetched), now=now)}
+
+    check("without an inspection the drop is a swarm event", "swarm-event-ch1" in alerts(), True)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO device_inspections (device_id, started_at, ended_at, acknowledged_at, source) "
+                "VALUES (%s, %s, %s, %s, 'device');",
+                # Between the readings at -40 and -25 min: none falls inside.
+                (DEVICE, now - timedelta(minutes=38), now - timedelta(minutes=28),
+                 now - timedelta(minutes=38)),
+            )
+            conn.commit()
+    check("with the inspection stored it is not", "swarm-event-ch1" in alerts(), False)
+
+
 test_session_revocation()
 test_chart_reads_do_not_nest_connections()
+test_inspection_cuts_insight_series()
 test_naive_timestamps_are_utc()
 test_import_dedups_on_measurement_id()
 test_uploads_authenticate_before_parsing()

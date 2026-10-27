@@ -255,14 +255,16 @@ ROBBING_STRESS_DBFS = -38.0
 # All thresholds below are starting points — recalibrate against your own data.
 
 # Swarm event (Phase 3): a swarm departure shows a massive, asymmetric OUTflow.
-# The spec rule is out_count > SWARM_OUT_BASELINE_MULT x baseline AND
-# out / (in + 1) > SWARM_OUT_IN_RATIO within the drop window. When this
-# corroborates the weight drop, severity/confidence are raised.
+# The spec rule is peak outbound rate > SWARM_OUT_BASELINE_MULT x the baseline
+# rate AND out / (in + 1) > SWARM_OUT_IN_RATIO within the drop window. When
+# this corroborates the weight drop, severity/confidence are raised. Rates are
+# bees/h over each interval's own length (see _interval_rates).
 SWARM_OUT_BASELINE_MULT = 3.0
 SWARM_OUT_IN_RATIO = 5.0
-# Minimum baseline outbound-per-interval before the multiplier test is
+# Minimum baseline outbound rate (bees/h) before the multiplier test is
 # meaningful (avoids a divide-by-near-zero when the hive was nearly idle).
-SWARM_OUT_MIN_BASELINE = 1.0
+# One bee per 10-minute poll, the threshold this replaced.
+SWARM_OUT_MIN_BASELINE = 6.0
 
 # Queenlessness: forager (outbound) decline of >= this fraction per day,
 # sustained over the queenless window (~5%/day for 7+ days per the spec).
@@ -431,6 +433,138 @@ def _max_drop(
     return (best, best_pair[0], best_pair[1]) if best > 0 else (None, None, None)
 
 
+# ---------------------------------------------------------------------------
+# Data-quality helpers: interventions, coverage, interval durations
+# ---------------------------------------------------------------------------
+#
+# The detectors used to treat each series as one continuous, evenly sampled
+# record. It is neither. A beekeeper opens the hive and lifts a super off (the
+# readings during the inspection are masked, but the weight before and after
+# still differ by the super); a calibration run puts test weights on the
+# scale; the hub misses polls, so one counter interval can span hours; and a
+# handful of readings minutes apart is not "24 hours" of anything. These
+# helpers carry that structure, so a detector compares like with like.
+
+# Temperature readings this soon after an inspection are skipped: an opened
+# brood nest cools and then overshoots while the bees re-cluster.
+INSPECTION_SETTLE_MIN = 30
+
+# A windowed rule only speaks for its window when the readings cover most of it
+# and have no hole bigger than a quarter of it (see _covers).
+COVERAGE_MIN_FRACTION = 0.75
+COVERAGE_MAX_GAP_FRACTION = 0.25
+
+# A counter interval much longer than the usual poll spacing is an outage, not
+# a burst: its count is real but its rate is an average over hours, so it is
+# left out of peak tests (see _interval_rates).
+COUNTER_MAX_INTERVAL_MULT = 3.0
+
+
+def _applies_to(hives: Any, channel: ChannelRef) -> bool:
+    """Whether an inspection naming ``hives`` covers ``channel``; none named = all."""
+    return not hives or channel in hives
+
+
+def _is_intervention_row(m: dict[str, Any], channel: ChannelRef) -> bool:
+    """A reading taken while someone was working on this hive's sensors.
+
+    Calibration (test weights on the scale) and an inspection that covers this
+    hive. The inspection's hive readings are already masked by the read layer;
+    what the rows still mark is *where* the series has to be cut.
+    """
+    if m.get("calibration_mode"):
+        return True
+    return bool(m.get("inspection")) and _applies_to(m.get("inspection_hives"), channel)
+
+
+def _segment_starts(measurements: Iterable[dict[str, Any]], channel: ChannelRef) -> list[datetime]:
+    """Times at which a new segment of ``channel``'s series begins.
+
+    That is the first ordinary reading after one or more intervention readings,
+    or a reading the read layer marked ``after_inspection`` (an inspection with
+    no reading of its own inside it). Nothing measured before such a point may
+    be compared with anything after it as if the hive had been left alone.
+    """
+    rows = []
+    for m in measurements:
+        ts = _as_datetime(m.get("measured_at"))
+        if ts is not None:
+            rows.append((ts, m))
+    rows.sort(key=lambda p: p[0])
+    starts: list[datetime] = []
+    after_intervention = False
+    for ts, m in rows:
+        if _is_intervention_row(m, channel):
+            after_intervention = True
+            continue
+        if after_intervention or (
+            m.get("after_inspection") and _applies_to(m.get("after_inspection_hives"), channel)
+        ):
+            starts.append(ts)
+        after_intervention = False
+    return starts
+
+
+def _rebase_across(series: Series, starts: list[datetime]) -> Series:
+    """Splice a level series (weight) across interventions.
+
+    Each segment is shifted so it continues from the last value before it: a
+    super lifted off, a box added or a recalibrated scale becomes a new
+    reference level instead of a sudden loss or gain. Changes *within* a
+    segment, which is what every detector looks for, are untouched.
+    """
+    if not starts or not series:
+        return series
+    out: Series = []
+    offset = 0.0
+    i = 0
+    for t, v in series:
+        crossed = False
+        while i < len(starts) and starts[i] <= t:
+            i += 1
+            crossed = True
+        if crossed and out:
+            offset = out[-1][1] - v
+        out.append((t, v + offset))
+    return out
+
+
+def _drop_settling(series: Series, starts: list[datetime], minutes: int) -> Series:
+    """Drop readings taken within ``minutes`` after any segment start."""
+    if not starts or not series:
+        return series
+    settle = timedelta(minutes=minutes)
+    return [(t, v) for t, v in series if not any(s <= t < s + settle for s in starts)]
+
+
+def _covers(
+    series: Series, end: datetime, hours: float, min_fraction: float = COVERAGE_MIN_FRACTION
+) -> bool:
+    """Whether a windowed series actually covers its window ending at ``end``.
+
+    It must span at least ``min_fraction`` of the window, and no gap — between
+    readings, or from the newest reading to ``end`` — may exceed
+    COVERAGE_MAX_GAP_FRACTION of it. A minimum point count alone accepted eight
+    readings taken over seven minutes as "24 h held at 35 degC".
+    """
+    if len(series) < 2:
+        return False
+    window_s = hours * 3600.0
+    if (series[-1][0] - series[0][0]).total_seconds() < min_fraction * window_s:
+        return False
+    max_gap_s = COVERAGE_MAX_GAP_FRACTION * window_s
+    if (end - series[-1][0]).total_seconds() > max_gap_s:
+        return False
+    return all(
+        (series[i][0] - series[i - 1][0]).total_seconds() <= max_gap_s
+        for i in range(1, len(series))
+    )
+
+
+def _span_hours(series: Series) -> float:
+    return (series[-1][0] - series[0][0]).total_seconds() / 3600.0 if len(series) >= 2 else 0.0
+
+
 def _is_active_season(when: datetime) -> bool:
     return 3 <= when.month <= 9
 
@@ -442,26 +576,6 @@ def _is_winter(when: datetime) -> bool:
 # ---------------------------------------------------------------------------
 # Acoustic helpers
 # ---------------------------------------------------------------------------
-
-def _latest_band(measurements: list[dict[str, Any]], *fields: str) -> Optional[float]:
-    """
-    Return the most recent non-null value of a mic band field across all
-    measurements.  Several field names may be given, most specific first: within
-    one measurement the first that carries a value wins, so a per-hive key is
-    preferred over its legacy stereo alias.  Returns None when no measurement
-    carries any of them.
-    """
-    for m in reversed(measurements):
-        for field in fields:
-            v = m.get(field)
-            if v is None:
-                continue
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                continue
-    return None
-
 
 def _mic_band_keys(channel: ChannelRef, band: str) -> tuple[str, ...]:
     """Candidate flat keys for one acoustic band of one hive, most specific first.
@@ -491,17 +605,69 @@ def _mic_band_keys(channel: ChannelRef, band: str) -> tuple[str, ...]:
     return tuple(keys)
 
 
+# Acoustic evidence older than this says nothing about the window a detector
+# is judging. Generous next to the 10–60 min upload cadence, so one missed
+# upload does not lose it.
+MIC_EVIDENCE_MAX_AGE_HOURS = 3.0
+
+MIC_BANDS = ("sub_bass", "hum", "piping", "stress", "high")
+
+
+def _mic_sources(channel: ChannelRef) -> tuple[tuple[str, str], ...]:
+    """(band key prefix, ok key) per microphone source of a hive, most specific
+    first — the same order as _mic_band_keys()."""
+    sources = [(f"mic_{channel}_band_", f"mic_{channel}_ok")]
+    if channel == 1:
+        sources.append(("mic_left_band_", "mic_left_ok"))
+    elif channel == 2:
+        sources.append(("mic_right_band_", "mic_right_ok"))
+    return tuple(sources)
+
+
 def _mic_band_snapshot(
-    measurements: list[dict[str, Any]], channel: ChannelRef
+    measurements: list[dict[str, Any]],
+    channel: ChannelRef,
+    now: Optional[datetime] = None,
+    max_age_hours: Optional[float] = None,
 ) -> dict[str, Optional[float]]:
     """
-    Collect the latest value of every FFT band for the given hive.
-    Returns a dict with keys: sub_bass, hum, piping, stress, high (all dBFS or None).
+    The FFT bands of the hive's most recent working microphone reading.
+    Returns a dict with keys: sub_bass, hum, piping, stress, high (dBFS or None).
+
+    Every band comes from the SAME reading (the newest one that carries any
+    band for this hive), so a snapshot never mixes a piping value from today
+    with a stress value from last week. With ``now`` and ``max_age_hours``,
+    readings older than that are not evidence and an empty snapshot is
+    returned. A reading whose source reports its microphone failed
+    (``mic_{n}_ok`` / ``mic_left_ok`` false) ends the search: the mic is known
+    to be down now, so nothing older stands in for it. ``measurements`` is in
+    chronological order, as compute_insights() receives it.
     """
-    return {
-        band: _latest_band(measurements, *_mic_band_keys(channel, band))
-        for band in ("sub_bass", "hum", "piping", "stress", "high")
-    }
+    empty: dict[str, Optional[float]] = {band: None for band in MIC_BANDS}
+    oldest = (
+        now - timedelta(hours=max_age_hours)
+        if now is not None and max_age_hours is not None else None
+    )
+    for m in reversed(measurements):
+        if oldest is not None:
+            ts = _as_datetime(m.get("measured_at"))
+            if ts is None or ts > now:
+                continue
+            if ts < oldest:
+                return empty
+        for prefix, ok_key in _mic_sources(channel):
+            values: dict[str, Optional[float]] = {}
+            for band in MIC_BANDS:
+                v = m.get(f"{prefix}{band}_dbfs")
+                try:
+                    values[band] = float(v) if v is not None else None
+                except (TypeError, ValueError):
+                    values[band] = None
+            if m.get(ok_key) is False:
+                return empty
+            if any(v is not None for v in values.values()):
+                return values
+    return empty
 
 
 # ---------------------------------------------------------------------------
@@ -803,6 +969,12 @@ def _bucket_by_day(series: Series, end: datetime, days: int) -> Series:
     ending at ``end``. Returns one point per day (UTC midnight key) with the
     summed count.
 
+    Each count covers the interval since the previous reading, so an interval
+    that spans midnight (typically the first one after an outage) is split
+    across the days it covers in proportion to the time in each, instead of
+    landing whole on the day it ended. The first reading has no known start
+    and stays on its own day.
+
     Partial days at the window edges are dropped: the first and last
     calendar day usually only contain a fraction of a day's samples, and
     including them badly biases a decline-slope fit. A day is considered
@@ -815,60 +987,93 @@ def _bucket_by_day(series: Series, end: datetime, days: int) -> Series:
     start = end - timedelta(days=days)
     sums: dict[datetime, float] = {}
     counts: dict[datetime, int] = {}
-    for t, v in series:
+
+    def _day(t: datetime) -> datetime:
+        return t.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    for i, (t, v) in enumerate(series):
         if t <= start or t > end:
             continue
-        day = t.replace(hour=0, minute=0, second=0, microsecond=0)
-        sums[day] = sums.get(day, 0.0) + v
-        counts[day] = counts.get(day, 0) + 1
+        counts[_day(t)] = counts.get(_day(t), 0) + 1
+        t0 = series[i - 1][0] if i > 0 else t
+        if t0 >= t:
+            sums[_day(t)] = sums.get(_day(t), 0.0) + v
+            continue
+        # Spread the count over (t0, t], clipped to the window.
+        total_s = (t - t0).total_seconds()
+        cursor = max(t0, start)
+        while cursor < t:
+            day_end = min(_day(cursor) + timedelta(days=1), t)
+            share = v * (day_end - cursor).total_seconds() / total_s
+            sums[_day(cursor)] = sums.get(_day(cursor), 0.0) + share
+            cursor = day_end
     if not sums:
         return []
     ordered = sorted(sums.keys())
-    median_count = statistics.median(counts.values())
+    median_count = statistics.median(counts.values()) if counts else 0
     threshold = 0.6 * median_count
     # Trim a leading and/or trailing day if it is clearly partial.
     if len(ordered) >= 3:
-        if counts[ordered[0]] < threshold:
+        if counts.get(ordered[0], 0) < threshold:
             ordered = ordered[1:]
-        if ordered and counts[ordered[-1]] < threshold:
+        if ordered and counts.get(ordered[-1], 0) < threshold:
             ordered = ordered[:-1]
     return [(day, sums[day]) for day in ordered]
 
 
 def _median_interval_seconds(series: Series) -> Optional[float]:
-    """
-    Median spacing between samples, in seconds, used to convert per-interval
-    counts into a per-hour rate. Gaps are sanity-clipped to [60s, 3600s] to
-    ignore deep-sleep skips and duplicate timestamps. Returns None when the
-    cadence cannot be estimated.
-    """
+    """Median spacing between counter readings, in seconds, or None when the
+    series is too short to tell."""
     if len(series) < 3:
         return None
     gaps = [
         (series[i][0] - series[i - 1][0]).total_seconds()
         for i in range(1, len(series))
     ]
-    gaps = [g for g in gaps if 60.0 <= g <= 3600.0]
-    if not gaps:
-        return None
-    return statistics.median(gaps)
+    gaps = [g for g in gaps if g > 0]
+    return statistics.median(gaps) if gaps else None
 
 
 def _per_hour_rate(series: Series) -> Optional[float]:
     """
-    Mean crossings-per-hour over ``series``, derived from the mean per-interval
-    count and the median inter-sample gap. Returns None when the cadence can't
-    be inferred (series too short).
+    Crossings per hour over ``series``: the bees counted divided by the time
+    they were counted in.
+
+    Each point's count covers the interval since the previous reading, so the
+    counts after the first one telescope over exactly ``last - first``. Dividing
+    the *mean* interval count by the *median* poll spacing, as this used to,
+    treated the long interval after a missed poll as if it were a normal one: a
+    steady 600 bees/h read as 1200 bees/h once a single 60-minute gap appeared
+    in 10-minute polling. Returns None when there are fewer than three readings.
     """
-    if not series:
+    if len(series) < 3:
         return None
-    seconds = _median_interval_seconds(series)
-    if seconds is None:
+    elapsed_h = _span_hours(series)
+    if elapsed_h <= 0:
         return None
-    mean_per_interval = _safe_mean(_values(series))
-    if mean_per_interval is None:
-        return None
-    return mean_per_interval * (3600.0 / seconds)
+    return sum(_values(series[1:])) / elapsed_h
+
+
+def _interval_rates(series: Series) -> Series:
+    """
+    Per-interval rates (crossings per hour), each over its own interval.
+
+    For peak tests: a raw interval count grows with the interval, so the first
+    count after an outage looked like a burst. Intervals longer than
+    COUNTER_MAX_INTERVAL_MULT x the median spacing are left out — their count is
+    real, but as a rate it is an average over the outage, not a peak or a
+    baseline. The first reading has no known start and is skipped too.
+    """
+    median_s = _median_interval_seconds(series)
+    out: Series = []
+    for i in range(1, len(series)):
+        gap_s = (series[i][0] - series[i - 1][0]).total_seconds()
+        if gap_s <= 0:
+            continue
+        if median_s is not None and gap_s > COUNTER_MAX_INTERVAL_MULT * median_s:
+            continue
+        out.append((series[i][0], series[i][1] * 3600.0 / gap_s))
+    return out
 
 
 def _forager_decline_frac_per_day(
@@ -916,6 +1121,10 @@ def detect_imminent_swarm(
     last_1h = _window(hive_temp_series, now, hours=1)
     last_4h = _window(hive_temp_series, now, hours=4)
     if len(last_1h) < 3 or len(last_4h) < 5:
+        return None
+    # The 1h slope needs at least half an hour of readings, and the 4h
+    # baseline has to be a 4h baseline.
+    if _span_hours(last_1h) < 0.5 or not _covers(last_4h, now, 4):
         return None
 
     baseline_cutoff = now - timedelta(hours=1)
@@ -969,8 +1178,8 @@ def detect_swarm_event(
 
     Entrance-counter corroboration (when BeeCounter data is available):
       A swarm departure produces a massive, asymmetric OUTflow. Over the
-      detected weight-drop window, if the peak outbound interval exceeds
-      SWARM_OUT_BASELINE_MULT x the recent baseline AND
+      detected weight-drop window, if the peak outbound rate exceeds
+      SWARM_OUT_BASELINE_MULT x the recent baseline rate AND
       out / (in + 1) > SWARM_OUT_IN_RATIO, the two signals agree:
         * confidence is raised toward 1.0
         * a daytime event that was already "critical" stays critical; a
@@ -997,11 +1206,14 @@ def detect_swarm_event(
 
     # ── Entrance-counter corroboration (asymmetric outflow) ──────────────────
     if bee_out_series and t_start is not None and t_end is not None:
-        # Outbound during the drop window vs a 2h baseline ending at the drop.
+        # Outbound during the drop window vs a 2h baseline ending at the drop,
+        # both as rates over each interval's own length: a raw count grows
+        # with the interval, so the first one after a missed poll looked
+        # like a burst.
+        out_rates = _interval_rates(bee_out_series)
+        peak_out = max(_values([(t, v) for t, v in out_rates if t_start <= t <= t_end]), default=None)
+        baseline_out = _safe_mean(_values(_window(out_rates, t_start, hours=2)))
         out_window = [(t, v) for t, v in bee_out_series if t_start <= t <= t_end]
-        baseline_window = _window(bee_out_series, t_start, hours=2)
-        peak_out = max(_values(out_window), default=None)
-        baseline_out = _safe_mean(_values(baseline_window))
 
         in_window = []
         if bee_in_series:
@@ -1010,8 +1222,8 @@ def detect_swarm_event(
         sum_in = sum(_values(in_window))
 
         if peak_out is not None and baseline_out is not None:
-            evidence["counter_peak_out"] = peak_out
-            evidence["counter_baseline_out"] = baseline_out
+            evidence["counter_peak_out_per_hour"] = peak_out
+            evidence["counter_baseline_out_per_hour"] = baseline_out
             evidence["counter_sum_out"] = sum_out
             evidence["counter_sum_in"] = sum_in
             out_ratio = sum_out / (sum_in + 1.0)
@@ -1027,8 +1239,8 @@ def detect_swarm_event(
                 evidence["counter_swarm_signature"] = True
                 desc_parts.append(
                     f"Entrance counter confirms a mass exodus: peak "
-                    f"{peak_out:.0f} bees/interval out (baseline "
-                    f"{baseline_out:.1f}), outbound/inbound ratio "
+                    f"{peak_out:.0f} bees/h out (baseline "
+                    f"{baseline_out:.0f} bees/h), outbound/inbound ratio "
                     f"{out_ratio:.1f} — asymmetric outflow consistent with a swarm."
                 )
             else:
@@ -1084,6 +1296,10 @@ def detect_pre_swarm_temp_instability(
     )
     if len(last_24h) < 6 or len(last_baseline) < 12:
         return None
+    if not _covers(last_24h, now, 24) or not _covers(
+        last_baseline, now - timedelta(hours=24), 24 * PRE_SWARM_BASELINE_DAYS
+    ):
+        return None
 
     s_now = _safe_stddev(_values(last_24h))
     s_base = _safe_stddev(_values(last_baseline))
@@ -1109,7 +1325,7 @@ def detect_pre_swarm_temp_instability(
     # ── Acoustic boost ───────────────────────────────────────────────────────
     piping_dbfs: Optional[float] = None
     if measurements:
-        bands = _mic_band_snapshot(measurements, channel)
+        bands = _mic_band_snapshot(measurements, channel, now, MIC_EVIDENCE_MAX_AGE_HOURS)
         piping_dbfs = bands.get("piping")
 
     if piping_dbfs is not None and piping_dbfs >= PIPING_ACTIVE_DBFS:
@@ -1314,6 +1530,8 @@ def detect_queenlessness(
     recent_weight = _window(weight_series, now, hours=24 * days)
     if len(recent_temp) < 12 or len(recent_weight) < 12:
         return None
+    if not _covers(recent_temp, now, 24 * days) or not _covers(recent_weight, now, 24 * days):
+        return None
 
     stddev = _safe_stddev(_values(recent_temp))
     if stddev is None or stddev < QUEENLESS_TEMP_STDDEV_C:
@@ -1338,7 +1556,7 @@ def detect_queenlessness(
 
     # ── Acoustic boost ───────────────────────────────────────────────────────
     if measurements:
-        bands = _mic_band_snapshot(measurements, channel)
+        bands = _mic_band_snapshot(measurements, channel, now, MIC_EVIDENCE_MAX_AGE_HOURS)
         hum_dbfs    = bands.get("hum")
         piping_dbfs = bands.get("piping")
 
@@ -1469,7 +1687,7 @@ def detect_robbing(
 
     # ── Acoustic boost ───────────────────────────────────────────────────────
     if measurements:
-        bands = _mic_band_snapshot(measurements, channel)
+        bands = _mic_band_snapshot(measurements, channel, now, MIC_EVIDENCE_MAX_AGE_HOURS)
         stress_dbfs = bands.get("stress")
         if stress_dbfs is not None:
             evidence["acoustic_stress_dbfs"] = stress_dbfs
@@ -1552,7 +1770,7 @@ def detect_foraging_intensity(
           (a stronger negative signal: not just a bad foraging day)
     """
     last_24h = _window(weight_series, now, hours=24)
-    if len(last_24h) < 4:
+    if len(last_24h) < 4 or not _covers(last_24h, now, 24):
         return None
     delta = last_24h[-1][1] - last_24h[0][1]
 
@@ -1633,8 +1851,11 @@ def detect_brood_cycle_state(
     Source: project spec "Brood cycle / colony state".
     """
     last_24h = _window(hive_temp_series, now, hours=24)
-    if len(last_24h) < 8:
+    # Eight readings are not a day: without coverage, a few minutes at 35 degC
+    # were reported as "24h held at 35 degC".
+    if len(last_24h) < 8 or not _covers(last_24h, now, 24):
         return None
+    span_h = _span_hours(last_24h)
     stddev = _safe_stddev(_values(last_24h))
     mean = _safe_mean(_values(last_24h))
     if stddev is None or mean is None:
@@ -1643,15 +1864,16 @@ def detect_brood_cycle_state(
     if stddev < BROOD_ACTIVE_STDDEV_C and abs(mean - BROOD_NEST_TARGET_C) <= BROOD_NEST_TOLERANCE_C:
         title = f"Active brood rearing (hive {channel})"
         desc = (
-            f"24h hive temp held at {mean:.1f}+/-{stddev:.2f} degC — "
-            f"consistent with active brood thermoregulation."
+            f"Hive temp held at {mean:.1f}+/-{stddev:.2f} degC over the last "
+            f"{span_h:.0f}h — consistent with active brood thermoregulation."
         )
         severity: AlertSeverity = "info"
     elif stddev > BROOD_BROODLESS_STDDEV_C:
         title = f"Broodless / weak colony indicator (hive {channel})"
         desc = (
-            f"24h hive temp variability is wide (+/-{stddev:.2f} degC, "
-            f"mean {mean:.1f} degC). Suggests little or no brood being thermoregulated."
+            f"Hive temp variability over the last {span_h:.0f}h is wide "
+            f"(+/-{stddev:.2f} degC, mean {mean:.1f} degC). Suggests little or no "
+            f"brood being thermoregulated."
         )
         severity = "watch"
     else:
@@ -1667,7 +1889,7 @@ def detect_brood_cycle_state(
         window_start=last_24h[0][0],
         window_end=now,
         confidence=0.7,
-        evidence={"mean_c": mean, "stddev_c": stddev},
+        evidence={"mean_c": mean, "stddev_c": stddev, "span_hours": span_h},
         source="project spec brood cycle",
     )
 
@@ -1700,6 +1922,8 @@ def detect_absconding_trend(
     weight_window = _window(weight_series, now, hours=lookback_h)
     temp_window = _window(hive_temp_series, now, hours=lookback_h)
     if len(weight_window) < 14 or len(temp_window) < 14:
+        return None
+    if not _covers(weight_window, now, lookback_h) or not _covers(temp_window, now, lookback_h):
         return None
 
     weight_slope = _linear_slope_per_day(weight_window)
@@ -1817,6 +2041,8 @@ def detect_winter_risk(
     last_7d_weight = _window(weight_series, now, hours=24 * 7)
     if len(last_7d_temp) < 12 or len(last_7d_weight) < 4 or len(last_7d_amb) < 12:
         return None
+    if not all(_covers(w, now, 24 * 7) for w in (last_7d_temp, last_7d_amb, last_7d_weight)):
+        return None
 
     min_hive = min(_values(last_7d_temp))
     ambient_mean = _safe_mean(_values(last_7d_amb))
@@ -1891,7 +2117,7 @@ def detect_harvest_window(
     Source: project spec "Honey-ready / harvest timing".
     """
     last_11d = _window(weight_series, now, hours=24 * 11)
-    if len(last_11d) < 24:
+    if len(last_11d) < 24 or not _covers(last_11d, now, 24 * 11):
         return None
 
     win_now = _window(weight_series, now, hours=24 * 7)
@@ -2054,6 +2280,12 @@ def compute_insights(
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
 
+    # Calibration readings (test weights on the scale, a fast cycle) describe
+    # the procedure, not the colony: no detector sees them. They still mark a
+    # segment boundary below, as a recalibrated scale reads on a new level.
+    all_measurements = measurements
+    measurements = [m for m in measurements if not m.get("calibration_mode")]
+
     ambient = _extract_series(measurements, "ambient_temp_c")
     alerts: list[Alert] = []
 
@@ -2063,8 +2295,15 @@ def compute_insights(
     for channel in _hive_channels(measurements):
         weight_field = f"scale_{channel}_weight_kg"
         temp_field = f"hive_{channel}_temp_c"
-        weight = _extract_series(measurements, weight_field)
-        hive_temp = _extract_series(measurements, temp_field)
+        # An inspection or calibration cuts this hive's series: the weight
+        # continues from where it was (a super lifted off is not a swarm, a
+        # robbing or a harvest signal), and the brood nest gets time to settle
+        # before its temperature counts again.
+        starts = _segment_starts(all_measurements, channel)
+        weight = _rebase_across(_extract_series(measurements, weight_field), starts)
+        hive_temp = _drop_settling(
+            _extract_series(measurements, temp_field), starts, INSPECTION_SETTLE_MIN
+        )
         bee_in = _extract_counter_series(measurements, channel, "in")
         bee_out = _extract_counter_series(measurements, channel, "out")
         accel_swarm = _accel_band_series(measurements, channel, "swarm")

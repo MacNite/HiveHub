@@ -261,6 +261,20 @@ def test_naive_timestamps_are_treated_as_utc():
     check("a naive measured_at is still matched", out["scale_1_weight_kg"] is None)
 
 
+def test_first_reading_after_an_inspection_is_marked():
+    # The hub took no reading while the hive was open (minutes 10-40): only the
+    # marker on the next reading tells the insight engine to cut the series.
+    install(window(10, 40, hives=[1]))
+    out = inspections.mask_inspection_readings([reading(0), reading(50), reading(60)])
+    check("the reading before is not marked", "after_inspection" not in out[0])
+    check("the first reading after is marked", out[1].get("after_inspection") is True)
+    check("the marker names the inspected hives", out[1].get("after_inspection_hives") == [1])
+    check("only the first one", "after_inspection" not in out[2])
+    install(window(10, None))
+    out = inspections.mask_inspection_readings([reading(0), reading(50)])
+    check("an open inspection marks nothing after it", "after_inspection" not in out[1])
+
+
 def test_hive_index_classifier():
     idx = inspections._hive_index_for_key
     cases = {
@@ -301,6 +315,7 @@ def main():
     test_pending_inspection_does_not_mask_measurements()
     test_mqtt_inspection_state_distinguishes_off_pending_and_active()
     test_naive_timestamps_are_treated_as_utc()
+    test_first_reading_after_an_inspection_is_marked()
     test_hive_index_classifier()
 
     if _failures:
