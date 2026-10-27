@@ -6,8 +6,10 @@
 #if ENABLE_WIRELESS_BEECOUNTER
 #include <string.h>       // strlcpy for the counter's reported version
 #include <NimBLEDevice.h>
+#include <esp_attr.h>     // RTC_DATA_ATTR
 #include "ble_stack.h"
 #include "bee_counter_wire.h"   // the tolerant fw:2/3/4 document decoder
+#include "gatt_rotation.h"      // fair share of the per-wake read budget
 #include "hive_config.h"
 #include "night_mode.h"
 #include "sensors.h"            // localMinuteOfDay()
@@ -90,6 +92,9 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap, const char* mac)
 #if ENABLE_WIRELESS_BEECOUNTER
 
 namespace {
+
+// Where the next wake resumes the counter reads. See gatt_rotation.h.
+RTC_DATA_ATTR uint32_t rtcTrafficReadCursor = 0;
 
 // Parse the HiveTraffic measurement JSON (see 2026-easy-bee-counter
 // docs/ble-mode.md) into a Snapshot. Returns false on malformed JSON or a
@@ -407,30 +412,41 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
     night.cycle_s       = (uint32_t)(sendIntervalMs / 1000UL);
     night.relay_pending = relayInFlight();
 
-    blestack::acquire();
-    uint8_t readAttempts = 0;
-    for (uint8_t h = 0; h < hivecfg::gHiveCount && h < cap; h++) {
+    // At most one HiveTraffic counter per hive: the first paired one.
+    struct Candidate { uint8_t hive; uint8_t ble; };
+    Candidate cand[MAX_HIVES];
+    uint8_t n = 0;
+    for (uint8_t h = 0; h < hivecfg::gHiveCount && h < cap && n < MAX_HIVES; h++) {
         const hivecfg::Hive& hive = hivecfg::gHives[h];
         for (uint8_t b = 0; b < hive.bleCount; b++) {
             const hivecfg::BlePairing& p = hive.ble[b];
             if (p.type != "beecounter" || p.mac.length() == 0) continue;
-
-            if (readAttempts >= MAX_GATT_READS_PER_CYCLE) {
-                Serial.printf("[TRAFFIC] GATT read budget exhausted (%u); skipping hive %u %s\n",
-                              (unsigned)MAX_GATT_READS_PER_CYCLE, hive.index, p.mac.c_str());
-                break;
-            }
-            readAttempts++;
-
-            // readTrafficSlot reads, then decides, then applies — all on one
-            // connection. The decision has to follow the read because the
-            // traffic gate is about the cycle that just ended, and it has to
-            // precede the disconnect because the alternative is a second
-            // connection per counter per cycle.
-            (void)readTrafficSlot(p.mac, out[h], h, night);
-            break;  // at most one HiveTraffic counter per hive
+            cand[n++] = Candidate{h, b};
+            break;
         }
     }
+
+    // Share the read budget fairly across wakes: start where the last wake
+    // stopped, so a counter beyond the budget waits its turn instead of never
+    // being read. See gatt_rotation.h.
+    const gattrot::Plan plan = gattrot::plan(rtcTrafficReadCursor, n, MAX_GATT_READS_PER_CYCLE);
+    if (plan.count < n) {
+        Serial.printf("[TRAFFIC] %u counters paired, GATT read budget %u: reading %u from #%u this wake\n",
+                      (unsigned)n, (unsigned)MAX_GATT_READS_PER_CYCLE, (unsigned)plan.count,
+                      (unsigned)plan.start);
+    }
+
+    blestack::acquire();
+    for (uint8_t k = 0; k < plan.count; k++) {
+        const Candidate& c = cand[gattrot::at(plan, k, n)];
+        // readTrafficSlot reads, then decides, then applies — all on one
+        // connection. The decision has to follow the read because the
+        // traffic gate is about the cycle that just ended, and it has to
+        // precede the disconnect because the alternative is a second
+        // connection per counter per cycle.
+        (void)readTrafficSlot(hivecfg::gHives[c.hive].ble[c.ble].mac, out[c.hive], c.hive, night);
+    }
+    rtcTrafficReadCursor = gattrot::next(plan, n);
     // Counter reads only ever connect, so they are safe in any port lifetime.
     // See ble_stack.h for the teardown rule. Controller is still freed.
     blestack::release();

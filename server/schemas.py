@@ -1,7 +1,7 @@
 """Pydantic request/response models shared across the API routers."""
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -470,6 +470,18 @@ class MeasurementIn(BaseModel):
     def _drop_disconnected_probe(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and v <= -40.0:
             return None
+        return v
+
+    # The firmware always sends UTC with a "Z". A timestamp without any offset
+    # (a third-party client, a hand-edited SD line) is read as UTC too, rather
+    # than left naive: a naive value cannot be compared with the server clock,
+    # and resolve_measured_at() then failed with a TypeError (HTTP 500, or a
+    # whole import aborted) instead of storing the reading.
+    @field_validator("timestamp")
+    @classmethod
+    def _naive_timestamp_is_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
         return v
 
 

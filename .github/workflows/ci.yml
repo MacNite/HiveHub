@@ -46,6 +46,25 @@ jobs:
           path: firmware/dist/
           if-no-files-found: error
 
+  # The GATT clients (HiveTraffic counter, HiveHeart / wireless HiveScale) are
+  # off by default, so the builds above never compile them. Build the C6 once
+  # with both switched on so a change there cannot ship uncompiled. The images
+  # are not packaged: this variant only has to compile.
+  firmware-build-gatt-clients:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install platformio "esptool~=4.8"
+      - name: Build xiao_esp32c6 with the GATT clients enabled
+        env:
+          PLATFORMIO_BUILD_FLAGS: -DENABLE_WIRELESS_BEECOUNTER=1 -DENABLE_BEEHIVE_GATT=1
+        run: pio run -e xiao_esp32c6
+        working-directory: firmware
+
   # Host-level tests for the checked I2C layer: the exact production headers
   # (nau7802_checked.h, scale_math.h, scale_topology.h) run against a scripted
   # mock TwoWire so failed mux writes/readbacks, stale channel selections,

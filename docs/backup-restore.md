@@ -74,8 +74,8 @@ The file is named after what it covers, e.g.
 ## Restoring
 
 **Device & admin → Import SD card data → Upload SD data.** Re-importing is
-idempotent: `(device_id, measured_at)` is the natural key, so rows already in the
-database are counted as duplicates and skipped. Uploading the same backup twice
+idempotent: each reading's `measurement_id` (or `(device_id, measured_at)` for
+old rows without one) is the natural key, so rows already in the database are counted as duplicates and skipped. Uploading the same backup twice
 inserts nothing the second time.
 
 What happens next depends on how many devices the file names:

@@ -143,19 +143,24 @@ still each have one beacon without extra scan windows.
 **GATT** sensors (GATT-mode HiveInside, HiveHeart, wireless HiveScale, HiveTraffic)
 each need a **serial connect → read → disconnect** of seconds, so reading many of
 them would keep the radio awake for minutes and defeat deep sleep. The firmware
-therefore **caps GATT reads at `MAX_GATT_READS_PER_CYCLE` (default 4) per wake**;
-any remaining paired GATT sensors are skipped that cycle and retried next wake.
+therefore **caps GATT reads at `MAX_GATT_READS_PER_CYCLE` (default 4) per wake**.
+When more are paired, they take turns: each wake resumes where the previous one
+stopped (the position survives deep sleep), so every sensor is read at least
+once every `ceil(paired / cap)` wakes, and an unreachable sensor costs one slot
+on its turn rather than on every wake.
 
 **Recommendation:** prefer **beacon** in-hive sensors for multi-hive setups. Use
 GATT sparingly, raise the send interval, or raise the cap only if you accept the
 extra awake time. A BLE HiveScale selected as the **Scale** source is separate
 from the in-hive sensors, but all of them are persisted as BLE pairings.
 
-Note the cap is **device-wide, not per hive**. Since a hive may now pair a
+Note the cap applies **per sensor kind across the whole apiary, not per hive**:
+HiveTraffic counters get `MAX_GATT_READS_PER_CYCLE` reads per wake, and
+HiveHeart + wireless HiveScale share another `MAX_GATT_READS_PER_CYCLE`, so a
+wake makes at most twice the cap in GATT reads. Since a hive may pair a
 HiveTraffic counter *and* a HiveHeart alongside its beacon, it is easy to exceed
-`MAX_GATT_READS_PER_CYCLE` (default 4) across an apiary: five paired counters
-means one is skipped each wake and picked up on the next. Beacons — including
-HiveInside — never count against it.
+the cap: with five paired counters each one is read on four wakes out of five.
+Beacons — including HiveInside — never count against it.
 
 ---
 

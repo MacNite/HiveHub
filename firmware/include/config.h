@@ -365,8 +365,10 @@
 // (HiveHeart, GATT-mode HiveInside, wireless HiveScale, HiveTraffic) instead need
 // a SERIAL connect→read→disconnect of seconds each, so reading many of them would
 // keep the radio awake for minutes and defeat deep sleep. Cap the number of GATT
-// reads attempted per wake cycle; remaining paired GATT sensors are skipped this
-// cycle (and logged). Beacons are never capped.
+// reads attempted per wake cycle, separately for HiveTraffic counters and for
+// HiveHeart/HiveScale. When more are paired they take turns: each wake resumes
+// where the last one stopped (gatt_rotation.h), so none is starved. Beacons are
+// never capped.
 #ifndef MAX_GATT_READS_PER_CYCLE
 #define MAX_GATT_READS_PER_CYCLE 4
 #endif

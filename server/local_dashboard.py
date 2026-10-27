@@ -816,8 +816,8 @@ async def local_import_sd_measurements(device_id: str, request: Request):
     Accepts either the raw ``measurements.ndjson`` or the
     ``hivescale-sd-data.tar`` download. The file is parsed server-side into
     measurement records, each row is pinned to the path ``device_id``, and the
-    batch is de-duplicated on ``(device_id, measured_at)`` so re-uploading the
-    same file inserts nothing. Mirrors the HivePal SD-upload feature for the
+    batch is de-duplicated on each row's ``measurement_id`` (``measured_at`` for
+    legacy rows) so re-uploading the same file inserts nothing. Mirrors the HivePal SD-upload feature for the
     self-hosted dashboard that ships with HiveHub.
 
     Because every row is re-pinned to the path ``device_id``, uploading a card

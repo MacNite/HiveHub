@@ -5,12 +5,17 @@
 
 #include "hive_config.h"
 #include <NimBLEDevice.h>
+#include <esp_attr.h>   // RTC_DATA_ATTR
 #include "ble_stack.h"
+#include "gatt_rotation.h"
 #include <cctype>
 
 namespace bhgatt {
 
 namespace {
+
+// Where the next wake resumes the HiveHeart/HiveScale reads. See gatt_rotation.h.
+RTC_DATA_ATTR uint32_t rtcBeehiveGattReadCursor = 0;
 
 // One notification's worth of payload, captured by the subscribe callback.
 // The callback runs on the NimBLE host task while runCycle() polls from the
@@ -178,53 +183,68 @@ void runCycle(CycleResult& out) {
     return;
   }
 
-  blestack::acquire();
-  uint8_t buf[64];
-  size_t len = 0;
-  int rssi = 0;
-  uint8_t readAttempts = 0;
-
+  // Every paired HiveHeart / HiveScale, in registry order.
+  struct Candidate { uint8_t hive; uint8_t ble; };
+  Candidate cand[MAX_HIVES * hivecfg::MAX_BLE_PER_HIVE];
+  uint8_t n = 0;
   for (uint8_t h = 0; h < hivecfg::gHiveCount && h < MAX_HIVES; h++) {
     const hivecfg::Hive& hive = hivecfg::gHives[h];
     for (uint8_t b = 0; b < hive.bleCount; b++) {
       const hivecfg::BlePairing& p = hive.ble[b];
-      const bool isHeart = p.type == "hiveheart";
-      const bool isScale = p.type == "hivescale";
-      if ((!isHeart && !isScale) || p.mac.length() == 0) continue;
+      if ((p.type != "hiveheart" && p.type != "hivescale") || p.mac.length() == 0) continue;
+      cand[n++] = Candidate{h, b};
+    }
+  }
 
-      if (readAttempts >= MAX_GATT_READS_PER_CYCLE) {
-        Serial.printf("[BHGATT] GATT read budget exhausted (%u); skipping hive %u %s %s\n",
-                      (unsigned)MAX_GATT_READS_PER_CYCLE, hive.index,
-                      p.type.c_str(), p.mac.c_str());
-        continue;
+  // Share the read budget fairly across wakes: start where the last wake
+  // stopped, so a sensor beyond the budget waits its turn instead of never
+  // being read. See gatt_rotation.h.
+  const gattrot::Plan plan = gattrot::plan(rtcBeehiveGattReadCursor, n, MAX_GATT_READS_PER_CYCLE);
+  if (plan.count < n) {
+    Serial.printf("[BHGATT] %u sensors paired, GATT read budget %u: reading %u from #%u this wake\n",
+                  (unsigned)n, (unsigned)MAX_GATT_READS_PER_CYCLE, (unsigned)plan.count,
+                  (unsigned)plan.start);
+  }
+
+  blestack::acquire();
+  uint8_t buf[64];
+  size_t len = 0;
+  int rssi = 0;
+
+  for (uint8_t k = 0; k < plan.count; k++) {
+    const Candidate& c = cand[gattrot::at(plan, k, n)];
+    const uint8_t h = c.hive;
+    const hivecfg::Hive& hive = hivecfg::gHives[h];
+    const hivecfg::BlePairing& p = hive.ble[c.ble];
+    const bool isHeart = p.type == "hiveheart";
+    const bool isScale = p.type == "hivescale";
+
+    if (!readNotification(p.mac, buf, sizeof(buf), len, rssi)) continue;
+
+    if (isHeart) {
+      if (decodeHeart(buf, len, out.heart[h])) {
+        out.heart[h].rssi_dbm = rssi;
+        Serial.printf("[BHGATT] Hive%u Heart: T=%.1f H=%.1f%% f=%.1fHz V=%.3f RSSI=%d\n",
+                      hive.index, out.heart[h].temp_c, out.heart[h].humidity_pct,
+                      out.heart[h].frequency_hz, out.heart[h].battery_v, rssi);
+      } else {
+        Serial.printf("[BHGATT] Hive%u Heart decode failed (%u B)\n",
+                      hive.index, (unsigned)len);
       }
-      readAttempts++;
-
-      if (!readNotification(p.mac, buf, sizeof(buf), len, rssi)) continue;
-
-      if (isHeart) {
-        if (decodeHeart(buf, len, out.heart[h])) {
-          out.heart[h].rssi_dbm = rssi;
-          Serial.printf("[BHGATT] Hive%u Heart: T=%.1f H=%.1f%% f=%.1fHz V=%.3f RSSI=%d\n",
-                        hive.index, out.heart[h].temp_c, out.heart[h].humidity_pct,
-                        out.heart[h].frequency_hz, out.heart[h].battery_v, rssi);
-        } else {
-          Serial.printf("[BHGATT] Hive%u Heart decode failed (%u B)\n",
-                        hive.index, (unsigned)len);
-        }
-      } else if (isScale) {
-        if (decodeScale(buf, len, out.scale[h])) {
-          out.scale[h].rssi_dbm = rssi;
-          Serial.printf("[BHGATT] Hive%u Scale: W=%.2fkg T=%.1f P=%.1fhPa V=%.3f RSSI=%d\n",
-                        hive.index, out.scale[h].weight_kg, out.scale[h].temp_c,
-                        out.scale[h].pressure_hpa, out.scale[h].battery_v, rssi);
-        } else {
-          Serial.printf("[BHGATT] Hive%u Scale decode failed (%u B)\n",
-                        hive.index, (unsigned)len);
-        }
+    } else if (isScale) {
+      if (decodeScale(buf, len, out.scale[h])) {
+        out.scale[h].rssi_dbm = rssi;
+        Serial.printf("[BHGATT] Hive%u Scale: W=%.2fkg T=%.1f P=%.1fhPa V=%.3f RSSI=%d\n",
+                      hive.index, out.scale[h].weight_kg, out.scale[h].temp_c,
+                      out.scale[h].pressure_hpa, out.scale[h].battery_v, rssi);
+      } else {
+        Serial.printf("[BHGATT] Hive%u Scale decode failed (%u B)\n",
+                      hive.index, (unsigned)len);
       }
     }
   }
+
+  rtcBeehiveGattReadCursor = gattrot::next(plan, n);
 
   // These reads only ever connect, so they are safe in any port lifetime.
   // See ble_stack.h for the teardown rule; the controller is fully freed.

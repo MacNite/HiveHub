@@ -887,7 +887,7 @@ void handleSetupRoot() {
   html += "A BLE scan ran when the portal started: discovered sensors can be picked from the dropdown next to each MAC field, and the field stays editable for sensors that are currently powered off. ";
 #endif
   html += "BLE HiveScale from Beehivemonitoring remains a scale source and can still have its own MAC field. ";
-  html += "Connection-based GATT sensors are read serially and capped at " + String(MAX_GATT_READS_PER_CYCLE) + " per wake cycle.</p>";
+  html += "Connection-based GATT sensors are read serially, at most " + String(MAX_GATT_READS_PER_CYCLE) + " HiveTraffic counters and " + String(MAX_GATT_READS_PER_CYCLE) + " HiveHeart/HiveScale sensors per wake cycle; when more are paired they take turns across wakes.</p>";
 #if ENABLE_BLE_SCAN
   html += "<p><button type='button' class='button' id='blerescan'>&#128260; Rescan BLE sensors</button> <span id='blemsg' class='meta'>";
   if (gPortalBleScanUnavailable) {
