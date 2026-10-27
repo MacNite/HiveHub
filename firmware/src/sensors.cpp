@@ -645,8 +645,8 @@ void buildMeasurementDoc(JsonDocument& doc) {
   doc["ambient_humidity_percent"] = ambientHumidity;
 #if AMBIENT_HAS_PRESSURE
   // Barometric pressure from a pressure-capable ambient sensor (BME280). Emitted
-  // only when such a sensor is compiled; the ingest schema ignores it if the
-  // backend has no ambient_pressure_hpa column yet, so this is upload-safe.
+  // only when such a sensor is compiled. Stored by server 0.6.2+; older servers
+  // ignore the unknown field, so this is upload-safe either way.
   doc["ambient_pressure_hpa"] = ambientPressure;
 #endif
   doc["network_transport"] = "wifi";
@@ -675,7 +675,7 @@ void buildMeasurementDoc(JsonDocument& doc) {
   // because the read failed (e.g. a wedged C6 I2C driver), never the boot-time
   // detection result. sht_detected preserves that detection/initialization
   // diagnostic separately (the field names stay sht_* for backend compatibility;
-  // the backend ignores unknown fields, so this is upload-safe).
+  // stored by server 0.6.2+, ignored as an unknown field by older servers).
   doc["sht_ok"] = shtRead;
   doc["sht_detected"] = shtOk;
 #if ENABLE_INA219_SOLAR

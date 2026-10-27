@@ -14,7 +14,10 @@ mock-based suites cannot see:
 - the bulk/SD import de-duplicates on measurement_id like live ingest, and a
   timestamp without a UTC offset is stored as UTC instead of failing;
 - an inspection stored in the database cuts the insight engine's weight series
-  even when the hub took no reading while the hive was open.
+  even when the hub took no reading while the hive was open;
+- the hub's ambient pressure and sht_detected survive ingest and come back on
+  the latest and chart read paths;
+- the daily weight extremes come from every reading, not the thinned chart rows.
 
 Usage:
     DATABASE_URL=postgresql://... PYTHONPATH=server python3 test_backend_db.py
@@ -374,8 +377,74 @@ def test_inspection_cuts_insight_series():
     check("with the inspection stored it is not", "swarm-event-ch1" in alerts(), False)
 
 
+def test_hub_pressure_and_sht_detected_are_kept():
+    print("=== fields the hub sends are stored and served ===")
+    reset()
+    seed_device()
+    client = TestClient(main.app)
+    r = client.post("/api/v1/measurements", headers={"x-api-key": "device-key-0123456789abcdef"},
+                    json={"device_id": DEVICE, "timestamp": "2026-06-15T12:00:00Z",
+                          "ambient_pressure_hpa": 1013.2, "sht_detected": True, "sht_ok": False})
+    check("ingest", r.status_code, 200)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT ambient_pressure_hpa, sht_detected, raw_json->>'ambient_pressure_hpa' "
+                        "FROM measurements WHERE device_id = %s;", (DEVICE,))
+            row = cur.fetchone()
+    check("stored in typed columns and raw_json", row, (1013.2, True, "1013.2"))
+    latest = local_dashboard.local_latest_measurements(DEVICE)[0]
+    check("latest row carries both", (latest.get("ambient_pressure_hpa"), latest.get("sht_detected")),
+          (1013.2, True))
+    chart = local_dashboard.local_list_measurements(DEVICE, max_points=0)[0]
+    check("chart row carries the pressure", chart.get("ambient_pressure_hpa"), 1013.2)
+
+
+def test_daily_weight_extremes_use_every_reading():
+    print("=== daily max/min weight come from every reading ===")
+    import measurements as meas
+    reset()
+    seed_device()
+    start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    # 10 days at 10 min; hive 1 sits at 40 kg with a single 20-minute 45 kg peak
+    # each afternoon, hive 4 (a hives[] entry) at 30 kg with one 25 kg dip.
+    rows = []
+    for i in range(10 * 144):
+        at = start + timedelta(minutes=10 * i)
+        peak = at.hour == 15 and at.minute < 20
+        dip = at.day == 5 and at.hour == 3 and at.minute == 0
+        rows.append(m(timestamp=at.isoformat(), scale_1_weight_kg=45.0 if peak else 40.0,
+                      hives=[{"index": 4, "weight_kg": 25.0 if dip else 30.0}]))
+    bulk_import_measurements(DEVICE, rows)
+
+    thinned = local_dashboard.local_list_measurements(
+        DEVICE, start_at=start, max_points=60, limit=20000)
+    thinned_max = max(r["scale_1_weight_kg_compensated"] for r in thinned)
+    check("(precondition) the thinned chart rows miss the peaks", thinned_max < 45.0, True)
+
+    # Small chunks so the chunking and its EMA warm-up are exercised too.
+    with mock.patch.object(meas, "DAILY_WEIGHT_CHUNK_ROWS", 500):
+        r = TestClient(main.app)
+        admin = auth.create_dashboard_user("admin", "admin-password", "admin")
+        r.cookies.set(auth.DASHBOARD_SESSION_COOKIE, auth.create_dashboard_session_token(admin))
+        resp = r.get(f"/api/v1/local/devices/{DEVICE}/measurements/daily-weight",
+                     params={"start_at": start.isoformat(), "tz": "Europe/Berlin"})
+    check("endpoint status", resp.status_code, 200)
+    days = resp.json()["days"]
+    hive1 = [d for d in days if d["hive"] == 1]
+    hive4 = [d for d in days if d["hive"] == 4]
+    check("one row per local day (UTC 10 days span 11 Berlin days)", len(hive1), 11)
+    check("every full day's maximum is the peak", {d["max_kg"] for d in hive1[1:-1]}, {45.0})
+    check("hive 4 comes from the per-hive readings", min(d["min_kg"] for d in hive4), 25.0)
+    bad = TestClient(main.app)
+    bad.cookies.set(auth.DASHBOARD_SESSION_COOKIE, auth.create_dashboard_session_token(admin))
+    check("unknown time zone", bad.get(f"/api/v1/local/devices/{DEVICE}/measurements/daily-weight",
+                                       params={"start_at": start.isoformat(), "tz": "Mars/Base"}).status_code, 422)
+
+
 test_session_revocation()
 test_chart_reads_do_not_nest_connections()
+test_daily_weight_extremes_use_every_reading()
+test_hub_pressure_and_sht_detected_are_kept()
 test_inspection_cuts_insight_series()
 test_naive_timestamps_are_utc()
 test_import_dedups_on_measurement_id()

@@ -163,7 +163,13 @@ struct Parsed {
   float temp_c = NAN, humidity_pct = NAN, pressure_hpa = NAN;
   float ax = NAN, ay = NAN, az = NAN;        // HolyIot raw axes
   int   battery_pct = -1;
-  int   battery_mv  = -1;                     // HiveInside raw cell voltage (-1 = absent)
+  int   battery_mv  = -1;                     // raw cell voltage (HiveInside, RuuviTag; -1 = absent)
+  // RuuviTag diagnostics (see ruuvi_decode.h): the data format that decoded
+  // (3 = RAWv1, 5 = RAWv2; 0 = not a Ruuvi frame) and the RAWv2-only fields.
+  int   ruuvi_format = 0;
+  int   tx_power_dbm = INT_MIN;               // INT_MIN = absent (0 dBm is valid)
+  int   movement_count = -1;
+  long  sequence = -1;
   // HiveInside on-board FFT results.
   float accel_rms_mg = NAN, accel_peak_mg = NAN;
   float accel_band_swarm_mg = NAN, accel_band_fanning_mg = NAN, accel_band_activity_mg = NAN;
@@ -300,6 +306,15 @@ static Parsed parseRuuvi(const uint8_t* d, size_t len) {
   out.ay           = r.accel_y_mg;
   out.az           = r.accel_z_mg;
   out.battery_pct  = ruuvi::batteryPercent(r.battery_mv);
+  // The raw voltage too: the percent above is a coarse coin-cell estimate,
+  // and the backend already has a column for the voltage.
+  if (r.battery_mv > 0) out.battery_mv = r.battery_mv;
+  out.ruuvi_format = r.format;
+  if (r.format == 5) {
+    out.tx_power_dbm   = r.tx_power_dbm;
+    out.movement_count = r.movement_count;
+    out.sequence       = r.sequence;
+  }
   out.ok = true;
   return out;
 }
@@ -375,7 +390,11 @@ struct Accumulator {
   SensorType type = SensorType::None;
   int     rssi_dbm = 0;
   int     battery_pct = -1;
-  int     battery_mv  = -1;    // HiveInside raw cell voltage (-1 = absent)
+  int     battery_mv  = -1;    // raw cell voltage (HiveInside, RuuviTag; -1 = absent)
+  int     ruuvi_format = 0;    // RuuviTag diagnostics, see Parsed
+  int     tx_power_dbm = INT_MIN;
+  int     movement_count = -1;
+  long    sequence = -1;
   float   temp_c = NAN, humidity_pct = NAN, pressure_hpa = NAN;
   float   ax = NAN, ay = NAN, az = NAN;
   std::vector<float> magnitudes;  // |a| per advertisement (HolyIot AC RMS/peak)
@@ -536,6 +555,11 @@ class ScanCallbacks : public NimBLEScanCallbacks {
             a.battery_pct = (uint8_t)sd[8];
         }
         if (p.battery_pct >= 0)     a.battery_pct  = p.battery_pct;
+        if (p.battery_mv >= 0)      a.battery_mv   = p.battery_mv;
+        if (p.ruuvi_format)         a.ruuvi_format = p.ruuvi_format;
+        if (p.tx_power_dbm != INT_MIN) a.tx_power_dbm = p.tx_power_dbm;
+        if (p.movement_count >= 0)  a.movement_count = p.movement_count;
+        if (p.sequence >= 0)        a.sequence     = p.sequence;
         if (!isnan(p.temp_c))       a.temp_c       = p.temp_c;
         if (!isnan(p.humidity_pct)) a.humidity_pct = p.humidity_pct;
         if (!isnan(p.pressure_hpa)) a.pressure_hpa = p.pressure_hpa;
@@ -593,6 +617,10 @@ static void copyToSnapshot(const Accumulator& a, Snapshot& s) {
   s.rssi_dbm     = a.rssi_dbm;
   s.battery_pct  = a.battery_pct;
   s.battery_mv   = a.battery_mv;
+  s.ruuvi_format   = a.ruuvi_format;
+  s.tx_power_dbm   = a.tx_power_dbm;
+  s.movement_count = a.movement_count;
+  s.sequence       = a.sequence;
   s.temp_c       = a.temp_c;
   s.humidity_pct = a.humidity_pct;
   s.pressure_hpa = a.pressure_hpa;
@@ -796,6 +824,13 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap) {
   if (!isnan(snap.accel_z_mg))   ble["accel_z_mg"]       = snap.accel_z_mg;
   if (snap.battery_pct >= 0)     ble["battery_percent"]  = snap.battery_pct;
   if (snap.battery_mv >= 0)      ble["battery_mv"]       = snap.battery_mv;
+  // RuuviTag diagnostics: which data format the tag sends, and for RAWv2 its
+  // transmit power, movement counter and measurement sequence (a gap in the
+  // sequence = advertisements the hub missed).
+  if (snap.ruuvi_format)                ble["data_format"]    = snap.ruuvi_format;
+  if (snap.tx_power_dbm != INT_MIN)     ble["tx_power_dbm"]   = snap.tx_power_dbm;
+  if (snap.movement_count >= 0)         ble["movement_count"] = snap.movement_count;
+  if (snap.sequence >= 0)               ble["sequence"]       = snap.sequence;
   ble["rssi_dbm"] = snap.rssi_dbm;
   if (snap.fw_version.length())  ble["firmware_version"] = snap.fw_version;
   if (snap.board.length())       ble["board"]            = snap.board;

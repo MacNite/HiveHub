@@ -360,6 +360,42 @@ function setStatus(text) {
   ui.status.hidden = false;
 }
 
+// ── daily weight extremes ──────────────────────────────────────────────────────
+// The chart rows of a long range are thinned on the server to ~1500 readings,
+// so a "daily max" computed from them is only the max of what happened to be
+// kept. The server computes the real per-day extremes from every reading; it
+// costs about a second per year of data, so it is fetched only for the Weight
+// view, only for ranges that are actually thinned, and kept for a while —
+// finished days do not change.
+const DAILY_WEIGHT_MIN_DAYS = 30;
+const DAILY_WEIGHT_TTL_MS = 10 * 60 * 1000;
+const dailyWeightCache = new Map(); // `${deviceId}|${range}` -> { at, days, pending }
+
+function dailyWeightFor(deviceId) {
+  const { days } = RANGES[state.range];
+  if (days < DAILY_WEIGHT_MIN_DAYS) return null;
+  const key = `${deviceId}|${state.range}`;
+  const entry = dailyWeightCache.get(key);
+  const fresh = entry && Date.now() - entry.at < DAILY_WEIGHT_TTL_MS;
+  if (!fresh && !entry?.pending) {
+    const pending = { ...(entry || {}), pending: true };
+    dailyWeightCache.set(key, pending);
+    const start = new Date(Date.now() - days * 86400000).toISOString();
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    api.dailyWeight(deviceId, { start, tz })
+      .then((res) => {
+        dailyWeightCache.set(key, { at: Date.now(), days: res.days || [], pending: false });
+        if (state.group === "weight") render();
+      })
+      .catch((err) => {
+        // Keep whatever was there; the view falls back to the chart rows.
+        console.error("HiveHub: daily weight request failed:", err);
+        dailyWeightCache.set(key, { ...(entry || {}), at: Date.now(), pending: false });
+      });
+  }
+  return entry?.days || null;
+}
+
 // ── rendering ─────────────────────────────────────────────────────────────────
 function buildState() {
   const d = state.data || {};
@@ -390,6 +426,8 @@ function buildState() {
     deviceLatest: (id) => (d.latest && d.latest[id]) || state.deviceLatest[id] || null,
     deviceMeasurements: (id) => (d.measurements && d.measurements[id]) || [],
     deviceInspections: (id) => (d.inspections && d.inspections[id]) || [],
+    // Server-side daily weight extremes for long ranges (null = use chart rows).
+    deviceDailyWeight: dailyWeightFor,
     inspections: (d.inspections && d.inspections[activeId]) || [],
     deviceChannels: (id) => (id === activeId && d.deviceId === activeId ? d.channels : null),
     authUser: state.authUser,

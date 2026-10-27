@@ -60,6 +60,13 @@ class HiveBleIn(BaseModel):
     battery_percent: Optional[int] = None
     battery_mv: Optional[int] = None
     rssi_dbm: Optional[int] = None
+    # RuuviTag diagnostics: the data format the tag sends (3 = RAWv1,
+    # 5 = RAWv2) and, for RAWv2, transmit power, movement counter and the
+    # measurement sequence. Kept in hive_readings.raw_json.
+    data_format: Optional[int] = None
+    tx_power_dbm: Optional[int] = None
+    movement_count: Optional[int] = None
+    sequence: Optional[int] = None
     firmware_version: Optional[str] = None
     # Board/architecture a HiveInside node advertises in its beacon identity
     # record (currently only "nrf54lm20a"), forwarded by the HiveHub.
@@ -223,6 +230,9 @@ class MeasurementIn(BaseModel):
     hive_2_humidity_percent: Optional[float] = None
     ambient_temp_c: Optional[float] = None
     ambient_humidity_percent: Optional[float] = None
+    # Barometric pressure from a pressure-capable ambient sensor on the hub
+    # (BME280, ENABLE_BME280_AMBIENT); null when none is fitted or the read failed.
+    ambient_pressure_hpa: Optional[float] = None
     battery_voltage: Optional[float] = None
     battery_voltage_v: Optional[float] = None
     battery_soc_percent: Optional[float] = None
@@ -255,6 +265,10 @@ class MeasurementIn(BaseModel):
     sd_ok: Optional[bool] = None
     rtc_ok: Optional[bool] = None
     sht_ok: Optional[bool] = None
+    # Boot-time detection of the ambient sensor, as opposed to sht_ok (did THIS
+    # cycle's read succeed). Together they tell "not fitted" from "fitted but
+    # failing".
+    sht_detected: Optional[bool] = None
     scale_1_raw: Optional[int] = None
     scale_2_raw: Optional[int] = None
     # ── INMP441 stereo microphone telemetry ──────────────────────────────────
