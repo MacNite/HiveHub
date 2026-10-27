@@ -118,7 +118,8 @@ jobs:
       - name: Install server dependencies
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q build-essential python3-dev
-          pip install -r server/requirements.txt pytest
+          # httpx2: Starlette's TestClient transport (test_backend_db.py).
+          pip install -r server/requirements.txt pytest httpx2==2.13.1
       - name: Run server test suite
         env:
           DATABASE_URL: postgresql://ci-not-used/ci
