@@ -7,11 +7,12 @@ import zlib
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from auth import require_api_key, require_device_key
 from config import FIRMWARE_DIR, MAX_FIRMWARE_BYTES, PUBLIC_BASE_URL, logger
+from uploads import form_bool, form_file, form_str, multipart_openapi, read_upload_form
 from db import get_conn
 from devices import ensure_device_config, get_device_owner_id
 from schemas import FirmwareReleaseIn, normalize_firmware_target
@@ -510,6 +511,27 @@ def download_firmware(filename: str):
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Firmware file not found")
     return FileResponse(path, media_type="application/octet-stream", filename=filename)
+
+
+FIRMWARE_UPLOAD_OPENAPI = multipart_openapi(
+    {"file": "binary", "version": "string", "target": "string", "active": "boolean", "board": "string"},
+    required=["file", "version"],
+)
+
+
+async def read_firmware_upload_form(request: Request) -> tuple:
+    """(file, version, target, active, board) from a firmware upload form.
+
+    Called by the upload routes after their auth checks, instead of declaring
+    the fields as File()/Form() parameters: see uploads.py."""
+    form = await read_upload_form(request)
+    return (
+        form_file(form),
+        form_str(form, "version"),
+        form_str(form, "target", "hivescale"),
+        form_bool(form, "active", True),
+        form_str(form, "board", ""),
+    )
 
 
 async def store_firmware_upload(

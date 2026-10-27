@@ -1,10 +1,17 @@
 """ASGI middleware and rate-limiting helpers."""
 
+from typing import Optional
+
 from fastapi import HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from slowapi.util import get_remote_address
 
-from config import TRUST_PROXY_HEADERS
+from config import (
+    MAX_FIRMWARE_BYTES,
+    SD_IMPORT_MAX_FILE_SIZE,
+    TRUST_PROXY_HEADERS,
+    UPLOAD_ENVELOPE_BYTES,
+)
 
 
 # Paths whose responses must never be compressed. See SelectiveGZipMiddleware.
@@ -52,37 +59,44 @@ class SelectiveGZipMiddleware:
 
 
 class MaxBodySizeMiddleware:
-    """Reject requests whose body exceeds ``max_body_bytes``.
+    """Reject requests whose body exceeds the limit for their path.
 
     A single valid API key would otherwise let a client POST arbitrarily large
     JSON bodies, which are parsed into memory and (for measurements) persisted
     verbatim into ``raw_json`` — a storage/memory amplification vector. Capping
-    the body closes it. The firmware-upload endpoint legitimately receives
-    multi-megabyte bodies, so it is exempt here and enforces its own,
-    larger ``MAX_FIRMWARE_BYTES`` while streaming to disk.
+    the body closes it.
+
+    Uploads legitimately exceed ``max_body_bytes``, so they get their own,
+    larger caps rather than none: firmware binaries ``MAX_FIRMWARE_BYTES`` and
+    SD imports ``SD_IMPORT_MAX_FILE_SIZE``, each plus some head-room for the
+    multipart framing. Those routes also authenticate before they read the
+    body (see uploads.py), so this is a backstop, not the only line.
     """
 
     def __init__(self, app, max_body_bytes: int):
         self.app = app
         self.max_body_bytes = max_body_bytes
 
-    @staticmethod
-    def _is_exempt(scope) -> bool:
+    def _limit_for(self, scope) -> Optional[int]:
+        """The byte cap for this request, or None for no cap."""
         if scope.get("method") != "POST":
-            return False
+            return self.max_body_bytes
         path = scope.get("path", "")
-        # Firmware binary uploads are large by design and capped by the endpoint.
-        # Bulk SD import is authenticated and capped by MEASUREMENT_IMPORT_MAX rows.
+        if path.endswith("/firmware"):
+            return MAX_FIRMWARE_BYTES + UPLOAD_ENVELOPE_BYTES
+        if path.endswith("/measurements/import"):
+            return SD_IMPORT_MAX_FILE_SIZE + UPLOAD_ENVELOPE_BYTES
         # An audio stream arrives with Transfer-Encoding: chunked and no length
         # at all — a live session's size is unknown until it ends — so buffering
         # it here to measure it would defeat the point of streaming it to disk.
         # It is authenticated and capped by MAX_RECORDING_BYTES as it is written.
-        return (path.endswith("/firmware")
-                or path.endswith("/measurements/import")
-                or path.endswith("/stream"))
+        if path.endswith("/stream"):
+            return None
+        return self.max_body_bytes
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or self.max_body_bytes <= 0 or self._is_exempt(scope):
+        limit = self._limit_for(scope) if scope["type"] == "http" and self.max_body_bytes > 0 else None
+        if limit is None:
             await self.app(scope, receive, send)
             return
 
@@ -90,7 +104,7 @@ class MaxBodySizeMiddleware:
         for name, value in scope.get("headers", []):
             if name == b"content-length":
                 try:
-                    if int(value) > self.max_body_bytes:
+                    if int(value) > limit:
                         await self._send_413(send)
                         return
                 except ValueError:
@@ -106,7 +120,7 @@ class MaxBodySizeMiddleware:
             message = await receive()
             if message.get("type") == "http.request":
                 total += len(message.get("body", b""))
-                if total > self.max_body_bytes:
+                if total > limit:
                     raise HTTPException(status_code=413, detail="Request body too large")
             return message
 

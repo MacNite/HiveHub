@@ -41,13 +41,13 @@ import pytest  # noqa: E402
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
-from jose import jwk, jwt  # noqa: E402
+import jwt  # noqa: E402
 from starlette.requests import Request  # noqa: E402
 
 import auth  # noqa: E402
 import local_dashboard  # noqa: E402
 import oidc  # noqa: E402
-from schemas import DashboardCreateUserIn, DashboardLoginIn  # noqa: E402
+from schemas import DashboardChangePasswordIn, DashboardCreateUserIn, DashboardLoginIn  # noqa: E402
 
 ISSUER = "https://auth.example.com/application/o/hivehub/"
 CLIENT_ID = "hivehub-client"
@@ -58,10 +58,8 @@ _PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PRIVATE_PEM = _PRIVATE_KEY.private_bytes(
     serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
 ).decode()
-_PUBLIC_PEM = _PRIVATE_KEY.public_key().public_bytes(
-    serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-).decode()
-PUBLIC_JWK = {**jwk.construct(_PUBLIC_PEM, "RS256").to_dict(), "kid": "k1", "use": "sig"}
+PUBLIC_JWK = {**json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(_PRIVATE_KEY.public_key())),
+              "kid": "k1", "use": "sig"}
 
 METADATA = {
     "issuer": ISSUER,
@@ -143,6 +141,10 @@ def sso(password_login_disabled=False, require_verified=True, users=(ALICE,)):
     ), mock.patch.object(auth, "DASHBOARD_SESSION_SECRET_ENV", "test-session-secret"), \
             mock.patch.object(auth, "ENABLE_LOCAL_DASHBOARD", True), \
             mock.patch.object(local_dashboard, "touch_dashboard_user_login"), \
+            mock.patch.object(
+                auth, "get_dashboard_user_by_id",
+                side_effect=lambda i: next((u for u in users if u["id"] == i), None),
+            ), \
             mock.patch.object(
                 local_dashboard, "get_dashboard_users_by_email",
                 side_effect=lambda e: [u for u in users if u["email"] == e.lower()],
@@ -340,6 +342,62 @@ def test_password_login_and_sessions_refused_when_disabled():
         assert auth.current_dashboard_session(make_request("/", {cookie: sso_token}))["auth"] == "oidc"
     with sso():
         assert auth.current_dashboard_session(make_request("/", {cookie: pw_token}))["auth"] == "password"
+
+
+# ── session revocation ───────────────────────────────────────────────────────
+
+
+def _session(token):
+    return auth.current_dashboard_session(make_request("/", {auth.DASHBOARD_SESSION_COOKIE: token}))
+
+
+def test_session_of_deleted_account_is_refused():
+    with sso():
+        token = auth.create_dashboard_session_token(ALICE)
+        assert _session(token)["username"] == "alice"
+    with sso(users=()):
+        assert _session(token) is None
+
+
+def test_session_of_recreated_namesake_is_refused():
+    with sso(users=({**ALICE, "id": 8},)):
+        token = auth.create_dashboard_session_token(ALICE)
+        assert _session(token) is None
+
+
+def test_password_change_revokes_older_sessions():
+    with sso(users=({**ALICE, "session_version": 1},)):
+        token = auth.create_dashboard_session_token(ALICE)
+        assert _session(token) is None
+        fresh = auth.create_dashboard_session_token({**ALICE, "session_version": 1})
+        assert _session(fresh)["username"] == "alice"
+
+
+def test_session_role_and_name_come_from_the_live_account():
+    with sso(users=({**ALICE, "role": "viewer", "username": "alice2"},)):
+        token = auth.create_dashboard_session_token(ALICE)
+        session = _session(token)
+    assert session["role"] == "viewer" and session["username"] == "alice2"
+    with pytest.raises(HTTPException) as exc:
+        auth.require_dashboard_admin(session)
+    assert exc.value.status_code == 403
+
+
+def test_change_password_reissues_this_browsers_session():
+    alice = {**ALICE, "password_hash": auth.hash_password("old-password")}
+    bumped = {**alice, "session_version": 1}
+    resp = mock.Mock()
+    with sso(users=(alice,)), \
+            mock.patch.object(local_dashboard, "get_dashboard_user_by_username", return_value=alice), \
+            mock.patch.object(local_dashboard, "set_dashboard_user_password", return_value=bumped):
+        session = _session(auth.create_dashboard_session_token(alice))
+        local_dashboard.local_auth_change_password(
+            DashboardChangePasswordIn(current_password="old-password", new_password="new-password"),
+            resp, session,
+        )
+    resp.set_cookie.assert_called_once()
+    reissued = resp.set_cookie.call_args.kwargs["value"]
+    assert jwt.decode(reissued, "test-session-secret", algorithms=["HS256"])["sv"] == 1
 
 
 # ── logout ───────────────────────────────────────────────────────────────────

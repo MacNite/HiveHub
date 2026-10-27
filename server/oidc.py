@@ -31,7 +31,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Request, Response
-from jose import jwt, JWTError
+import jwt
+from jwt import PyJWTError as JWTError
 
 from auth import dashboard_session_secret
 from config import (
@@ -289,25 +290,25 @@ def validate_id_token(id_token: str, nonce: str, access_token: Optional[str] = N
     except JWTError as exc:
         raise OIDCError("token", f"Malformed ID token: {exc}") from exc
     alg = header.get("alg")
-    if alg in _ASYMMETRIC_ALGS:
-        key = _signing_key(header)
-    elif alg in _SYMMETRIC_ALGS:
-        key = OIDC_CLIENT_SECRET
-    else:
-        # Notably refuses "none".
-        raise OIDCError("token", f"Unsupported ID token algorithm {alg!r}")
     try:
+        if alg in _ASYMMETRIC_ALGS:
+            key = jwt.PyJWK(_signing_key(header), algorithm=alg).key
+        elif alg in _SYMMETRIC_ALGS:
+            key = OIDC_CLIENT_SECRET
+        else:
+            # Notably refuses "none".
+            raise OIDCError("token", f"Unsupported ID token algorithm {alg!r}")
         claims = jwt.decode(
             id_token,
             key,
             algorithms=[alg],
             audience=OIDC_CLIENT_ID,
             issuer=meta["issuer"],
-            access_token=access_token,
-            options={"leeway": 60},
+            leeway=60,
         )
     except JWTError as exc:
         raise OIDCError("token", f"ID token rejected: {exc}") from exc
+    _check_at_hash(claims, alg, access_token)
     aud = claims.get("aud")
     if isinstance(aud, list) and len(aud) > 1 and claims.get("azp") != OIDC_CLIENT_ID:
         raise OIDCError("token", "ID token azp does not match the client")
@@ -316,6 +317,19 @@ def validate_id_token(id_token: str, nonce: str, access_token: Optional[str] = N
     if not claims.get("sub"):
         raise OIDCError("token", "ID token has no sub")
     return claims
+
+
+def _check_at_hash(claims: dict, alg: str, access_token: Optional[str]) -> None:
+    """OIDC Core 3.1.3.6: when the ID token carries at_hash, it must be the
+    left half of the access token's digest under the token's own hash size."""
+    expected = claims.get("at_hash")
+    if expected is None:
+        return
+    if not access_token:
+        raise OIDCError("token", "ID token has at_hash but no access token was issued")
+    digest = getattr(hashlib, "sha" + alg[2:])(access_token.encode("ascii")).digest()
+    if not secrets.compare_digest(_b64url(digest[: len(digest) // 2]), str(expected)):
+        raise OIDCError("token", "ID token at_hash does not match the access token")
 
 
 def _verified_flag(value) -> bool:
