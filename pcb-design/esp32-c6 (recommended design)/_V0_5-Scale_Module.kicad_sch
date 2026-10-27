@@ -2298,6 +2298,16 @@
 		)
 		(uuid "132203e2-3d58-432a-b238-316e0e59f1ee")
 	)
+	(label "GND"
+		(at 133.35 167.64 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "20a6b6a9-a33b-4bc0-9760-bb92cdb39081")
+	)
 	(label "D0"
 		(at 40.64 133.35 180)
 		(effects
@@ -2407,6 +2417,16 @@
 			(justify left bottom)
 		)
 		(uuid "3e40ea2b-5e29-418d-9a71-c5184654a033")
+	)
+	(label "D0"
+		(at 143.51 167.64 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "3fe6d92e-5772-4953-af35-6c9005ab5237")
 	)
 	(label "GND"
 		(at 22.86 180.34 180)
@@ -2992,9 +3012,90 @@
 			(uuid "7d12ad8f-4618-4a6d-8d29-1ecb1700f3c1")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J12")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Switch:SW_Push")
+		(at 138.43 167.64 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "03a98754-81c7-4f9d-953b-6fe5ae5ef771")
+		(property "Reference" "SW2"
+			(at 138.43 160.02 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "Setup_Button"
+			(at 138.43 162.56 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(face "Standard Symbols PS")
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x02_P2.54mm_Vertical"
+			(at 138.43 162.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 138.43 162.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Push button switch, generic, two pins"
+			(at 138.43 167.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "e41fe450-ccad-4d23-ab3c-f4bf54613549")
+		)
+		(pin "2"
+			(uuid "c145354a-324d-4e38-ba68-b0f4aa043aaf")
+		)
+		(instances
+			(project "_V0_5-Scale_Module"
+				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
+					(reference "SW2")
 					(unit 1)
 				)
 			)
@@ -3068,7 +3169,7 @@
 			)
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "H8")
 					(unit 1)
@@ -3161,7 +3262,7 @@
 			(uuid "df747c4f-9435-49b0-aef3-0385b8a7c67f")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J21")
 					(unit 1)
@@ -3243,7 +3344,7 @@
 			(uuid "722ebcfb-7ef0-4063-8112-66b79938ec58")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J10")
 					(unit 1)
@@ -3325,7 +3426,7 @@
 			(uuid "d8a68c46-4632-45fb-9082-93c70ea2a1e9")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J18")
 					(unit 1)
@@ -3418,7 +3519,7 @@
 			(uuid "59accada-9129-46d9-aedf-4e7201c9abbc")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J19")
 					(unit 1)
@@ -3496,7 +3597,7 @@
 			(uuid "bb4cb2ed-3caa-430d-969e-16f73252bb72")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "#FLG01")
 					(unit 1)
@@ -3584,7 +3685,7 @@
 			(uuid "0871939c-eb69-44ef-b9f3-5400e9d65975")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "i2c1")
 					(unit 1)
@@ -3677,7 +3778,7 @@
 			(uuid "99e42f93-df6b-4866-8afe-d0d443f1dff8")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J9")
 					(unit 1)
@@ -3764,7 +3865,7 @@
 			(uuid "3c31b03e-bf1a-439a-b7dc-3f9c100b9544")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J5")
 					(unit 1)
@@ -3840,7 +3941,7 @@
 			)
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "H4")
 					(unit 1)
@@ -3923,7 +4024,7 @@
 			(uuid "91fbe67f-a7ba-4b9f-8b80-68f59cc8ef19")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "MAX17048")
 					(unit 1)
@@ -4004,7 +4105,7 @@
 			(uuid "944d91c5-7b84-449b-b56d-610d4feb32ac")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J20")
 					(unit 1)
@@ -4084,7 +4185,7 @@
 			(uuid "bfc3c83a-ea0c-4091-a5fb-c60c9b80943c")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "SCL-4.7k1")
 					(unit 1)
@@ -4166,7 +4267,7 @@
 			(uuid "eedfcd4c-9694-43ac-848e-c53513dedf9c")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "TP4056+1")
 					(unit 1)
@@ -4247,7 +4348,7 @@
 			(uuid "3b34ffa8-2e55-4658-8d9e-9d930df22695")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "1W-4.7k1")
 					(unit 1)
@@ -4332,7 +4433,7 @@
 			(uuid "46b15ced-96dc-4e46-a393-3cdae20f8417")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J3")
 					(unit 1)
@@ -4414,7 +4515,7 @@
 			(uuid "4ea1f4ed-0939-4e21-bdf1-63db90203707")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J23")
 					(unit 1)
@@ -4499,7 +4600,7 @@
 			(uuid "7e88b201-ebb2-46e2-b93e-cb1dbfe8ba78")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J13")
 					(unit 1)
@@ -4529,7 +4630,7 @@
 				)
 			)
 		)
-		(property "Value" "SW_Push"
+		(property "Value" "Inspection_Button"
 			(at 119.38 162.56 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4579,7 +4680,7 @@
 			(uuid "82bd9d1e-35f6-4e55-97d1-958bc5271fb6")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "SW1")
 					(unit 1)
@@ -4661,7 +4762,7 @@
 			(uuid "2bccf8c4-79c2-46f7-95f9-4fabeb8d43fa")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J11")
 					(unit 1)
@@ -4740,7 +4841,7 @@
 			(uuid "5761d754-31d0-46c4-bddd-45783a669a98")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J2")
 					(unit 1)
@@ -4820,7 +4921,7 @@
 			(uuid "d4120b21-96f2-4c39-90eb-171b94a05675")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "SDA-4.7k1")
 					(unit 1)
@@ -4896,7 +4997,7 @@
 			)
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "H3")
 					(unit 1)
@@ -5134,7 +5235,7 @@
 			(uuid "28b8fab3-0b09-4430-86c7-3bbd2b6f8b08")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "U1")
 					(unit 1)
@@ -5211,7 +5312,7 @@
 			(uuid "4e86652d-9660-4a0b-8b82-16fbf0fb1c33")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "#PWR01")
 					(unit 1)
@@ -5292,7 +5393,7 @@
 			(uuid "d2419819-34b0-430e-ae05-be9b13c82643")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J6")
 					(unit 1)
@@ -5368,7 +5469,7 @@
 			)
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "H1")
 					(unit 1)
@@ -5444,7 +5545,7 @@
 			)
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "H2")
 					(unit 1)
@@ -5526,7 +5627,7 @@
 			(uuid "038fc765-6889-4e4d-915c-9d34e57a1850")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "TP4056-1")
 					(unit 1)
@@ -5605,7 +5706,7 @@
 			(uuid "27e0d066-1352-41c1-abeb-a8854edcbf0b")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J1")
 					(unit 1)
@@ -5698,7 +5799,7 @@
 			(uuid "02cd8937-7d3e-43e3-99d0-5e134810da41")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J22")
 					(unit 1)
@@ -5786,7 +5887,7 @@
 			(uuid "4f11dbee-87e3-4efe-89b1-5bf074125072")
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "J15")
 					(unit 1)
@@ -5862,7 +5963,7 @@
 			)
 		)
 		(instances
-			(project "_V0_4-Scale_Module"
+			(project "_V0_5-Scale_Module"
 				(path "/0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
 					(reference "H6")
 					(unit 1)

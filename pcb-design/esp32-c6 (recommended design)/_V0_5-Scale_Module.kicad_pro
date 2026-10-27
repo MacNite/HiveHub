@@ -178,6 +178,7 @@
         {
           "td_allow_use_two_tracks": true,
           "td_curve_segcount": 0,
+          "td_enabled": false,
           "td_height_ratio": 1.0,
           "td_length_ratio": 0.5,
           "td_maxheight": 2.0,
@@ -189,6 +190,7 @@
         {
           "td_allow_use_two_tracks": true,
           "td_curve_segcount": 0,
+          "td_enabled": false,
           "td_height_ratio": 1.0,
           "td_length_ratio": 0.5,
           "td_maxheight": 2.0,
@@ -200,6 +202,7 @@
         {
           "td_allow_use_two_tracks": true,
           "td_curve_segcount": 0,
+          "td_enabled": false,
           "td_height_ratio": 1.0,
           "td_length_ratio": 0.5,
           "td_maxheight": 2.0,
@@ -487,6 +490,7 @@
       "pin_to_pin": "warning",
       "power_pin_not_driven": "error",
       "same_local_global_label": "warning",
+      "same_local_global_power": "warning",
       "similar_label_and_power": "warning",
       "similar_labels": "warning",
       "similar_power": "warning",
@@ -506,7 +510,7 @@
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "_V0_4-Scale_Module.kicad_pro",
+    "filename": "_V0_5-Scale_Module.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -549,8 +553,8 @@
     "meta": {
       "version": 5
     },
-    "net_colors": null,
-    "netclass_assignments": null,
+    "net_colors": {},
+    "netclass_assignments": {},
     "netclass_patterns": [
       {
         "netclass": "Power",
@@ -721,18 +725,18 @@
     "subpart_id_separator": 0,
     "top_level_sheets": [
       {
-        "filename": "_V0_4-Scale_Module.kicad_sch",
-        "name": "_V0_4-Scale_Module",
+        "filename": "_V0_5-Scale_Module.kicad_sch",
+        "name": "_V0_5-Scale_Module",
         "uuid": "0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6"
       }
     ],
-    "used_designators": "MAX17048,Beecounter1,1W\\-4.7k1,SW1,TP4056+1,J1-3,J5-6,J11-13,J15,J18,J20-23,H5-8",
+    "used_designators": "1W\\-4.7k1,Beecounter1,H5-8,J1-3,J5-6,J11-13,J15,J18,J20-23,MAX17048,SW1-2,TP4056+1",
     "variants": []
   },
   "sheets": [
     [
       "0fd72f3f-0d89-4c92-9f9e-d7a48828e0f6",
-      "_V0_4-Scale_Module"
+      "_V0_5-Scale_Module"
     ]
   ],
   "text_variables": {},
