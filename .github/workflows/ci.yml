@@ -86,13 +86,16 @@ jobs:
         working-directory: firmware
         # Through the environment, one spec per line: library names contain
         # spaces, and quoting them inside the script text does not survive the
-        # expression being pasted into it.
+        # expression being pasted into it. --skip-dependencies: each variant
+        # lists every library it needs, and DallasTemperature's declared
+        # dependency would otherwise replace the pinned C6-capable OneWire
+        # commit with the 2.3.8 release, which does not compile on the C6.
         env:
           LIBS: ${{ matrix.libs }}
         run: |
           while IFS= read -r lib; do
             [ -n "$lib" ] || continue
-            pio pkg install -e xiao_esp32c6 --no-save --library "$lib"
+            pio pkg install -e xiao_esp32c6 --no-save --skip-dependencies --library "$lib"
           done <<< "$LIBS"
       - name: Build xiao_esp32c6 (${{ matrix.name }})
         env:
