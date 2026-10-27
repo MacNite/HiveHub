@@ -62,16 +62,17 @@ jobs:
           - name: gatt-clients
             flags: -DENABLE_WIRELESS_BEECOUNTER=1 -DENABLE_BEEHIVE_GATT=1
             libs: ""
+          # libs: one library spec per line (names contain spaces).
           - name: ds18b20-bme280
             flags: -DENABLE_DS18B20_HIVE_TEMP=1 -DENABLE_SHT4X_AMBIENT=0 -DENABLE_BME280_AMBIENT=1
-            libs: >-
+            libs: |
               https://github.com/PaulStoffregen/OneWire.git#800f26f3ee6eb446a72e013785cac3700e54cc13
               milesburton/DallasTemperature@3.11.0
-              "adafruit/Adafruit BME280 Library@2.2.4"
+              adafruit/Adafruit BME280 Library@2.2.4
           - name: sht3x
             flags: -DENABLE_SHT4X_AMBIENT=0 -DENABLE_SHT3X_AMBIENT=1
-            libs: >-
-              "adafruit/Adafruit SHT31 Library@2.2.2"
+            libs: |
+              adafruit/Adafruit SHT31 Library@2.2.2
     name: firmware-build-variant (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
@@ -83,9 +84,16 @@ jobs:
       - name: Add the variant's libraries
         if: matrix.libs != ''
         working-directory: firmware
+        # Through the environment, one spec per line: library names contain
+        # spaces, and quoting them inside the script text does not survive the
+        # expression being pasted into it.
+        env:
+          LIBS: ${{ matrix.libs }}
         run: |
-          eval "set -- ${{ matrix.libs }}"
-          for lib in "$@"; do pio pkg install -e xiao_esp32c6 --no-save --library "$lib"; done
+          while IFS= read -r lib; do
+            [ -n "$lib" ] || continue
+            pio pkg install -e xiao_esp32c6 --no-save --library "$lib"
+          done <<< "$LIBS"
       - name: Build xiao_esp32c6 (${{ matrix.name }})
         env:
           PLATFORMIO_BUILD_FLAGS: ${{ matrix.flags }}
