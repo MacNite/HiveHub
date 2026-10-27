@@ -153,6 +153,10 @@ jobs:
           # HiveInside deployment ever populates. Both failed without an error
           # anywhere, so they are pinned here.
           python3 test-data/test_multihive_insights.py
+          # Inspections/calibration cut the series, acoustic evidence is fresh,
+          # counter rates use real elapsed time, windows must be covered.
+          python3 test-data/test_insight_data_quality.py
+          python3 test-data/test_inspection_masking.py
           python3 test-data/test_sd_import.py
           python3 test-data/test_data_export.py
           python3 test-data/test_bee_counter_banks.py

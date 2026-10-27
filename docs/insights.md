@@ -30,6 +30,38 @@ This document is the authoritative reference for **what is detected**,
 
 ---
 
+## What the detectors trust
+
+The rules below sit underneath every detector, so an alert is about the colony
+rather than about gaps, interventions or stale data.
+
+- **Inspections and calibration cut the series.** Readings taken during an
+  inspection of a hive are masked by the read layer, and readings flagged
+  `calibration_mode` are ignored outright. Both also mark a break: the weight
+  after it is spliced onto the level before it, so a super lifted off, a box
+  added or a recalibrated scale is a new reference level, not a swarm, robbing,
+  harvest or flow signal. In-hive temperature is ignored for
+  `INSPECTION_SETTLE_MIN` (30 min) after a break while the brood nest settles.
+  An inspection with no reading inside it still counts: the read layer marks
+  the first reading after it (`after_inspection`).
+- **Windows must be covered.** A detector that judges "the last 24 h" (or 4 h,
+  7 d, 11 d, 14 d) only fires when its readings span at least 75% of that
+  window and no gap — including the one from the newest reading to now — is
+  longer than a quarter of it. A point count alone is not enough. The brood
+  description states the span it actually saw.
+- **Counter rates use real elapsed time.** Rates are bees counted divided by
+  the time they were counted in, so a missed poll no longer inflates them. The
+  swarm rule compares per-interval rates and leaves intervals longer than
+  `COUNTER_MAX_INTERVAL_MULT` (3) times the usual poll spacing out of its
+  peak test. Daily totals split an interval that spans midnight across both
+  days.
+- **Acoustic evidence is one recent reading from a working microphone.** All
+  bands come from the newest reading that carries them, no older than
+  `MIC_EVIDENCE_MAX_AGE_HOURS` (3 h), and a newer reading reporting the mic as
+  failed (`mic_{n}_ok` / `mic_left_ok` false) withdraws it.
+
+---
+
 ## Sources
 
 You can find a quick tldr on the sources [here](insights-sources-tldr.md).
@@ -138,7 +170,7 @@ see below.
 
 **Entrance-counter corroboration.** When BeeCounter data is present, the
 weight drop is cross-checked against outbound traffic in the drop window.
-If the peak outbound interval exceeds **3×** the recent baseline *and*
+If the peak outbound rate (bees/h over each interval) exceeds **3×** the recent baseline *and*
 `out / (in + 1) > 5`, the swarm signature is confirmed: confidence is
 raised (+0.25) and a night-time `warning` is promoted to `critical`
 (the asymmetric outflow rules out a measurement artefact). Field:
@@ -478,7 +510,7 @@ HARVEST_PLATEAU_DAYS          = 4
 # ── Entrance-counter (BeeCounter) thresholds ──
 SWARM_OUT_BASELINE_MULT                 = 3.0    # peak outbound vs baseline
 SWARM_OUT_IN_RATIO                      = 5.0    # out / (in + 1) in drop window
-SWARM_OUT_MIN_BASELINE                  = 1.0    # min baseline out/interval
+SWARM_OUT_MIN_BASELINE                  = 6.0    # min baseline outbound bees/h
 QUEENLESS_FORAGER_DECLINE_FRAC_PER_DAY  = 0.05   # 5%/day outbound decline
 QUEENLESS_FORAGER_MIN_DAILY_BASELINE    = 200.0  # min daily out to trust slope
 ROBBING_IN_OUT_ASYMMETRY                = 0.4    # (in-out)/(in+out)

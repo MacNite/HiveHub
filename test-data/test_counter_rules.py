@@ -223,7 +223,10 @@ def aout(i):
     # decline ~5%/day
     day = i / (24 * 4)
     return max(0.0, 4.17 * (1.0 - 0.05 * day))
-rows = _rows(n, start,
+# step_min=15 makes the rows actually span the 14-day lookback; at the default
+# 10-minute step they ended 4.7 days before NOW, which the detectors now refuse
+# to treat as 14 days of data.
+rows = _rows(n, start, step_min=15,
              scale_1_weight_kg=aweight,
              hive_1_temp_c=atemp,
              bee_counter_1_ok=_const(True),
@@ -258,7 +261,8 @@ def wweight(i):
 def wout_flight(i):
     # one warm-day cleansing flight spike
     return 80.0 if i == n - 10 else 0.0
-rows = _rows(n, start,
+# 4 rows/hour, so the rows span the whole 7-day window (see section 5).
+rows = _rows(n, start, step_min=15,
              hive_1_temp_c=wtemp,
              ambient_temp_c=wamb,
              scale_1_weight_kg=wweight,

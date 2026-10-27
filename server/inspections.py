@@ -495,6 +495,25 @@ def mask_inspection_readings(measurements: list[dict]) -> list[dict]:
             break
         else:
             m.setdefault("inspection", False)
+
+    # Mark the first reading after each closed inspection. When the hub took no
+    # reading while the hive was open there is no masked row to show where the
+    # inspection was, and the insight engine would compare the weight before it
+    # (super still on) with the weight after it as one continuous series.
+    for device_id, device_windows in by_device.items():
+        timed = sorted(
+            (_aware(m["measured_at"]), i)
+            for i, m in enumerate(measurements)
+            if m.get("device_id") == device_id and m.get("measured_at")
+        )
+        for w in device_windows:
+            if w.ended_at is None:
+                continue
+            ended = _aware(w.ended_at)
+            first_after = next((i for at, i in timed if at > ended), None)
+            if first_after is not None and not measurements[first_after].get("inspection"):
+                measurements[first_after]["after_inspection"] = True
+                measurements[first_after]["after_inspection_hives"] = w.hives
     return measurements
 
 
