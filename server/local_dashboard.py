@@ -1,5 +1,6 @@
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Iterable, Literal, Optional
 
 from fastapi import (
@@ -105,6 +106,7 @@ from measurements import (
     CHART_MEASUREMENT_COLUMNS,
     MEASUREMENT_SELECT_COLUMNS,
     bulk_import_measurements,
+    daily_weight_extremes,
     execute_measurement_query,
     fetch_chart_rows,
     serialize_chart_measurements,
@@ -596,6 +598,28 @@ def local_list_measurements(
             )
             rows = fetch_chart_rows(cur)
     return serialize_chart_measurements(rows)
+
+
+@router.get("/api/v1/local/devices/{device_id}/measurements/daily-weight", dependencies=LOCAL_DASHBOARD_DEP)
+def local_daily_weight(
+    device_id: str,
+    start_at: datetime,
+    end_at: Optional[datetime] = None,
+    tz: str = "UTC",
+):
+    """Highest and lowest weight per hive and calendar day, from every reading.
+
+    Backs the "Daily max weight" chart. The time-series endpoint above thins a
+    long range to ~1500 evenly spaced readings, and a daily maximum taken over
+    those misses every peak that fell between two kept readings. ``tz`` is the
+    IANA zone whose midnight separates the days (the browser's own).
+    """
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(status_code=422, detail=f"Unknown time zone {tz!r}")
+    days = daily_weight_extremes(device_id, start_at, end_at, zone)
+    return {"device_id": device_id, "tz": tz, "days": days}
 
 
 @router.get("/api/v1/local/devices/{device_id}/measurements/latest", dependencies=LOCAL_DASHBOARD_DEP)

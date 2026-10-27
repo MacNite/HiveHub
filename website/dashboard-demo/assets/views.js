@@ -698,13 +698,6 @@ function deviceContextNote(state, what) {
 }
 
 // latest non-null among a list of candidate keys (first match wins)
-function latestCoalesce(measurements, keys) {
-  for (const m of measurements) {
-    for (const k of keys) if (m[k] != null) return m[k];
-  }
-  return null;
-}
-
 // ── Last known sensor readings ───────────────────────────────────────────────
 // A snapshot card answers "what is this hive doing?", so it has to show the
 // newest value the sensor actually reported — not merely whatever landed in the
@@ -1061,8 +1054,18 @@ function renderWeight(root, state) {
   });
   const series = refs.map((ref, i) =>
     seriesFrom(ref.measurements, weightKey(ref.latest || {}, ref.hive), refLabel(state, ref), paletteColor(i)));
-  const dailyMax = refs.map((ref, i) =>
-    dailyMaxSeries(ref.measurements, weightKey(ref.latest || {}, ref.hive), refLabel(state, ref), paletteColor(i)));
+  // Long ranges: the server's per-day maxima over every reading; the chart rows
+  // are thinned there, and a maximum over them misses the peaks in between.
+  // Short ranges are not thinned, so their rows give the exact answer.
+  const dailyMax = refs.map((ref, i) => {
+    const days = state.deviceDailyWeight ? state.deviceDailyWeight(ref.deviceId) : null;
+    if (days) {
+      const points = days.filter((d) => d.hive === ref.hive)
+        .map((d) => ({ t: new Date(d.max_at).getTime(), y: d.max_kg }));
+      return { label: refLabel(state, ref), color: paletteColor(i), points };
+    }
+    return dailyMaxSeries(ref.measurements, weightKey(ref.latest || {}, ref.hive), refLabel(state, ref), paletteColor(i));
+  });
 
   root.append(tsView("Weight", "Mass changes and harvest trend", state,
     { cards, charts: [
@@ -1071,10 +1074,31 @@ function renderWeight(root, state) {
     ] }));
 }
 
+// Pressure keys for a device, preferred source first. Air pressure is the same
+// for the whole apiary, so one reading stands for all: the hub's own BME280,
+// then any hive's in-hive beacon or wireless HiveScale — every hive the device
+// reports, not just hives 1 and 2 (the read layer flattens hives 3–18 into the
+// same ble_{n}_/hivescale_{n}_ keys).
+function pressureKeys(state) {
+  const hives = availableHives(state);
+  const ns = hives.length ? hives : [1, 2];
+  return ["ambient_pressure_hpa",
+    ...ns.map((n) => `ble_${n}_pressure_hpa`),
+    ...ns.map((n) => `hivescale_${n}_pressure_hpa`)];
+}
+
+function pressureSourceLabel(state, key) {
+  if (key === "ambient_pressure_hpa") return "Hub sensor";
+  const mm = /^(ble|hivescale)_(\d+)_pressure_hpa$/.exec(key || "");
+  if (!mm) return "Barometric";
+  return `${mm[1] === "ble" ? "In-hive sensor" : "HiveScale"} · ${hiveLabel(state, Number(mm[2]))}`;
+}
+
 function renderEnvironment(root, state) {
   const refs = selectedRefs(state);
   const m = state.latest || {};   // active device — ambient humidity + pressure
-  const pressureKeys = ["ble_1_pressure_hpa", "ble_2_pressure_hpa", "hivescale_1_pressure_hpa", "hivescale_2_pressure_hpa"];
+  const pKeys = pressureKeys(state);
+  const pKey = pKeys.find((k) => m[k] != null);
   const hums = new Map(refs.map((ref) => [ref.key, refReading(ref, `hive_${ref.hive}_humidity_percent`)]));
   const cards = [
     metricCard("Ambient humidity", fmt(m.ambient_humidity_percent, 1), "%",
@@ -1083,7 +1107,7 @@ function renderEnvironment(root, state) {
       (ref) => readingValue(hums.get(ref.key), 1),
       footerWithAge(refs, hums, "Brood area"),
       (ref) => readingAge(hums.get(ref.key))),
-    metricCard("Pressure", fmt(latestCoalesce([m], pressureKeys), 0), "hPa", "Barometric"),
+    metricCard("Pressure", fmt(pKey ? m[pKey] : null, 0), "hPa", pressureSourceLabel(state, pKey)),
   ];
   const charts = [
     chartCard("Humidity", "Ambient and in-hive relative humidity",
@@ -1093,7 +1117,7 @@ function renderEnvironment(root, state) {
          seriesFrom(ref.measurements, `hive_${ref.hive}_humidity_percent`, refLabel(state, ref), paletteColor(i)))],
       { unit: "%", yDigits: 0 }),
     chartCard("Pressure", "Barometric pressure around the hive",
-      [seriesCoalesce(state.measurements, pressureKeys,
+      [seriesCoalesce(state.measurements, pKeys,
         state.multiDevice ? `Pressure · ${state.device?.display_name || state.device?.device_id}` : "Pressure", PALETTE[3])], { unit: "hPa", yDigits: 0 }),
   ];
   const node = tsView("Environment", "Humidity and air pressure", state, { cards, charts });

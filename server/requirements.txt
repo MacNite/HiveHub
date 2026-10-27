@@ -10,3 +10,6 @@ paho-mqtt==2.1.0
 # Web Push (VAPID) delivery for insight-alert notifications. Optional at runtime:
 # notifications.py imports it lazily, so e-mail-only deployments work without it.
 pywebpush==2.0.0
+# IANA time-zone data for zoneinfo (the daily-weight endpoint splits days at the
+# browser's midnight); the slim base image is not guaranteed to ship it.
+tzdata==2026.5

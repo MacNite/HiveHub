@@ -71,6 +71,12 @@ export const api = {
       body: JSON.stringify(payload || {}),
     }),
 
+  // Highest/lowest weight per hive and local day, over every reading in range.
+  dailyWeight: (deviceId, { start, tz } = {}) => {
+    const q = new URLSearchParams({ start_at: start, tz: tz || "UTC" });
+    return req(`/devices/${encodeURIComponent(deviceId)}/measurements/daily-weight?${q}`);
+  },
+
   measurements: (deviceId, { start, end, limit } = {}) => {
     const q = new URLSearchParams();
     if (start) q.set("start_at", start);

@@ -30,6 +30,7 @@
 #if ENABLE_BLE_SCAN
 
 #include <ArduinoJson.h>
+#include <limits.h>   // INT_MIN: "not reported" for Snapshot::tx_power_dbm
 #include <vector>
 
 namespace blesensor {
@@ -81,7 +82,14 @@ struct Snapshot {
   float    mic_high_dbfs     = NAN;  // 1500–3000 Hz
 
   int      battery_pct   = -1;     // -1 = not reported
-  int      battery_mv    = -1;     // HiveInside raw cell voltage in mV (-1 = not reported)
+  int      battery_mv    = -1;     // raw cell voltage in mV (HiveInside, RuuviTag; -1 = not reported)
+
+  // RuuviTag diagnostics: data format (3 = RAWv1, 5 = RAWv2; 0 = not Ruuvi) and
+  // the RAWv2-only fields. INT_MIN / -1 = not reported.
+  int      ruuvi_format   = 0;
+  int      tx_power_dbm   = INT_MIN;
+  int      movement_count = -1;
+  long     sequence       = -1;
 
   // Running firmware version the nRF54 HiveInside advertises in its scan-response
   // identity record (the 'I' manufacturer element). Empty for HolyIot/Ruuvi

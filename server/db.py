@@ -204,6 +204,10 @@ def init_db():
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS sd_ok BOOLEAN;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS rtc_ok BOOLEAN;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS sht_ok BOOLEAN;
+                -- Sent by the hub firmware for a long time but dropped at ingest
+                -- until migration 034.
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS sht_detected BOOLEAN;
+                ALTER TABLE measurements ADD COLUMN IF NOT EXISTS ambient_pressure_hpa DOUBLE PRECISION;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS scale_1_raw BIGINT;
                 ALTER TABLE measurements ADD COLUMN IF NOT EXISTS scale_2_raw BIGINT;
                 -- mic columns (idempotent for existing deployments)

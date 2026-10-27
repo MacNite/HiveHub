@@ -3,7 +3,8 @@ readings, temperature compensation and serialization."""
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
+from typing import Any, Optional
 
 import psycopg
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -43,13 +44,13 @@ MEASUREMENT_INSERT_SQL = """
                     device_id, measurement_id, measured_at, scale_1_weight_kg, scale_2_weight_kg,
                     hive_1_temp_c, hive_2_temp_c,
                     hive_1_humidity_percent, hive_2_humidity_percent, ambient_temp_c,
-                    ambient_humidity_percent, battery_voltage, battery_soc_percent,
+                    ambient_humidity_percent, ambient_pressure_hpa, battery_voltage, battery_soc_percent,
                     battery_alert, battery_monitor_ok, solar_monitor_ok,
                     solar_bus_voltage_v, solar_shunt_voltage_mv, solar_load_voltage_v,
                     solar_current_ma, solar_power_mw, network_transport,
                     calibration_mode, boot_count,
                     time_source, rssi_dbm, firmware_version, config_version, sd_ok,
-                    rtc_ok, sht_ok, scale_1_raw, scale_2_raw,
+                    rtc_ok, sht_ok, sht_detected, scale_1_raw, scale_2_raw,
                     mic_ok, mic_sample_rate_hz, mic_sample_frames,
                     mic_left_ok, mic_left_rms_dbfs, mic_left_peak_dbfs, mic_left_rms_normalized,
                     mic_right_ok, mic_right_rms_dbfs, mic_right_peak_dbfs, mic_right_rms_normalized,
@@ -87,7 +88,7 @@ MEASUREMENT_INSERT_SQL = """
                     %(device_id)s, %(measurement_id)s, %(measured_at)s, %(scale_1_weight_kg)s,
                     %(scale_2_weight_kg)s, %(hive_1_temp_c)s, %(hive_2_temp_c)s,
                     %(hive_1_humidity_percent)s, %(hive_2_humidity_percent)s,
-                    %(ambient_temp_c)s, %(ambient_humidity_percent)s,
+                    %(ambient_temp_c)s, %(ambient_humidity_percent)s, %(ambient_pressure_hpa)s,
                     %(battery_voltage)s, %(battery_soc_percent)s,
                     %(battery_alert)s, %(battery_monitor_ok)s, %(solar_monitor_ok)s,
                     %(solar_bus_voltage_v)s, %(solar_shunt_voltage_mv)s,
@@ -95,7 +96,7 @@ MEASUREMENT_INSERT_SQL = """
                     %(solar_power_mw)s, %(network_transport)s,
                     %(calibration_mode)s, %(boot_count)s,
                     %(time_source)s, %(rssi_dbm)s, %(firmware_version)s,
-                    %(config_version)s, %(sd_ok)s, %(rtc_ok)s, %(sht_ok)s,
+                    %(config_version)s, %(sd_ok)s, %(rtc_ok)s, %(sht_ok)s, %(sht_detected)s,
                     %(scale_1_raw)s, %(scale_2_raw)s,
                     %(mic_ok)s, %(mic_sample_rate_hz)s, %(mic_sample_frames)s,
                     %(mic_left_ok)s, %(mic_left_rms_dbfs)s, %(mic_left_peak_dbfs)s, %(mic_left_rms_normalized)s,
@@ -152,6 +153,7 @@ def measurement_insert_params(payload: "MeasurementIn", measured_at: datetime) -
         "hive_2_humidity_percent": payload.hive_2_humidity_percent,
         "ambient_temp_c": payload.ambient_temp_c,
         "ambient_humidity_percent": payload.ambient_humidity_percent,
+        "ambient_pressure_hpa": payload.ambient_pressure_hpa,
         "battery_voltage": payload.battery_voltage_v if payload.battery_voltage_v is not None else payload.battery_voltage,
         "battery_soc_percent": payload.battery_soc_percent,
         "battery_alert": payload.battery_alert,
@@ -172,6 +174,7 @@ def measurement_insert_params(payload: "MeasurementIn", measured_at: datetime) -
         "sd_ok": payload.sd_ok,
         "rtc_ok": payload.rtc_ok,
         "sht_ok": payload.sht_ok,
+        "sht_detected": payload.sht_detected,
         "scale_1_raw": payload.scale_1_raw,
         "scale_2_raw": payload.scale_2_raw,
         "mic_ok": payload.mic_ok,
@@ -712,6 +715,8 @@ def bulk_import_measurements(
 #  65  bee_counter_1_read_attempts134  ble_2_firmware_version
 #  66  bee_counter_1_latch_succeeded135  hiveheart_1_fft
 #  67  bee_counter_2_ok       136  hiveheart_2_fft
+#                             137  ambient_pressure_hpa
+#                             138  sht_detected
 #  68  bee_counter_2_protocol_version
 # ---------------------------------------------------------------------------
 
@@ -855,7 +860,9 @@ MEASUREMENT_SELECT_COLUMNS = """
     -- read path can decode it into fft_bins. Appended last so the positional
     -- row_to_dict indices below stay stable.
     raw_json->'hiveheart_1_fft' AS hiveheart_1_fft,
-    raw_json->'hiveheart_2_fft' AS hiveheart_2_fft
+    raw_json->'hiveheart_2_fft' AS hiveheart_2_fft,
+    ambient_pressure_hpa,
+    sht_detected
 """
 
 
@@ -884,7 +891,7 @@ CHART_MEASUREMENT_COLUMNS = """
     id, device_id, measured_at,
     scale_1_weight_kg, scale_2_weight_kg,
     hive_1_temp_c, hive_2_temp_c, ambient_temp_c,
-    ambient_humidity_percent,
+    ambient_humidity_percent, ambient_pressure_hpa,
     COALESCE(hive_1_humidity_percent, NULLIF(raw_json->>'hive_1_humidity_percent', '')::double precision) AS hive_1_humidity_percent,
     COALESCE(hive_2_humidity_percent, NULLIF(raw_json->>'hive_2_humidity_percent', '')::double precision) AS hive_2_humidity_percent,
     COALESCE(ble_1_pressure_hpa, NULLIF(raw_json->>'ble_1_pressure_hpa', '')::double precision) AS ble_1_pressure_hpa,
@@ -1092,6 +1099,8 @@ def measurement_row_to_dict(r):
         # fft_bins by attach_hive_readings → _attach_hiveheart_fft_bins.
         "hiveheart_1_fft":              r[135],
         "hiveheart_2_fft":              r[136],
+        "ambient_pressure_hpa":         r[137],
+        "sht_detected":                 r[138],
     }
 
 
@@ -1624,6 +1633,97 @@ def serialize_chart_measurements(rows: list[dict]) -> list[dict]:
     measurements = attach_temperature_compensation(measurements)
     # Masked after differencing — see serialize_measurements for why.
     return mask_inspection_readings(difference_bee_counter_intervals(measurements))
+
+
+# Columns the daily weight extremes need: the weights, the temperatures the
+# compensation may read, and nothing that falls back to raw_json, so a year of
+# readings is read without de-TOASTing a single payload.
+DAILY_WEIGHT_COLUMNS = """
+    id, device_id, measured_at,
+    scale_1_weight_kg, scale_2_weight_kg,
+    hive_1_temp_c, hive_2_temp_c, ambient_temp_c
+"""
+DAILY_WEIGHT_CHUNK_ROWS = 5000
+# Rows of the previous chunk replayed ahead of the next one, so the temperature
+# EMA inside the compensation is warmed up rather than restarting at every
+# chunk boundary (alpha 0.3 settles well within this).
+DAILY_WEIGHT_EMA_WARMUP_ROWS = 40
+
+
+def daily_weight_extremes(
+    device_id: str, start_at: datetime, end_at: Optional[datetime], tz: tzinfo
+) -> list[dict]:
+    """Per hive and local calendar day: the highest and lowest weight reading.
+
+    Computed over EVERY reading in the range, not the down-sampled chart rows:
+    the chart keeps every k-th reading of a long range, and a maximum taken over
+    those is only the maximum of what happened to be kept. The weights go
+    through the same pipeline as the charts (per-hive readings for hives 3–18,
+    temperature compensation, inspection masking), so a day's maximum is the
+    compensated weight the chart would show, and a super lifted off during an
+    inspection is not a daily minimum.
+
+    Read in chunks of DAILY_WEIGHT_CHUNK_ROWS, each released back to the pool
+    before it is enriched (see fetch_chart_rows), so a five-year range neither
+    holds a connection nor builds every row in memory at once.
+    """
+    extremes: dict[tuple[int, str], dict] = {}
+    warmup: list[dict] = []
+    after: Optional[tuple] = None
+    while True:
+        where = ["device_id = %s", "measured_at >= %s"]
+        params: list[Any] = [device_id, start_at]
+        if end_at is not None:
+            where.append("measured_at <= %s")
+            params.append(end_at)
+        if after is not None:
+            where.append("(measured_at, id) > (%s, %s)")
+            params.extend(after)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {DAILY_WEIGHT_COLUMNS} FROM measurements "
+                    f"WHERE {' AND '.join(where)} ORDER BY measured_at, id LIMIT %s;",
+                    [*params, DAILY_WEIGHT_CHUNK_ROWS],
+                )
+                rows = fetch_chart_rows(cur)
+        if not rows:
+            break
+        replay = {r["id"] for r in warmup}
+        for m in serialize_chart_measurements(warmup + rows):
+            if m.get("id") in replay or m.get("measured_at") is None:
+                continue
+            day = m["measured_at"].astimezone(tz).date().isoformat()
+            for key, value in m.items():
+                hive = _compensated_weight_hive(key)
+                if hive is None or value is None:
+                    continue
+                cur_day = extremes.setdefault((hive, day), {
+                    "hive": hive, "date": day,
+                    "max_kg": value, "max_at": m["measured_at"],
+                    "min_kg": value, "min_at": m["measured_at"],
+                })
+                if value > cur_day["max_kg"]:
+                    cur_day["max_kg"], cur_day["max_at"] = value, m["measured_at"]
+                if value < cur_day["min_kg"]:
+                    cur_day["min_kg"], cur_day["min_at"] = value, m["measured_at"]
+        if len(rows) < DAILY_WEIGHT_CHUNK_ROWS:
+            break
+        warmup = rows[-DAILY_WEIGHT_EMA_WARMUP_ROWS:]
+        after = (rows[-1]["measured_at"], rows[-1]["id"])
+    return sorted(extremes.values(), key=lambda d: (d["hive"], d["date"]))
+
+
+_COMPENSATED_WEIGHT_KEY = re.compile(r"^scale_(\d+)_weight_kg_compensated$")
+
+
+def _compensated_weight_hive(key: str) -> Optional[int]:
+    """The hive index of a ``scale_{n}_weight_kg_compensated`` key, else None.
+
+    The compensated key is what the dashboard charts: it equals the raw weight
+    when no temperature coefficient is configured."""
+    match = _COMPENSATED_WEIGHT_KEY.match(key)
+    return int(match.group(1)) if match else None
 
 
 def execute_measurement_query(cur, columns, where_parts, params, limit, max_points):
