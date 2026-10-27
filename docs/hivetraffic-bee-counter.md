@@ -18,7 +18,9 @@ counts into the `bee_counter_{slot}_*` fields.
 dynamic hive registry (`bee_counter_client.cpp::bleRunCycleRegistry` walks
 `hivecfg::gHives[]` for `beecounter` pairings), exactly like the HiveHeart /
 HiveScale GATT client, so it works on any hive up to `MAX_HIVES`.
-Connection-based reads share the `MAX_GATT_READS_PER_CYCLE` per-cycle budget.
+Counter reads are capped at `MAX_GATT_READS_PER_CYCLE` per wake; with more
+counters paired than that, they take turns across wakes (see
+[multi-hive.md](multi-hive.md#ble-budget)).
 
 ## Firmware updates
 

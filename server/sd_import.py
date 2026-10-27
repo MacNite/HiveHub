@@ -9,10 +9,12 @@ NDJSON/TAR download and import the records via
 
 The same measurement can legitimately appear more than once — the backup file is
 never pruned, the retry cache replays rows, and a beekeeper may upload the same
-download twice. Re-importing must therefore be idempotent. We treat
-``(device_id, measured_at)`` as the natural key for a reading: the firmware only
-produces one sample per wake-up, so two rows for the same device and instant are
-the same observation.
+download twice. Re-importing must therefore be idempotent. A reading's natural
+key is its ``measurement_id``, the stable delivery id the firmware stamps on
+every line (the same key live ingest de-duplicates on). Legacy rows without one
+fall back to ``(device_id, measured_at)``: the firmware only produces one sample
+per wake-up, so two such rows for the same device and instant are the same
+observation.
 
 This module intentionally has **no** third-party imports so the parsing and
 de-duplication logic can be unit-tested without a database or FastAPI.
@@ -115,7 +117,8 @@ def parse_sd_measurements(
     The archive type is decided from the filename extension first, then by
     sniffing the USTAR magic so a mislabelled upload still works.
 
-    De-duplication is handled downstream keyed on ``(device_id, measured_at)``.
+    De-duplication is handled downstream, keyed on ``measurement_id`` (or
+    ``(device_id, measured_at)`` for rows without one).
     """
     is_tar = (
         bool(filename) and filename.lower().endswith(".tar")

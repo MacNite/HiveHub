@@ -467,8 +467,11 @@ bool appendLineToSdFile(const char* path, const String& line, const char* label)
   size_t currentSize = file.size();
   file.close();
 
-  if (written == 0) {
-    Serial.printf("[%s] Write failed for %s\n", label, path);
+  // println adds "\r\n": anything short of the whole line is a failed write
+  // (a full or failing card), not only zero bytes.
+  if (written != line.length() + 2) {
+    Serial.printf("[%s] Write failed for %s (%u of %u bytes)\n", label, path,
+                  (unsigned)written, (unsigned)(line.length() + 2));
     return false;
   }
 

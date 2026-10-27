@@ -299,8 +299,8 @@ See [`api.md`](api.md#post-apiv1appdevicesdevice_idmeasurementsimport) for the
 endpoint contract and the HivePal repository's
 `apps/hivescale/hivescale-integration.md` for the proxy and UI details.
 
-The import is **idempotent**: `(device_id, measured_at)` is treated as the
-natural key, so re-uploading the same file — or a file that overlaps with
+The import is **idempotent**: each line's `measurement_id` is its natural key
+(`(device_id, measured_at)` for old lines without one), so re-uploading the same file — or a file that overlaps with
 readings the device already sent over the network — inserts only the genuinely
 new rows and skips the rest. There is no harm in uploading the full backup every
 time.

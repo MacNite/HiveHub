@@ -370,7 +370,9 @@ bool uploadCachedLines() {
   }
 
   bool encounteredFailure = false;
+  bool writeFailed = false;
   bool hitUploadLimit = false;
+  size_t bytesWritten = 0;
   int total = 0;
   int uploaded = 0;
   int kept = 0;
@@ -406,16 +408,40 @@ bool uploadCachedLines() {
     }
 
     kept++;
+    // println adds "\r\n". Anything short of the full line — not just zero
+    // bytes — means a full or failing card, and the temp file can no longer
+    // stand in for the queue.
     size_t written = out.println(line);
-    if (written == 0) {
-      Serial.println("[CACHE] Failed to write retained line to temp cache");
-      encounteredFailure = true;
+    bytesWritten += written;
+    if (written != line.length() + 2) {
+      Serial.printf("[CACHE] Short write to temp cache (%u of %u bytes)\n",
+                    (unsigned)written, (unsigned)(line.length() + 2));
+      writeFailed = true;
+      break;
     }
   }
 
   in.close();
   out.flush();
   out.close();
+
+  // flush()/close() report nothing, so confirm on the card that everything
+  // the loop wrote actually landed before the temp file may replace the queue.
+  if (!writeFailed && kept > 0 && sdFileSize(TEMP_FILE) != bytesWritten) {
+    Serial.printf("[CACHE] Temp cache holds %u of %u bytes after close\n",
+                  (unsigned)sdFileSize(TEMP_FILE), (unsigned)bytesWritten);
+    writeFailed = true;
+  }
+
+  if (writeFailed) {
+    // Keep the old queue exactly as it was. Lines uploaded during this pass
+    // stay in it and are replayed next time, which is safe: each carries a
+    // stable measurement_id and the server de-duplicates it.
+    SD.remove(TEMP_FILE);
+    Serial.printf("[CACHE] Retry queue left unchanged after a write failure (uploaded %d this pass)\n",
+                  uploaded);
+    return false;
+  }
 
   if (kept > 0) {
     // Never delete the old queue before its replacement is durable. FAT lacks

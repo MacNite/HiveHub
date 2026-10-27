@@ -949,8 +949,11 @@ forced onto every row):
 }
 ```
 
-Import is idempotent: `(device_id, measured_at)` is the natural key, so rows that
-already exist — and rows repeated within the file — are skipped, not duplicated.
+Import is idempotent: each row's `measurement_id` is its natural key — the same
+one live ingest de-duplicates on — with `(device_id, measured_at)` as the
+fallback for rows that carry none. Rows that already exist, and rows repeated
+within the file, are skipped, not duplicated. A `timestamp` without a UTC offset
+is read as UTC.
 
 #### Response
 

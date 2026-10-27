@@ -136,8 +136,10 @@ but nothing was pushed within `BEEHIVE_GATT_NOTIFY_TIMEOUT_S`.
 Each unreachable device burns `2 × BEEHIVE_GATT_CONNECT_TIMEOUT_S` = **40 s per
 wake cycle** (one attempt per address type), and up to
 `MAX_GATT_READS_PER_CYCLE` (4) devices are attempted per cycle — so a fully
-unreachable set can add ~160 s of awake time to every cycle. On battery, unpair
-a device you cannot reach rather than leaving it configured.
+unreachable set can add ~160 s of awake time to every cycle. With more devices
+paired than that, they take turns across wakes, so an unreachable one costs its
+40 s only on its turn and never keeps the others from being read. On battery,
+unpair a device you cannot reach rather than leaving it configured.
 
 ## Payload layout
 

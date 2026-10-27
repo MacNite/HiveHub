@@ -10,7 +10,9 @@ mock-based suites cannot see:
   The pool here has ONE connection, so a nested checkout times out instead of
   passing quietly the way it does with the production pool of ten;
 - the upload routes (SD import, firmware) authenticate before they parse the
-  body, and still accept a real upload once authenticated.
+  body, and still accept a real upload once authenticated;
+- the bulk/SD import de-duplicates on measurement_id like live ingest, and a
+  timestamp without a UTC offset is stored as UTC instead of failing.
 
 Usage:
     DATABASE_URL=postgresql://... PYTHONPATH=server python3 test_backend_db.py
@@ -246,8 +248,93 @@ def test_upload_size_caps():
         check("import body over its cap", r.status_code, 413)
 
 
+def stored(device_id=DEVICE):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT measurement_id, measured_at, scale_1_weight_kg FROM measurements "
+                "WHERE device_id = %s ORDER BY id;",
+                (device_id,),
+            )
+            return cur.fetchall()
+
+
+def m(**fields):
+    return MeasurementIn.model_validate({"device_id": DEVICE, **fields})
+
+
+def test_naive_timestamps_are_utc():
+    print("=== a timestamp without a UTC offset is stored as UTC ===")
+    reset()
+    client = TestClient(main.app)
+    r = client.post("/api/v1/measurements", headers={"x-api-key": "device-key-0123456789abcdef"},
+                    json={"device_id": DEVICE, "timestamp": "2026-06-15T12:00:00", "scale_1_weight_kg": 40.0})
+    check("live ingest of a naive timestamp", r.status_code, 200)
+    check("stored as that instant in UTC", stored()[0][1],
+          datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc))
+    result = bulk_import_measurements(DEVICE, [m(timestamp="2026-06-15T13:00:00", scale_1_weight_kg=41.0)])
+    check("bulk import of a naive timestamp", result["inserted"], 1)
+
+
+def test_import_dedups_on_measurement_id():
+    print("=== the import de-duplicates on measurement_id, like live ingest ===")
+    reset()
+    seed_device()
+    client = TestClient(main.app)
+    # A hub without a valid clock: no timestamp, so live ingest stores server time.
+    r = client.post("/api/v1/measurements", headers={"x-api-key": "device-key-0123456789abcdef"},
+                    json={"device_id": DEVICE, "measurement_id": "boot1-1", "scale_1_weight_kg": 40.0})
+    check("live ingest without a clock", r.status_code, 200)
+
+    # The SD backup carries the same line (still no timestamp) plus newer ones,
+    # two of which share a timestamp but are different readings.
+    sd = [
+        m(measurement_id="boot1-1", scale_1_weight_kg=40.0),
+        m(measurement_id="boot1-2", timestamp="2026-06-01T00:10:00Z", scale_1_weight_kg=40.1,
+          hives=[{"index": 3, "weight_kg": 30.1}]),
+        m(measurement_id="boot1-3", timestamp="2026-06-01T00:10:00Z", scale_1_weight_kg=40.2,
+          hives=[{"index": 3, "weight_kg": 30.2}]),
+        m(measurement_id="boot1-3", timestamp="2026-06-01T00:10:00Z", scale_1_weight_kg=40.2),
+        m(timestamp="2026-06-01T00:20:00Z", scale_1_weight_kg=40.3),
+    ]
+    try:
+        result = bulk_import_measurements(DEVICE, sd)
+    except Exception as exc:
+        result = {"error": type(exc).__name__}
+    check("import with an id already ingested live",
+          (result.get("inserted"), result.get("duplicates")), (3, 2))
+    check("distinct ids sharing a timestamp are both kept",
+          sorted(r[0] for r in stored() if r[0] in ("boot1-2", "boot1-3")), ["boot1-2", "boot1-3"])
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT m.measurement_id, h.weight_kg FROM hive_readings h "
+                "JOIN measurements m ON m.id = h.measurement_id WHERE m.device_id = %s ORDER BY 1;",
+                (DEVICE,),
+            )
+            hives = cur.fetchall()
+    check("hive readings attached to their own row", hives, [("boot1-2", 30.1), ("boot1-3", 30.2)])
+
+    again = bulk_import_measurements(DEVICE, sd)
+    check("re-importing the same file inserts nothing", (again["inserted"], again["duplicates"]), (0, 5))
+    check("row count unchanged", len(stored()), 4)
+
+    # A row the pre-check misses (here: the lookup is skipped) still lands on
+    # the conflict guard instead of aborting the batch.
+    with mock.patch.object(measurements, "split_new_and_duplicate", side_effect=lambda keys, _e: (
+            list(dict.fromkeys(keys)), len(keys) - len(dict.fromkeys(keys)))):
+        try:
+            raced = bulk_import_measurements(DEVICE, sd[1:3])
+        except Exception as exc:
+            raced = {"error": type(exc).__name__}
+    check("conflict on measurement_id counted, not raised",
+          (raced.get("inserted"), raced.get("duplicates")), (0, 2))
+
+
 test_session_revocation()
 test_chart_reads_do_not_nest_connections()
+test_naive_timestamps_are_utc()
+test_import_dedups_on_measurement_id()
 test_uploads_authenticate_before_parsing()
 test_uploads_work_once_authenticated()
 test_upload_size_caps()

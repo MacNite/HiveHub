@@ -130,6 +130,12 @@ MEASUREMENT_INSERT_SQL = """
                     %(hivescale_2_humidity_percent)s, %(hivescale_2_pressure_hpa)s, %(hivescale_2_battery_v)s,
                     %(raw_json)s
                 )"""
+# A row whose measurement_id is already stored for its device is a replay, not
+# a new reading (migration 019's partial unique index). Shared by live ingest
+# and the bulk import so the two de-duplicate on the same key.
+MEASUREMENT_ID_CONFLICT = (
+    " ON CONFLICT (device_id, measurement_id) WHERE measurement_id IS NOT NULL DO NOTHING"
+)
 
 
 def measurement_insert_params(payload: "MeasurementIn", measured_at: datetime) -> dict:
@@ -401,6 +407,9 @@ def resolve_measured_at(
     moment of measurement.
     """
     now = now or datetime.now(timezone.utc)
+    if client_ts is not None and client_ts.tzinfo is None:
+        # MeasurementIn already does this; kept for any other caller.
+        client_ts = client_ts.replace(tzinfo=timezone.utc)
     if client_ts is not None and (
         client_ts.year >= MIN_PLAUSIBLE_YEAR and client_ts <= now + timedelta(days=1)
     ):
@@ -432,9 +441,7 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
             # cached JSON, making response-loss retries safe.
             if payload.measurement_id:
                 cur.execute(
-                    MEASUREMENT_INSERT_SQL
-                    + " ON CONFLICT (device_id, measurement_id) WHERE measurement_id IS NOT NULL "
-                      "DO NOTHING RETURNING id;",
+                    MEASUREMENT_INSERT_SQL + MEASUREMENT_ID_CONFLICT + " RETURNING id;",
                     params,
                 )
             else:
@@ -515,9 +522,10 @@ async def import_measurements(
     data, since the file's ``device_id`` is attacker-controllable and ownership
     is established through the claim-code flow.
 
-    Re-importing the same file is a no-op: ``(device_id, measured_at)`` is treated
-    as the natural key and existing rows are skipped, so duplicates inside the
-    file and rows already stored are both counted and ignored.
+    Re-importing the same file is a no-op: each row's ``measurement_id`` (or
+    ``measured_at`` for legacy rows without one) is its natural key and existing
+    rows are skipped, so duplicates inside the file and rows already stored are
+    both counted and ignored.
     """
     await run_in_threadpool(require_device_role, user_id, device_id, ["owner", "admin"])
     # Parsed only now, once the caller is known: see uploads.py.
@@ -540,65 +548,88 @@ def bulk_import_measurements(
     """
     # Force the path device_id onto every row so a file cannot smuggle readings
     # in under a different device the caller may not own.
-    prepared: list[tuple[datetime, MeasurementIn]] = []
+    #
+    # Each row is de-duplicated on its stable measurement_id when it has one —
+    # the same key live ingest uses — and only falls back to measured_at when it
+    # does not (legacy rows). measured_at alone is not stable: a line recorded
+    # without a valid clock is stamped with the server time on every import, so
+    # a re-import never matched it and then ran into the measurement_id unique
+    # index, aborting the whole import. It also merged distinct readings that
+    # happened to share a timestamp.
+    prepared: list[tuple[tuple, datetime, MeasurementIn]] = []
     for measurement in measurements:
         # Clamp missing *and* implausible timestamps (e.g. the 1970 epoch a
         # no-RTC device writes into its SD cache) to the server clock, matching
         # the live-ingest path. Storing 1970 verbatim would otherwise both
         # mis-date the reading and collapse every untimed row onto one key.
         measured_at = resolve_measured_at(measurement.timestamp, device_id)
-        prepared.append(
-            (measured_at, measurement.model_copy(update={"device_id": device_id}))
-        )
+        row = measurement.model_copy(update={"device_id": device_id})
+        key = ("id", row.measurement_id) if row.measurement_id else ("at", measured_at)
+        prepared.append((key, measured_at, row))
 
-    # Keep the first record seen for each timestamp (file duplicates are identical).
-    record_by_key: dict[datetime, MeasurementIn] = {}
-    for measured_at, measurement in prepared:
-        record_by_key.setdefault(measured_at, measurement)
+    # Keep the first record seen for each key (file duplicates are identical).
+    record_by_key: dict[tuple, tuple[datetime, MeasurementIn]] = {}
+    for key, measured_at, row in prepared:
+        record_by_key.setdefault(key, (measured_at, row))
 
     received = len(measurements)
     inserted = 0
-    duplicates = 0
+    hive_rows: list[tuple[MeasurementIn, int, datetime]] = []
     with get_conn() as conn:
         with conn.cursor() as cur:
-            keys = [measured_at for measured_at, _ in prepared]
             existing: set = set()
-            unique_keys = list(record_by_key.keys())
-            if unique_keys:
+            ids = [k[1] for k in record_by_key if k[0] == "id"]
+            if ids:
+                cur.execute(
+                    "SELECT measurement_id FROM measurements "
+                    "WHERE device_id = %s AND measurement_id = ANY(%s);",
+                    (device_id, ids),
+                )
+                existing |= {("id", r[0]) for r in cur.fetchall()}
+            stamps = [k[1] for k in record_by_key if k[0] == "at"]
+            if stamps:
                 cur.execute(
                     "SELECT measured_at FROM measurements "
                     "WHERE device_id = %s AND measured_at = ANY(%s);",
-                    (device_id, unique_keys),
+                    (device_id, stamps),
                 )
-                existing = {row[0] for row in cur.fetchall()}
+                existing |= {("at", r[0]) for r in cur.fetchall()}
 
-            new_keys, duplicates = split_new_and_duplicate(keys, existing)
-            if new_keys:
-                def _params(key):
-                    p = measurement_insert_params(record_by_key[key], key)
-                    overlay_legacy_hive_columns(p, record_by_key[key])
-                    return p
+            new_keys, duplicates = split_new_and_duplicate(
+                [key for key, _, _ in prepared], existing
+            )
 
-                cur.executemany(
-                    MEASUREMENT_INSERT_SQL + ";",
-                    [_params(key) for key in new_keys],
-                )
-                inserted = len(new_keys)
+            def _params(key):
+                measured_at, row = record_by_key[key]
+                p = measurement_insert_params(row, measured_at)
+                overlay_legacy_hive_columns(p, row)
+                return p
 
-                # Fan any multi-hive payloads into hive_readings. executemany gives
-                # no ids back, so look up the rows we just inserted by their key.
-                hive_keys = [k for k in new_keys if record_by_key[k].hives]
-                if hive_keys:
-                    cur.execute(
-                        "SELECT measured_at, id FROM measurements "
-                        "WHERE device_id = %s AND measured_at = ANY(%s);",
-                        (device_id, hive_keys),
-                    )
-                    id_by_key = {row[0]: row[1] for row in cur.fetchall()}
-                    for key in hive_keys:
-                        mid = id_by_key.get(key)
-                        if mid is not None:
-                            insert_hive_readings(cur, record_by_key[key], mid, key)
+            # Rows with an id insert under the same conflict guard as live
+            # ingest, so one that lands concurrently (or was missed by the
+            # lookup above) is counted as a duplicate instead of failing the
+            # batch. RETURNING gives each new row's id for its hive readings.
+            for batch_keys, sql in (
+                ([k for k in new_keys if k[0] == "id"],
+                 MEASUREMENT_INSERT_SQL + MEASUREMENT_ID_CONFLICT + " RETURNING id;"),
+                ([k for k in new_keys if k[0] == "at"],
+                 MEASUREMENT_INSERT_SQL + " RETURNING id;"),
+            ):
+                if not batch_keys:
+                    continue
+                cur.executemany(sql, [_params(k) for k in batch_keys], returning=True)
+                for key in batch_keys:
+                    result = cur.fetchone()
+                    if result is None:
+                        duplicates += 1
+                    else:
+                        inserted += 1
+                        measured_at, row = record_by_key[key]
+                        if row.hives:
+                            hive_rows.append((row, result[0], measured_at))
+                    cur.nextset()
+            for row, measurement_pk, measured_at in hive_rows:
+                insert_hive_readings(cur, row, measurement_pk, measured_at)
             conn.commit()
 
     return {
