@@ -35,12 +35,14 @@ os.environ.setdefault("RECORDINGS_DIR", "/tmp/hivehub-test-recordings")
 
 import recordings  # noqa: E402
 from recordings import (  # noqa: E402
+    GAIN_AUTO,
     SAMPLE_RATE,
     _path_for,
     _row_to_dict,
+    normalise_gain,
     wav_header,
 )
-from schemas import DeviceCommandIn  # noqa: E402
+from schemas import DeviceCommandIn, RecordingFinalizeIn  # noqa: E402
 
 NOW = datetime(2026, 9, 8, 14, 3, tzinfo=timezone.utc)
 
@@ -63,7 +65,7 @@ def row(**over):
         duration_ds=0, gain_db=0, sample_rate=SAMPLE_RATE,
         num_bytes=32000, crc32=123456, device_bytes=32000, device_crc32=123456,
         dropped_bytes=0, gaps=0, ring_overruns=0, ring_dropped_bytes=0,
-        clipped_pct=0, error=None, requested_by="max",
+        clipped_pct=0, applied_gain_db=None, error=None, requested_by="max",
         command_status="done", command_message=None,
     )
     base.update(over)
@@ -202,6 +204,47 @@ partial = _row_to_dict(row(num_bytes=16000, device_bytes=32000, gaps=2))
 check("seconds reflect what arrived, not what was expected", partial["seconds"] == 0.5)
 check("a partial recording is not complete", partial["complete"] is False)
 
+
+# ── gain: automatic by default (HiveInside#78) ──────────────────────────────
+#
+# "Auto" travels as gain_db = 127 from the API to the START byte, because every
+# hub already passes that byte through untouched. So the sentinel must survive
+# the clamp — clamping it to +40 would silently turn every auto request into a
+# loud fixed gain — and an omitted gain must mean auto, not 0 dB, which is the
+# nearly-inaudible recording the issue was about.
+
+check("an omitted gain means automatic", normalise_gain(None) == GAIN_AUTO == 127)
+check("the auto sentinel passes through the clamp", normalise_gain(127) == 127)
+check("0 dB stays a fixed 0 dB", normalise_gain(0) == 0)
+check("+40 dB is the top of the fixed range", normalise_gain(40) == 40)
+check("a fixed gain above +40 dB is clamped to +40", normalise_gain(60) == 40)
+check("a fixed gain below -20 dB is clamped to -20", normalise_gain(-60) == -20)
+
+auto_rec = _row_to_dict(row(gain_db=127, applied_gain_db=33))
+check("an auto request reads as gain_mode auto", auto_rec["gain_mode"] == "auto")
+check("the applied gain is reported next to the request",
+      auto_rec["applied_gain_db"] == 33 and auto_rec["gain_db"] == 127)
+manual_rec = _row_to_dict(row(gain_db=10, applied_gain_db=None))
+check("a fixed request reads as gain_mode manual", manual_rec["gain_mode"] == "manual")
+check("an unknown applied gain stays None, not a false 0 dB",
+      manual_rec["applied_gain_db"] is None)
+# Rows written before migration 035 carry gain_db 0 and a NULL applied gain.
+old_rec = _row_to_dict(row())
+check("a pre-035 row still converts, as a manual 0 dB recording",
+      old_rec["gain_mode"] == "manual" and old_rec["applied_gain_db"] is None)
+
+# The finish report: an older hub never sends applied_gain_db, and must not be
+# rejected for it — that would lose the whole report, not just the gain.
+check("a finish report without applied_gain_db is accepted (older hub)",
+      RecordingFinalizeIn(ok=True).applied_gain_db is None)
+check("a finish report carries the applied gain",
+      RecordingFinalizeIn(ok=True, applied_gain_db=-3).applied_gain_db == -3)
+for _bad in (41, -21):
+    try:
+        RecordingFinalizeIn(ok=True, applied_gain_db=_bad)
+        check(f"an applied gain of {_bad} dB is rejected", False)
+    except Exception:
+        check(f"an applied gain of {_bad} dB is rejected", True)
 
 # ── the command the request actually queues ─────────────────────────────────
 #

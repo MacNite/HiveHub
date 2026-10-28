@@ -1257,6 +1257,19 @@ const AUDIO_DURATIONS = [
   [60, "60 seconds"],
 ];
 
+// Recording gain. "" is automatic: the request leaves gain_db out and the
+// backend asks the node to choose (HiveInside 0.8.0+, issue HiveInside#78). At
+// a fixed 0 dB a hive is barely audible, so automatic is the default and the
+// fixed levels are there for experiments.
+const AUDIO_GAINS = [
+  ["", "Auto (recommended)"],
+  ["0", "0 dB"],
+  ["10", "+10 dB"],
+  ["20", "+20 dB"],
+  ["30", "+30 dB"],
+  ["40", "+40 dB"],
+];
+
 const hiveAudio = {
   recordingId: null,
   status: "",
@@ -1331,6 +1344,17 @@ function recordingShortWhen(iso) {
 
 // Right-hand column of a list row: length once there is audio, otherwise what
 // the recording is waiting for. Kept short — this sits in a 260px rail.
+// The gain figure: what was asked for and, when the node reported it, what it
+// applied. gain_db 127 is the automatic sentinel; gain_mode says so for us.
+function gainLabel(rec) {
+  const fmt = (db) => `${db > 0 ? "+" : ""}${db} dB`;
+  if (rec.gain_mode === "auto") {
+    return rec.applied_gain_db != null ? `auto \u2192 ${fmt(rec.applied_gain_db)}` : "auto";
+  }
+  const db = rec.applied_gain_db ?? rec.gain_db;
+  return db != null ? fmt(db) : DASH;
+}
+
 function recordingListMeta(rec) {
   if (rec.status === "requested") return "waiting";
   if (rec.status === "streaming") return "recording…";
@@ -1377,6 +1401,9 @@ function hiveAudioPanel(state) {
       ...AUDIO_DURATIONS.map(([s, label]) =>
         el("option", { value: String(s) }, label)));
     durSel.value = "30";
+    const gainSel = el("select", {},
+      ...AUDIO_GAINS.map(([v, label]) => el("option", { value: v }, label)));
+    gainSel.value = "";
 
     const busy = !!hiveAudio.recordingId;
     const recordBtn = el("button", {
@@ -1387,7 +1414,8 @@ function hiveAudioPanel(state) {
         try {
           const hive = Number(hiveSel.value);
           const durationS = Number(durSel.value);
-          const rec = await state.actions.requestRecording({ hive, durationS });
+          const gainDb = gainSel.value === "" ? null : Number(gainSel.value);
+          const rec = await state.actions.requestRecording({ hive, durationS, gainDb });
           hiveAudio.recordingId = rec.id;
           hiveAudio.status = "requested";
           paint();
@@ -1407,6 +1435,10 @@ function hiveAudioPanel(state) {
     side.append(
       el("div", { class: "audio-field" }, el("label", {}, "Hive"), hiveSel),
       el("div", { class: "audio-field" }, el("label", {}, "Length"), durSel),
+      el("div", { class: "audio-field" }, el("label", {}, "Gain"), gainSel,
+        el("p", { class: "note" },
+          "Auto picks one level per clip from its first half second. Nodes "
+          + "older than HiveInside 0.8.0 use +20 dB instead.")),
       recordBtn,
     );
 
@@ -1498,6 +1530,7 @@ function hiveAudioPanel(state) {
                    rec.ring_overruns ? "warn" : null),
         qualFigure("Clipping", `${rec.clipped_pct || 0} %`,
                    rec.clipped_pct >= 5 ? "warn" : null),
+        qualFigure("Gain", gainLabel(rec)),
         qualFigure("Checksum", crcLabel, crcTone === "muted" ? null : crcTone)));
 
       // Only the things the figures cannot say on their own.
@@ -1516,8 +1549,10 @@ function hiveAudioPanel(state) {
           + "Cause: " + causes.join("; ") + "."));
       }
       if (rec.clipped_pct >= 5) {
-        detail.append(el("p", { class: "note" },
-          "Lower the gain for a cleaner recording."));
+        detail.append(el("p", { class: "note" }, rec.gain_mode === "auto"
+          ? "A sound louder than the first half second clipped. Record again, "
+            + "or choose a fixed lower gain."
+          : "Lower the gain for a cleaner recording."));
       }
       if (rec.confirmation === "unknown") {
         detail.append(el("p", { class: "note" },

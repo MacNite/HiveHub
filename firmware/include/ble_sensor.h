@@ -202,6 +202,15 @@ String normalizeMac(const String& raw);
 bool locateByScan(const String& mac, uint8_t& addrTypeOut);
 #endif  // HIVEINSIDE_OTA_ENABLED || HIVEINSIDE_AUDIO_ENABLED
 
+#if HIVEINSIDE_AUDIO_ENABLED
+// The firmware version ("major.minor.patch") a HiveInside at `mac` advertised in
+// its identity record during any scan this boot, or "" when none was heard —
+// a passive scan, a node out of range this cycle, or not a HiveInside at all.
+// The audio relay uses it to decide whether the node's DATA header carries the
+// applied gain (HiveInside 0.8.0+).
+String knownFirmwareVersion(const String& mac);
+#endif  // HIVEINSIDE_AUDIO_ENABLED
+
 }  // namespace blesensor
 
 #endif  // ENABLE_BLE_SCAN

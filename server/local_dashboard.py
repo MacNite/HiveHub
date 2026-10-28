@@ -1302,9 +1302,13 @@ def local_insights_history(
              dependencies=LOCAL_DASHBOARD_ADMIN_DEP)
 def local_request_recording(device_id: str, hive: int = Query(1),
                             duration: float = Query(0.0),
-                            gain_db: int = Query(0),
+                            gain_db: Optional[int] = Query(None),
                             user=Depends(require_dashboard_admin)):
     """Ask a hive for audio. ``duration=0`` is live (the node stops at 60 s).
+
+    Omit ``gain_db`` (or send 127) for automatic gain; otherwise -20..+40 dB.
+    Nodes older than HiveInside 0.8.0 cap a fixed gain at +20 dB and treat
+    automatic as +20 dB.
 
     Returns as soon as the command is queued — the hub deep-sleeps and only
     picks it up on its next wake, so the caller polls the returned recording

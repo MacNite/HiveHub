@@ -54,6 +54,17 @@ CHANNELS = 1
 # command that cannot be honoured.
 MAX_DURATION_S = 60
 
+# Recording gain, in dB, as the request carries it end to end (API -> row ->
+# command payload -> the START byte the hub writes). HiveInside 0.8.0 can choose
+# the gain itself: GAIN_AUTO asks it to, and it then picks ONE gain for the whole
+# clip from its first half second (issue HiveInside#78). A sentinel rather than a
+# separate field, because every hub already passes `gain_db` through to the node
+# unchanged, so auto works on them the moment the backend queues it. A node older
+# than 0.8.0 reads 127 as "+127 dB" and clamps it to +20 — louder, never broken.
+GAIN_AUTO = 127
+GAIN_MIN_DB = -20
+GAIN_MAX_DB = 40   # HiveInside 0.8.0+; older nodes clamp to +20 themselves
+
 # How much of a live recording the player may fetch in one poll. Large enough
 # that a 250 ms poll never falls behind 32 kB/s, small enough to stay a normal
 # JSON-sized response.
@@ -119,7 +130,7 @@ def _row_to_dict(r) -> dict:
     (rec_id, device_id, hive_index, status, requested_at, started_at,
      completed_at, duration_ds, gain_db, sample_rate, num_bytes, crc32,
      device_bytes, device_crc32, dropped_bytes, gaps, ring_overruns,
-     ring_dropped_bytes, clipped_pct, error,
+     ring_dropped_bytes, clipped_pct, applied_gain_db, error,
      requested_by, command_status, command_message) = r
     seconds = (num_bytes or 0) / float(sample_rate * BYTES_PER_SAMPLE) if sample_rate else 0.0
     both_crcs = crc32 is not None and device_crc32 is not None
@@ -151,6 +162,11 @@ def _row_to_dict(r) -> dict:
         "completed_at": completed_at,
         "requested_duration_s": (duration_ds or 0) / 10.0,
         "gain_db": gain_db,
+        # Derived so clients never have to know the sentinel.
+        "gain_mode": "auto" if gain_db == GAIN_AUTO else "manual",
+        # What the node says it applied (HiveInside 0.8.0+, hub 0.33.0+). NULL
+        # when unknown: an older node, an older hub, or no audio arrived.
+        "applied_gain_db": applied_gain_db,
         "sample_rate": sample_rate,
         "bytes": num_bytes,
         "seconds": round(seconds, 2),
@@ -182,7 +198,7 @@ _SELECT = """
            r.started_at, r.completed_at, r.duration_ds, r.gain_db,
            r.sample_rate, r.bytes, r.crc32, r.device_bytes, r.device_crc32,
            r.dropped_bytes, r.gaps, r.ring_overruns, r.ring_dropped_bytes,
-           r.clipped_pct, r.error, r.requested_by,
+           r.clipped_pct, r.applied_gain_db, r.error, r.requested_by,
            c.status, c.result->>'message'
     FROM hive_recordings r
     LEFT JOIN device_commands c ON c.id = r.command_id
@@ -340,9 +356,24 @@ def list_recordings(device_id: str, hive_index: Optional[int] = None,
     return [_row_to_dict(r) for r in rows]
 
 
+def normalise_gain(gain_db: Optional[int]) -> int:
+    """The gain a request is stored and sent with.
+
+    ``None`` (omitted) and ``GAIN_AUTO`` both mean automatic gain. Anything else
+    is a fixed gain, clamped to what a HiveInside 0.8.0 node accepts.
+    """
+    if gain_db is None or int(gain_db) == GAIN_AUTO:
+        return GAIN_AUTO
+    return max(GAIN_MIN_DB, min(GAIN_MAX_DB, int(gain_db)))
+
+
 def request_recording(device_id: str, hive_index: int, duration_s: float,
-                      gain_db: int = 0, requested_by: Optional[str] = None) -> dict:
+                      gain_db: Optional[int] = None,
+                      requested_by: Optional[str] = None) -> dict:
     """Create the row and queue the command that fills it.
+
+    ``gain_db`` omitted (or ``GAIN_AUTO``) asks the node to choose the gain;
+    otherwise it is a fixed gain of -20..+40 dB.
 
     Returns immediately — the hub only picks the command up on its next wake, so
     the caller gets a `requested` recording and polls it. Live listening is a
@@ -357,7 +388,7 @@ def request_recording(device_id: str, hive_index: int, duration_s: float,
             status_code=400,
             detail=f"duration must be between 0 (live) and {MAX_DURATION_S} seconds",
         )
-    gain_db = max(-20, min(20, int(gain_db)))
+    gain_db = normalise_gain(gain_db)
     ensure_device_config(device_id)
 
     duration_ds = int(round(duration_s * 10))
@@ -574,6 +605,7 @@ def finalize_recording(device_id: str, recording_id: int,
                     ring_overruns = %s,
                     ring_dropped_bytes = %s,
                     clipped_pct = %s,
+                    applied_gain_db = %s,
                     device_error = %s,
                     sample_rate = COALESCE(%s, sample_rate),
                     error = COALESCE(%s, error)
@@ -582,8 +614,8 @@ def finalize_recording(device_id: str, recording_id: int,
                 (status, payload.crc32, payload.device_bytes, payload.device_crc32,
                  payload.dropped_bytes, payload.gaps, payload.ring_overruns,
                  payload.ring_dropped_bytes, payload.clipped_pct,
-                 payload.device_error, payload.sample_rate, payload.error,
-                 recording_id, device_id),
+                 payload.applied_gain_db, payload.device_error,
+                 payload.sample_rate, payload.error, recording_id, device_id),
             )
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="recording not found")
@@ -666,8 +698,13 @@ def recording_wav(recording_id: int) -> StreamingResponse:
              dependencies=[Depends(require_api_key)])
 def queue_recording(device_id: str, slot: int = Query(1),
                     duration: float = Query(0.0),
-                    gain_db: int = Query(0)):
-    """Ask a hive for audio. `duration=0` is a live session (node-capped at 60 s)."""
+                    gain_db: Optional[int] = Query(None)):
+    """Ask a hive for audio. `duration=0` is a live session (node-capped at 60 s).
+
+    Omit `gain_db` (or send 127) for automatic gain; otherwise -20..+40 dB.
+    Nodes older than HiveInside 0.8.0 cap a fixed gain at +20 dB and treat
+    automatic as +20 dB.
+    """
     return request_recording(device_id, slot, duration, gain_db)
 
 

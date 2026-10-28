@@ -685,6 +685,15 @@ def init_db():
                 ALTER TABLE hive_recordings
                     ADD COLUMN IF NOT EXISTS ring_dropped_bytes BIGINT NOT NULL DEFAULT 0;
 
+                -- The gain the node actually applied (HiveInside 0.8.0+ reports
+                -- it in every DATA header). `gain_db` keeps meaning "what was
+                -- requested" — 127 there is automatic gain — and this is what
+                -- the audio on disk was recorded with. NULL = unknown: node
+                -- older than 0.8.0, hub older than 0.33.0, or no audio arrived.
+                -- See migrations/035_recording_applied_gain.sql.
+                ALTER TABLE hive_recordings
+                    ADD COLUMN IF NOT EXISTS applied_gain_db INTEGER;
+
                 CREATE INDEX IF NOT EXISTS hive_recordings_device_idx
                     ON hive_recordings (device_id, requested_at DESC);
                 CREATE INDEX IF NOT EXISTS hive_recordings_hive_idx

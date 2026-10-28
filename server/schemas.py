@@ -717,8 +717,9 @@ class DeviceCommandIn(BaseModel):
         "start_inspection",
         "stop_inspection",
         # On-request hive audio (issue #71). Payload carries slot, recording_id,
-        # duration_ds (0 = live/open-ended) and gain_db; the hub derives the
-        # upload URL from its own device id rather than trusting the payload.
+        # duration_ds (0 = live/open-ended) and gain_db (-20..+40 dB, or 127 =
+        # automatic: HiveInside 0.8.0+ picks one gain per clip); the hub derives
+        # the upload URL from its own device id rather than trusting the payload.
         "record_audio",
     ]
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -824,6 +825,9 @@ class RecordingFinalizeIn(BaseModel):
     ring_overruns: int = Field(default=0, ge=0)
     ring_dropped_bytes: int = Field(default=0, ge=0)
     clipped_pct: int = Field(default=0, ge=0, le=100)
+    # HiveInside 0.8.0+ / hub 0.33.0+: the gain the node applied, from the DATA
+    # header. Omitted by older hubs, and by any hub talking to an older node.
+    applied_gain_db: Optional[int] = Field(default=None, ge=-20, le=40)
     elapsed_ms: int = Field(default=0, ge=0)
     sample_rate: Optional[int] = Field(default=None, ge=1, le=192000)
     device_error: Optional[int] = Field(default=None, ge=0, le=255)

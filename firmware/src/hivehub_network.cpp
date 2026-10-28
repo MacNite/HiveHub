@@ -1489,6 +1489,24 @@ static bool relayAudioSession(const String& mac, long recordingId,
   fin["sample_rate"] = stats.sampleRate ? stats.sampleRate : 16000;
   fin["clipped_pct"] = stats.clippedPct;
   fin["device_error"] = stats.error;
+  // The gain the node applied (HiveInside 0.8.0+, the counterpart of an auto
+  // request). Only trustworthy from 0.8.0 on: older nodes send 0 in that byte
+  // whatever gain they applied, which would read as a false "0 dB". The node's
+  // version comes from its identity record in this boot's scan; unknown means
+  // the field is left out and the backend stores NULL, never a guess.
+  {
+#if ENABLE_BLE_SCAN
+    const String nodeFw = blesensor::knownFirmwareVersion(mac);
+#else
+    const String nodeFw;
+#endif
+    if (hiaudio::appliedGainReportable(stats.headerGain, nodeFw.c_str())) {
+      fin["applied_gain_db"] = (int)stats.headerGain.gainDb;
+    } else if (stats.headerGain.seen) {
+      Serial.printf("[HI-AUD] applied gain not reported (node firmware %s)\n",
+                    nodeFw.length() ? nodeFw.c_str() : "unknown this boot");
+    }
+  }
 
   String reason;
   bool ok = sessionOk && !socketLost && !stalled &&
@@ -1819,7 +1837,8 @@ static bool runOneCommand(bool* wasAudio) {
 #if HIVEINSIDE_AUDIO_ENABLED
   else if (type == "record_audio") {
     // payload: { "slot": 1..MAX_HIVES, "recording_id": <int>,
-    //            "duration_ds": <0 = live/open-ended>, "gain_db": <-20..20> }
+    //            "duration_ds": <0 = live/open-ended>,
+    //            "gain_db": <-20..40, or 127 = automatic (HiveInside 0.8.0+)> }
     //
     // No URL in the payload — the upload target is derived from this hub's own
     // device id (see relayAudioSession). Microphone audio must never be posted

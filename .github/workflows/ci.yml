@@ -148,6 +148,16 @@ jobs:
           g++ -std=gnu++17 -Wall -Wextra -Werror -I firmware/include \
               -o /tmp/test_night_mode test-data/test_night_mode.cpp
           /tmp/test_night_mode
+      # HiveInside 0.8.0 reports the gain it applied in DATA header byte 3;
+      # older nodes always send 0 there. Reporting that byte from an old node
+      # would label a +20 dB recording "0 dB", silently, so the parse and the
+      # version gate are pinned here.
+      - name: Build and run HiveInside audio header tests
+        run: |
+          set -e
+          g++ -std=gnu++17 -Wall -Wextra -Werror -I firmware/include \
+              -o /tmp/test_hiveinside_audio_header test-data/test_hiveinside_audio_header.cpp
+          /tmp/test_hiveinside_audio_header
 
   server-tests:
     runs-on: ubuntu-latest
