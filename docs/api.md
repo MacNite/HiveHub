@@ -722,7 +722,7 @@ permanent "relaying…". The attempt counter lives in `device_commands.attempts`
 | `check_ota` / `ota_update` | `{}` | Trigger immediate OTA check/update |
 | `update_hiveinside` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a HiveInside sensor over BLE GATT (normally queued via the `update-hiveinside` helper above) |
 | `update_beecounter` | `{"slot": 1, "url": "...", "version": "...", "crc32": 123}` | Relay a firmware image to a HiveTraffic counter over BLE GATT (normally queued via the `update-beecounter` helper above) |
-| `record_audio` | `{"slot": 1, "recording_id": 42, "duration_ds": 0, "gain_db": 0}` | Record audio from the HiveInside node on hive `slot` and stream it to the backend (normally queued via the `record-audio` helper, which creates the recording row first). `duration_ds` is deciseconds; **0 means live** — the node ends the session at its own 60-second cap. No URL is carried: the hub derives the upload target from its own device id, so microphone audio can never be posted to an address a queued command chose. Firmware 0.30.0+, HiveInside 0.6.0+ — see [Listening to a hive](audio-recording.md) |
+| `record_audio` | `{"slot": 1, "recording_id": 42, "duration_ds": 0, "gain_db": 127}` | Record audio from the HiveInside node on hive `slot` and stream it to the backend. `gain_db` is −20…+40 dB, or `127` for automatic gain (HiveInside 0.8.0+; older nodes apply +20 dB) (normally queued via the `record-audio` helper, which creates the recording row first). `duration_ds` is deciseconds; **0 means live** — the node ends the session at its own 60-second cap. No URL is carried: the hub derives the upload target from its own device id, so microphone audio can never be posted to an address a queued command chose. Firmware 0.30.0+, HiveInside 0.6.0+ — see [Listening to a hive](audio-recording.md) |
 | `start_provisioning` | `{}` | Start the provisioning AP — the remote equivalent of a press on the setup button. The device opens it at the end of the cycle that picked the command up, and closes it again on the portal timeout. From firmware 0.25.5 it **reboots first** when the portal's BLE pairing scan would otherwise be unable to run (the usual case once a sensor is paired), so the AP appears a few seconds later and after one extra boot; the command result is posted before the reboot. Also queued by the dashboard's **Device & admin → Configuration → Start AP mode** button (`POST /api/v1/local/devices/{device_id}/provisioning/start`, admin) |
 
 Response:
@@ -1377,7 +1377,7 @@ to upload.
 |---|---|---|
 | `slot` | `1` | hive index, 1–18 — must be a hive with a HiveInside |
 | `duration` | `0.0` | seconds, 0–60. `0` is open-ended; the node still stops at its own 60-second cap |
-| `gain_db` | `0` | −20…+20, applied on the node before transmission |
+| `gain_db` | omitted = automatic | Omit it (or send `127`) and a HiveInside 0.8.0+ node picks one gain for the whole clip from its first half second (RMS to −20 dBFS, peak below −3 dBFS, 0…+40 dB). Otherwise a fixed −20…+40 dB, applied on the node before transmission. Nodes older than HiveInside 0.8.0 cap at +20 dB and treat automatic as +20 dB. Before server 0.7.0 the default was a fixed 0 dB |
 
 Returns the new recording at status `requested`. **It is not instant**: the hub
 collects commands on its next wake, so expect one reporting interval. Requesting
@@ -1397,7 +1397,8 @@ One recording:
   "id": 42, "device_id": "hive_scale_dual_01", "hive_index": 1,
   "status": "ready", "requested_at": "2026-09-08T14:03:00+00:00",
   "started_at": "...", "completed_at": "...",
-  "requested_duration_s": 30.0, "gain_db": 0, "sample_rate": 16000,
+  "requested_duration_s": 30.0, "gain_db": 127, "gain_mode": "auto",
+  "applied_gain_db": 33, "sample_rate": 16000,
   "bytes": 960000, "seconds": 30.0,
   "dropped_bytes": 0, "gaps": 0, "clipped_pct": 1,
   "complete": true, "crc_ok": true, "confirmation": "verified",
@@ -1410,7 +1411,10 @@ One recording:
 | `status` | `requested` → `streaming` → `ready` / `failed`. A stale sweep resolves rows the hub stopped reporting on, so nothing sits in flight forever |
 | `seconds` | derived from `bytes` — what actually arrived, not what was asked for |
 | `dropped_bytes` / `gaps` / `ring_overruns` | audio the node's ring lost, sequence holes on the air, and notifications the hub's own staging ring refused because the upload was behind. Any one of them means the clip is spliced, and they have three different remedies. Split from a single summed `gaps` in firmware 0.30.2 / server 0.5.2; older hubs report the sum under `gaps` |
-| `clipped_pct` | samples that hit the rail; ≥5 % means lower the gain |
+| `gain_db` | the gain that was **requested**: −20…+40 dB, or `127` for automatic |
+| `gain_mode` | `"auto"` when `gain_db` is `127`, otherwise `"manual"` — so a client never has to know the sentinel |
+| `applied_gain_db` | the gain the node reports it **applied** (from its DATA header), −20…+40 dB. `null` when unknown: node older than HiveInside 0.8.0, hub older than firmware 0.33.0, or no audio arrived. Divide samples by `10^(applied_gain_db/20)` to compare clips made at different gains |
+| `clipped_pct` | samples that hit the rail; ≥5 % means lower the gain (or, with automatic gain, that something louder than the first half second came along) |
 | `crc_ok` | the hub's CRC matched the server's over the bytes on disk |
 | `confirmation` | `verified` / `reported` / `confirmed` / `unknown` — how much of the hub's account of the session actually arrived. See [How sure we are](audio-recording.md#how-sure-we-are-confirmation) |
 | `complete` | ready, corroborated, no gaps, no dropped bytes, no CRC disagreement |
@@ -1469,7 +1473,7 @@ The backend auto-creates and updates the schema on startup.
 | `inspections` | Open and closed inspection windows per device/hive, with the note and end reason |
 | `hive_recordings` | One row per audio session: status, timings, byte count, CRC, quality counters and the `command_id` that carried it. The audio itself is a file under `RECORDINGS_DIR`, not a column |
 
-The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields, the normalized per-hive `hive_readings` table (multi-hive payloads), and the dashboard-auth tables (`dashboard_users`, `dashboard_settings`, `push_subscriptions`); `firmware_releases` gains `target`, `crc32`, `owner_user_id`, and `board`; `device_commands` gains `attempts`. The SQL files in `server/migrations/` (`001_offgrid_telemetry.sql` through `030_recording_ring_overruns.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
+The backend creates the full schema on startup and runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements, so existing deployments upgrade automatically. Columns cover power telemetry (battery/solar), calibration mode, boot count, time source, INMP441 acoustic levels + FFT bands, per-hive HiveTraffic bee-counter counts (BLE/GATT), load-cell temperature-compensation config, per-hive vibration bands, in-hive BLE humidity/pressure, the beehivemonitoring.com `hiveheart_*` / `hivescale_*` fields, the normalized per-hive `hive_readings` table (multi-hive payloads), and the dashboard-auth tables (`dashboard_users`, `dashboard_settings`, `push_subscriptions`); `firmware_releases` gains `target`, `crc32`, `owner_user_id`, and `board`; `device_commands` gains `attempts`. The SQL files in `server/migrations/` (`001_offgrid_telemetry.sql` through `035_recording_applied_gain.sql`) can also be applied manually. All fields remain available in `raw_json` for forward compatibility.
 
 ---
 

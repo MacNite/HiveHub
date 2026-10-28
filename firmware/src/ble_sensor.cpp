@@ -379,6 +379,30 @@ bool recallAddrType(const String& mac, uint8_t& typeOut) {
 }
 #endif  // HIVEINSIDE_GATT_CLIENT
 
+#if HIVEINSIDE_AUDIO_ENABLED
+// ── HiveInside firmware versions learned from any scan this boot ───────────
+// The audio relay has to know whether a node is new enough (HiveInside 0.8.0)
+// for the applied-gain byte in its DATA header to mean anything. The
+// measurement scan learns that from the identity record, and then throws the
+// per-slot accumulators away long before checkCommands() runs a recording.
+// Kept here on the same terms as the address types above: plain RAM, cleared
+// by deep sleep, so a node reflashed between cycles is never answered from a
+// stale entry. A node whose identity was not heard this boot simply has no
+// entry, and the relay then reports no applied gain rather than a guessed one.
+struct FwVersionEntry {
+  String mac;
+  String version;
+};
+std::vector<FwVersionEntry> g_fwVersions;
+
+void rememberFirmwareVersion(const String& mac, const String& version) {
+  for (FwVersionEntry& e : g_fwVersions) {
+    if (e.mac == mac) { e.version = version; return; }
+  }
+  g_fwVersions.push_back(FwVersionEntry{mac, version});
+}
+#endif  // HIVEINSIDE_AUDIO_ENABLED
+
 // ── per-slot accumulator shared with the scan callback ─────────────────────
 struct Accumulator {
   String  mac;                 // normalized target MAC ("" = slot unused)
@@ -497,6 +521,9 @@ class ScanCallbacks : public NimBLEScanCallbacks {
         if (g_slot[s].mac.length() == 0 || g_slot[s].mac != mac) continue;
         if (ident.board.length())      g_slot[s].board = ident.board;
         if (ident.fw_version.length()) g_slot[s].fw_version = ident.fw_version;
+#if HIVEINSIDE_AUDIO_ENABLED
+        if (ident.fw_version.length()) rememberFirmwareVersion(mac, ident.fw_version);
+#endif
       }
     }
 
@@ -938,6 +965,16 @@ bool locateByScan(const String& mac, uint8_t& addrTypeOut) {
 }
 
 #endif  // HIVEINSIDE_OTA_ENABLED || HIVEINSIDE_AUDIO_ENABLED
+
+#if HIVEINSIDE_AUDIO_ENABLED
+String knownFirmwareVersion(const String& mac) {
+  const String m = normalizeMac(mac);
+  for (const FwVersionEntry& e : g_fwVersions) {
+    if (e.mac == m) return e.version;
+  }
+  return String();
+}
+#endif  // HIVEINSIDE_AUDIO_ENABLED
 
 }  // namespace blesensor
 

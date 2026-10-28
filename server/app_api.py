@@ -478,9 +478,15 @@ async def upload_firmware_from_app(
     dependencies=[Depends(require_hivepal_service_key)],
 )
 def app_request_recording(device_id: str, hive: int = Query(1),
-                          duration: float = Query(0.0), gain_db: int = Query(0),
+                          duration: float = Query(0.0),
+                          gain_db: Optional[int] = Query(None),
                           user_id: str = Depends(require_user_id)):
-    """Ask a hive for audio. ``duration=0`` is live; the node stops at 60 s."""
+    """Ask a hive for audio. ``duration=0`` is live; the node stops at 60 s.
+
+    Omit ``gain_db`` (or send 127) for automatic gain; otherwise -20..+40 dB.
+    Nodes older than HiveInside 0.8.0 cap a fixed gain at +20 dB and treat
+    automatic as +20 dB.
+    """
     require_device_role(user_id, device_id, ["owner", "admin"])
     return request_recording(device_id, hive, duration, gain_db,
                              requested_by=user_id)

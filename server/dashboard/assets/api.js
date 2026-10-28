@@ -150,12 +150,14 @@ export const api = {
   // until it leaves "requested" — there is no way to make that instant, and the
   // UI says so rather than looking frozen.
 
-  requestRecording: (deviceId, { hive, durationS = 0, gainDb = 0 } = {}) => {
+  // gainDb null (the default) leaves gain_db out, which the backend reads as
+  // automatic gain; a number is a fixed gain of -20..+40 dB.
+  requestRecording: (deviceId, { hive, durationS = 0, gainDb = null } = {}) => {
     const q = new URLSearchParams({
       hive: String(hive),
       duration: String(durationS),
-      gain_db: String(gainDb),
     });
+    if (gainDb !== null && gainDb !== undefined) q.set("gain_db", String(gainDb));
     return req(`/devices/${encodeURIComponent(deviceId)}/recordings?${q}`, {
       method: "POST",
     });

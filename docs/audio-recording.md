@@ -1,6 +1,7 @@
 # Listening to a hive
 
-*Firmware **0.30.2** · server **0.5.2** · HiveInside **0.6.2** · issue [#71](https://github.com/MacNite/HiveInside/issues/71)*
+*Firmware **0.30.2** · server **0.5.2** · HiveInside **0.6.2** · issue [#71](https://github.com/MacNite/HiveInside/issues/71)
+· automatic gain: firmware **0.33.0** · server **0.7.0** · HiveInside **0.8.0** · issue [HiveInside#78](https://github.com/MacNite/HiveInside/issues/78)*
 
 A HiveInside node can be asked to record from inside
 the hive. The hub relays the audio to the backend as it is captured, and the
@@ -20,6 +21,12 @@ PDM mic → PCM16 → 32 KiB ring → BLE notify → 32 KiB ring → chunked POS
 > sent did arrive. If a recording plays for a moment and then goes silent, check
 > the node's version before anything else. HiveInside's
 > `docs/audio-over-ble.md` has the mechanism.
+
+> **Automatic gain needs HiveInside 0.8.0** for the node to choose the level;
+> an older node treats an automatic request as a fixed **+20 dB** (louder, never
+> refused). The applied gain is only *reported* with **hub firmware 0.33.0**
+> talking to a 0.8.0 node, and with **server 0.7.0** to store it; with anything
+> older the recording simply shows `auto` with no number.
 
 This is the firmware-over-BLE relay in reverse, and deliberately so: the same
 locate-scan, the same NimBLE client shape, the same crash-safe command
@@ -128,7 +135,8 @@ container recreation.
 ## Using it
 
 **Dashboard → Audio → "Hive audio".** Pick a hive, pick a length (10, 30 or 60
-seconds), press **Record**. Then the part that surprises people:
+seconds), leave the gain on **Auto**, press **Record**. Then the part that
+surprises people:
 
 > **It is not instant.** The hub deep-sleeps and only collects commands on its
 > next wake, so a recording arrives within one reporting interval — minutes,
@@ -155,6 +163,25 @@ sounds perfectly continuous.
 Only hives with a HiveInside are offered. Nothing else on a hub has a
 microphone, and a request against a HolyIot or RuuviTag could only fail a wake
 cycle later.
+
+### Gain: automatic by default
+
+At a fixed 0 dB a hive is close to inaudible — the complaint in
+[HiveInside#78](https://github.com/MacNite/HiveInside/issues/78) — and the right
+fixed level depends on the colony, the mounting and the season. So the default
+is **Auto**: the node buffers the first 500 ms of the clip, measures its RMS and
+peak, and picks **one whole-dB gain for the whole clip** — the boost that brings
+the RMS to −20 dBFS, stopping before the peak passes −3 dBFS, never below 0 dB
+and never above +40 dB. It does not change during the clip, so levels inside one
+recording are comparable.
+
+The price is a short lead-in: with Auto the first audio leaves the node about
+0.7 s after the session starts (200 ms of microphone warm-up, which every 0.8.0
+session discards, plus the 500 ms measurement). The hub waits 8 s for audio
+before calling a session stalled, so this is well inside it.
+
+A fixed gain (0 to +40 dB) is still offered for experiments. Nodes older than
+HiveInside 0.8.0 cap any fixed gain at +20 dB.
 
 Shorter is usually better: 10–20 seconds is enough to hear what an insight
 flagged, and costs proportionally less battery and less time with the hive off
@@ -188,9 +215,16 @@ judgement made on a splice is wrong in a way nothing later reveals.
 | `gaps` | Gaps | Sequence jumps on the air, or the node's own `FLAG_GAP` | Packets vanished between the node's radio and the hub's |
 | `ring_overruns` | Hub buffer | The hub's staging ring refused a notification because the upload was behind | The hub's WiFi or backend, not the hive |
 | CRC mismatch | Checksum | What arrived is not what the node computed: corruption in transit | |
-| `clipped_pct` | Clipping | Samples hit the rail; lower the gain | |
+| `clipped_pct` | Clipping | Samples hit the rail. With a fixed gain: lower it. With Auto: something louder than the first half second came along — record again, or pick a fixed lower gain | |
+| `gain_mode` / `applied_gain_db` | Gain | `auto → +33 dB`: automatic, and the node reported what it chose. `auto`: automatic, applied gain unknown (node older than 0.8.0, or hub older than 0.33.0). `+20 dB`: a fixed gain | |
 
 Audio either side of a gap is real. The join is not.
+
+**Comparing clips.** With automatic gain, two recordings of the same hive can be
+made at different levels. `applied_gain_db` is what makes them comparable again:
+divide each clip's samples by `10^(applied_gain_db / 20)` to bring it back to
+0 dB before comparing levels. A clip whose `applied_gain_db` is NULL cannot be
+normalised this way.
 
 `gaps` and `ring_overruns` were **one summed field** up to firmware 0.30.1, which
 made the only question a field report actually asks — was that the radio or the
@@ -237,12 +271,17 @@ Three surfaces, the same functions behind each: master key
 
 | Endpoint | Purpose |
 |---|---|
-| `POST …/devices/{id}/commands/record-audio?slot=&duration=&gain_db=` | queue a session; `duration=0` is live |
+| `POST …/devices/{id}/commands/record-audio?slot=&duration=&gain_db=` | queue a session; `duration=0` is live. Omit `gain_db` (or send `127`) for automatic gain; otherwise −20…+40 dB |
 | `GET …/devices/{id}/recordings` | list, newest first, optionally `?hive=` |
 | `GET …/recordings/{id}` | one recording's metadata and quality flags |
 | `GET …/recordings/{id}/pcm?offset=` | raw PCM from an offset — reads a session while it is still being written; 204 means "nothing new yet". Not used by the dashboard; see "Why this is not live listening" above |
 | `GET …/recordings/{id}/audio.wav` | the finished recording, playable anywhere |
 | `DELETE …/recordings/{id}` | remove the row and its audio |
+
+Each recording carries `gain_db` (the request, `127` = automatic),
+`gain_mode` (`"auto"` / `"manual"`, so clients never need the sentinel) and
+`applied_gain_db` (the gain the node reports it applied, NULL when unknown).
+Before server 0.7.0 an omitted `gain_db` meant a fixed 0 dB.
 
 Requesting audio needs the admin role on the dashboard, or owner/admin in
 HivePal. Listening to what already exists follows the usual per-device roles.

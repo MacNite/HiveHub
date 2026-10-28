@@ -10,7 +10,8 @@
 //
 //   service  8e8b0002-7a1c-4b9e-9a2f-1d6e0b9c1a01
 //   CTRL     8e8b0020-…  write   0x01 START | 0x02 STOP
-//   DATA     8e8b0021-…  notify  seq(2 LE) flags(1) reserved(1) PCM16 LE
+//   DATA     8e8b0021-…  notify  seq(2 LE) flags(1) gain_db(1, int8; 0 before
+//                                HiveInside 0.8.0) PCM16 LE
 //   STATUS   8e8b0023-…  read/notify  30-byte session record
 //
 // Three things about this transport differ from the OTA one and drive the
@@ -42,6 +43,7 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "hiveinside_audio_header.h"
 
 #if HIVEINSIDE_AUDIO_ENABLED
 
@@ -72,14 +74,21 @@ struct Stats {
   uint8_t  error = 0;         // STATUS: >= 0x10 is fatal
   uint8_t  format = 0;        // STATUS: 0 = PCM16 LE mono
   uint8_t  clippedPct = 0;    // STATUS: samples that hit the rail, percent
+  // HiveInside 0.8.0+: the gain the node applied, from DATA header byte 3.
+  // `seen` is false when no DATA packet arrived; `changes` must stay 0. On
+  // older nodes the byte is always 0, so the caller must check the node's
+  // version before reporting it (hiaudio::appliedGainReportable).
+  hiaudio::HeaderGain headerGain;
 };
 
 // Plain-English name for a STATUS error byte.
 const char* errorText(uint8_t error);
 
 // Connect, authenticate and start capture. `durationDs` is deciseconds, 0 for
-// open-ended. `gainDb` is clamped by the node to -20..+20. Returns false with
-// lastError() set; the caller must still call cleanup().
+// open-ended. `gainDb` is -20..+40 dB, or hiaudio::GAIN_AUTO (0x7F) for
+// automatic gain (HiveInside 0.8.0+; older nodes clamp anything above +20 to
+// +20, auto included). Returns false with lastError() set; the caller must
+// still call cleanup().
 //
 // The node arms a 10-second window at connect and cancels it only when START
 // claims the link, so everything between those two points is on a clock: do
