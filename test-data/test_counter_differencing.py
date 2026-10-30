@@ -51,6 +51,45 @@ reboot = difference_bee_counter_intervals(rows(("A", 100, "AA"), ("A", 5, "AA"))
 check("a reboot of the same counter still counts since restart",
       [r.get("bee_counter_1_interval_in") for r in reboot], [None, 5])
 
+
+
+# Audit F07: the same counter rebooted and counted past its old total before
+# the next poll. The totals alone go 100 -> 150 and read as 50; the uptime
+# (10 000 s -> 60 s) says it restarted, so all 150 are since the restart.
+def timed(*readings, minutes=10):
+    return [
+        {"device_id": "A", "measured_at": T0 + timedelta(minutes=minutes * i),
+         "bee_counter_1_ok": True, "bee_counter_1_mac": "AA",
+         "bee_counter_1_total_in": total,
+         **({"bee_counter_1_uptime_s": up} if up is not None else {})}
+        for i, (total, up) in enumerate(readings)
+    ]
+
+
+def intervals(rs):
+    return [r.get("bee_counter_1_interval_in") for r in difference_bee_counter_intervals(rs)]
+
+
+check("uptime going backwards is a restart even when the total grew",
+      intervals(timed((100, 10_000), (150, 60))), [None, 150])
+# Restarted right after the previous poll, which itself was shortly after an
+# earlier restart: uptime 120 -> 500 grows, but 500 s of uptime cannot span the
+# 3600 s between the two samples.
+check("uptime shorter than the gap between samples is a restart",
+      intervals(timed((100, 120), (150, 500), minutes=60)), [None, 150])
+check("an ordinary interval with growing uptime is a plain difference",
+      intervals(timed((100, 10_000), (150, 10_600))), [None, 50])
+check("a little clock disagreement between hub and counter is not a restart",
+      intervals(timed((100, 10_000), (150, 10_540))), [None, 50])
+check("rows without uptime keep the totals-only rule",
+      intervals(timed((100, None), (150, None), (20, None))), [None, 50, 20])
+# Hives 3-18 have no table columns: the uptime arrives through the nested
+# hives[] object and its flat alias.
+from measurements import _flatten_hive_to_measurement  # noqa: E402
+m = {}
+_flatten_hive_to_measurement(m, {"index": 5, "bee_counter": {"ok": True, "uptime_s": 42}})
+check("the nested uptime is aliased for every hive", m.get("bee_counter_5_uptime_s"), 42)
+
 if failures:
     print(f"\n{failures} check(s) failed")
     sys.exit(1)

@@ -373,4 +373,17 @@ rows_mixed = _rows(3, start,
 series_mixed = insights._extract_counter_series(rows_mixed, 1, "out")
 check("device interval preferred over totals", [v for _, v in series_mixed] == [2.0, 2.0, 2.0])
 
+# Audit F07: a restart the totals alone cannot see. The counter rebooted after
+# the 205 reading and counted 230 crossings before the next poll, so its total
+# went UP (205 -> 230). Its uptime fell (6000 -> 300 s): all 230 are since the
+# restart, not 25.
+hidden_out = [200, 205, 230, 236]
+hidden_up = [5400, 6000, 300, 900]
+rows_hidden = _rows(len(hidden_out), start,
+                    bee_counter_1_ok=_const(True),
+                    bee_counter_1_total_out=lambda i: hidden_out[i],
+                    bee_counter_1_uptime_s=lambda i: hidden_up[i])
+vals_hidden = [v for _, v in insights._extract_counter_series(rows_hidden, 1, "out")]
+check("restart with a higher new total is read from uptime", vals_hidden == [5.0, 230.0, 6.0])
+
 print("\nAll checks passed. ✅")

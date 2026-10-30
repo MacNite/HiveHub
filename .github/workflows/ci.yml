@@ -253,6 +253,7 @@ jobs:
         run: |
           diff -u server/insights.py test-data/mock-server/insights.py
           diff -u server/hiveheart_fft.py test-data/mock-server/hiveheart_fft.py
+          diff -u server/counter_intervals.py test-data/mock-server/counter_intervals.py
       # --require-db turns an unreachable database into a failure rather than a
       # skip, so a broken service container can never leave this job green while
       # silently testing nothing.

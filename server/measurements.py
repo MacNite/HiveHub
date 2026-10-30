@@ -17,6 +17,7 @@ from auth import (
     require_user_id,
 )
 from config import MIN_PLAUSIBLE_YEAR, logger
+from counter_intervals import counter_restarted, interval_between
 from db import get_conn
 from devices import ensure_device_config
 from hiveheart_fft import decode_fft
@@ -1224,8 +1225,13 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     * Rows where the channel was unreachable (``bee_counter_{ch}_ok`` falsy) are
       skipped and never advance the baseline, so a dead counter can't inject a
       bogus delta.
-    * A counter reboot or uint32 wrap (``total_now < total_prev``) is attributed
-      as ``total_now`` so the restart from zero is not seen as a huge negative.
+    * A counter reboot or uint32 wrap is attributed as ``total_now`` (the count
+      since the restart). A reboot is recognised by the totals going down, or
+      by the counter's ``uptime_s`` going backwards / being shorter than the
+      time since the previous sample — the latter catches a counter that
+      restarted and counted past its old total before the next poll, which the
+      totals alone read as an ordinary (far too small) interval. See
+      counter_intervals.counter_restarted.
     * Each device is differenced on its own: a result set spanning several hubs
       (the master-key latest endpoint) used to difference hub A's counter against
       hub B's. And a reading from a different counter (``bee_counter_{n}_mac``
@@ -1244,29 +1250,44 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     for ch in range(1, MAX_HIVES + 1):
         ok_key = f"bee_counter_{ch}_ok"
         mac_key = f"bee_counter_{ch}_mac"
+        uptime_key = f"bee_counter_{ch}_uptime_s"
         for direction in ("in", "out"):
             interval_key = f"bee_counter_{ch}_interval_{direction}"
             total_key = f"bee_counter_{ch}_total_{direction}"
-            # Per device: (previous total, the counter it came from).
+            # Per device: (previous total, the counter it came from, its
+            # uptime then, when it was taken).
             prev: dict = {}
             for m in ordered:
                 if not m.get(ok_key):
                     continue
                 cur_total = m.get(total_key)
                 mac = m.get(mac_key)
-                prev_total, prev_mac = prev.get(m.get("device_id"), (None, None))
+                uptime = m.get(uptime_key)
+                prev_total, prev_mac, prev_uptime, prev_at = prev.get(
+                    m.get("device_id"), (None, None, None, None))
                 if mac and prev_mac and mac != prev_mac:
                     prev_total = None  # a different counter: no baseline yet
                 if m.get(interval_key) is None and cur_total is not None:
-                    if prev_total is None:
-                        pass  # no baseline yet — can't attribute the first reading
-                    elif cur_total >= prev_total:
-                        m[interval_key] = cur_total - prev_total
-                    else:
-                        m[interval_key] = cur_total  # reboot / wrap
+                    if prev_total is not None:
+                        # (No baseline yet: the first reading can't be attributed.)
+                        restarted = counter_restarted(
+                            prev_total, cur_total, prev_uptime, uptime,
+                            _elapsed_seconds(prev_at, m["measured_at"]))
+                        m[interval_key] = interval_between(prev_total, cur_total, restarted)
                 if cur_total is not None:
-                    prev[m.get("device_id")] = (cur_total, mac or prev_mac)
+                    prev[m.get("device_id")] = (cur_total, mac or prev_mac, uptime,
+                                                m["measured_at"])
     return measurements
+
+
+def _elapsed_seconds(earlier, later) -> Optional[float]:
+    """Seconds between two measured_at values, or None if either is not a datetime."""
+    if isinstance(earlier, datetime) and isinstance(later, datetime):
+        try:
+            return (later - earlier).total_seconds()
+        except TypeError:  # naive vs aware
+            return None
+    return None
 
 
 HIVE_READINGS_SELECT = """
@@ -1515,6 +1536,8 @@ def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
             c.get("mcps_healthy") if c.get("mcps_healthy") is not None else c.get("gates_healthy"))
         put(f"bee_counter_{n}_num_gates", c.get("num_gates"))
         put(f"bee_counter_{n}_idle_s", c.get("idle_s"))
+        # The counter's uptime: the differencing reads a restart from it.
+        put(f"bee_counter_{n}_uptime_s", c.get("uptime_s"))
 
 
 _HIVEHEART_FLAT_FFT_RE = re.compile(r"^hiveheart_(\d+)_fft$")

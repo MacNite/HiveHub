@@ -132,6 +132,27 @@ inline uint32_t crossingsBetween(uint32_t previous, uint32_t current) {
     return current >= previous ? current - previous : current;
 }
 
+// Did the counter restart between two reads? Its totals live in RAM, so a
+// restart is usually a decrease — but a counter that rebooted and then counted
+// past its old total before the next read shows an increase, and differencing
+// that undercounts by everything it counted before. Its uptime going backwards
+// is the signal that does not depend on how busy the hive was. Same rule as the
+// backend (server/counter_intervals.py), minus its wall-clock check: HiveHub
+// does not keep the time of the previous read across deep sleep.
+inline bool counterRestarted(uint32_t prev_in, uint32_t cur_in,
+                             uint32_t prev_out, uint32_t cur_out,
+                             uint32_t prev_uptime_s, uint32_t cur_uptime_s) {
+    return cur_in < prev_in || cur_out < prev_out || cur_uptime_s < prev_uptime_s;
+}
+
+// Crossings in + out between two reads, given counterRestarted().
+inline uint32_t crossingsSince(uint32_t prev_in, uint32_t cur_in,
+                               uint32_t prev_out, uint32_t cur_out,
+                               bool restarted) {
+    if (restarted) return cur_in + cur_out;
+    return (cur_in - prev_in) + (cur_out - prev_out);
+}
+
 // How long a single grant should run, given how often HiveHub visits this
 // counter. That is the upload interval only while every counter is read every
 // wake; under GATT read rotation it is revisitSeconds() below.

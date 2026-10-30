@@ -347,6 +347,17 @@ static void test_traffic_gate_scales_with_rotation() {
     CHECK(!decide(c, hm(21, 0), t, CYCLE_S, false).suspend);
 }
 
+static void test_restart_is_read_from_uptime() {
+    // The totals went UP (100 -> 150) but the counter rebooted in between:
+    // uptime fell from 10 000 s to 60 s, so all 150 are since the restart.
+    g_case = "a restart with a higher new total is still a restart";
+    CHECK(counterRestarted(100, 150, 40, 45, 10000, 60));
+    CHECK(crossingsSince(100, 150, 40, 45, true) == 195);
+    CHECK(!counterRestarted(100, 150, 40, 45, 10000, 10600));
+    CHECK(crossingsSince(100, 150, 40, 45, false) == 55);
+    CHECK(counterRestarted(100, 3, 40, 45, 0, 0));   // decrease, no uptime
+}
+
 int main() {
     std::printf("night_mode tests\n");
     test_window_wraps_midnight();
@@ -367,6 +378,7 @@ int main() {
     test_grant_follows_the_revisit_interval();
     test_grant_never_runs_past_the_window();
     test_traffic_gate_scales_with_rotation();
+    test_restart_is_read_from_uptime();
 
     if (g_failures == 0) {
         std::printf("all tests passed\n");

@@ -101,6 +101,9 @@ RTC_DATA_ATTR uint32_t rtcTrafficReadCursor = 0;
 // cycles old, and the night-mode traffic gate needs to know how many.
 RTC_DATA_ATTR uint32_t rtcTrafficWake = 0;
 RTC_DATA_ATTR uint32_t rtcCounterTotalsWake[MAX_HIVES] = {0};
+// The counter's uptime at that baseline: a restart is read from it going
+// backwards (nightmode::counterRestarted).
+RTC_DATA_ATTR uint32_t rtcCounterUptime[MAX_HIVES] = {0};
 
 // Parse the HiveTraffic measurement JSON (see 2026-easy-bee-counter
 // docs/ble-mode.md) into a Snapshot. Returns false on malformed JSON or a
@@ -246,9 +249,13 @@ nightmode::Traffic trafficSince(uint8_t h, const Snapshot& snap) {
     if (h >= MAX_HIVES || !snap.present) return t;
     if (rtcCounterTotalsValid & (1UL << h)) {
         t.known = true;
-        t.crossings =
-            nightmode::crossingsBetween(rtcCounterTotalIn[h], snap.total_in) +
-            nightmode::crossingsBetween(rtcCounterTotalOut[h], snap.total_out);
+        const bool restarted = nightmode::counterRestarted(
+            rtcCounterTotalIn[h], snap.total_in,
+            rtcCounterTotalOut[h], snap.total_out,
+            rtcCounterUptime[h], snap.uptime_s);
+        t.crossings = nightmode::crossingsSince(
+            rtcCounterTotalIn[h], snap.total_in,
+            rtcCounterTotalOut[h], snap.total_out, restarted);
         const uint32_t wakes = rtcTrafficWake - rtcCounterTotalsWake[h];
         t.cycles = wakes ? wakes : 1;
     }
@@ -261,6 +268,7 @@ void rememberTotals(uint8_t h, const Snapshot& snap) {
     rtcCounterTotalIn[h]  = snap.total_in;
     rtcCounterTotalOut[h] = snap.total_out;
     rtcCounterTotalsWake[h] = rtcTrafficWake;
+    rtcCounterUptime[h]     = snap.uptime_s;
     rtcCounterTotalsValid |= (1UL << h);
 }
 

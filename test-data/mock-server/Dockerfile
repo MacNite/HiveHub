@@ -8,9 +8,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Keep the production insights engine and its FFT helper together so the mock's
+# Keep the production insights engine and its helpers together so the mock's
 # insights endpoints behave exactly like production.
-COPY hive_data.py hiveheart_fft.py insights.py app.py ./
+COPY hive_data.py hiveheart_fft.py counter_intervals.py insights.py app.py ./
 
 EXPOSE 8000
 

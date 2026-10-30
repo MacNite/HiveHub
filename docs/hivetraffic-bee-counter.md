@@ -379,9 +379,16 @@ the interval charts will show a step, and it is real.
 
 The wire format carries only the **monotonic lifetime totals**. The backend
 derives each interval as `total_now − total_prev` between consecutive readings,
-so a missed connection loses nothing and a counter reboot (totals going
-backwards) is handled cleanly. See `2026-easy-bee-counter/docs/ble-mode.md` for
-the device side and the rationale.
+so a missed connection loses nothing. The counter keeps its totals in RAM, so
+a reboot restarts them from zero; the interval across a reboot is the count
+since the restart. A reboot is recognised by the totals going backwards **or**
+by the counter's `uptime_s` going backwards / being shorter than the time since
+the previous reading — the second rule catches a counter that rebooted and
+counted past its old total before the next poll, which the totals alone would
+read as a small ordinary interval. Crossings between the previous poll and the
+reboot are unrecoverable. The rule lives in `server/counter_intervals.py`; the
+hub's night-mode traffic gate applies the uptime part too. See
+`2026-easy-bee-counter/docs/ble-mode.md` for the device side and the rationale.
 
 This differencing happens in two places, with identical semantics:
 
