@@ -58,6 +58,33 @@ def counter_restarted(
     return False
 
 
+def maintenance_seconds_between(
+    prev_maint_s: Optional[float],
+    cur_maint_s: Optional[float],
+    restarted: bool,
+) -> Optional[float]:
+    """Seconds of USB maintenance inside the interval between two samples.
+
+    ``maint_s`` (HiveTraffic wire revision 6) is the counter's lifetime
+    maintenance time including a session still running; the totals are frozen
+    while a session runs, so an interval in which it moved was partly a bench
+    test, not a hive with that little traffic. It lives in RAM like the totals
+    and restarts from zero with the counter, so across a restart the whole new
+    figure falls in the interval.
+
+    None means "cannot say": the counter is too old to report the field, or the
+    previous sample did not carry it. That is deliberately not 0 — the absence
+    of the field is no evidence that there was no maintenance.
+    """
+    if cur_maint_s is None:
+        return None
+    if restarted:
+        return cur_maint_s
+    if prev_maint_s is None:
+        return None
+    return max(cur_maint_s - prev_maint_s, 0)
+
+
 def interval_between(prev_total, cur_total, restarted: bool):
     """Crossings between two totals: everything since the restart when the
     counter restarted (what happened before it, after the previous sample, is

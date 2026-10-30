@@ -126,9 +126,9 @@ All HiveTraffic devices share one service/characteristic (overridable via
 The characteristic returns a compact JSON document — **totals only**:
 
 ```json
-{ "fw":5, "ver":"0.3.0", "uptime_s":1234, "status":15, "num_gates":24,
+{ "fw":6, "ver":"0.5.1", "uptime_s":1234, "status":15, "num_gates":24,
   "mcps_healthy":3, "total_in":100, "total_out":95, "glitches":2, "idle_s":0,
-  "banks":7 }
+  "banks":7, "maint_s":0 }
 ```
 
 `fw` is the wire-protocol revision; `ver` is the counter's own image version,
@@ -147,21 +147,23 @@ HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects.
 The wire format is totals-only by design: no latch/reset command exists over
 BLE, so a missed connection can never lose counts.
 
-### Four wire revisions, all supported
+### Five wire revisions, all supported
 
 `firmware/include/bee_counter_wire.h` reads `fw` **first** and branches on it.
 Every revision parses, and they produce the same record:
 
-| | `fw:2` | `fw:3` | `fw:4` | `fw:5` |
-| --- | --- | --- | --- | --- |
-| Expander health field | `gates_healthy` | `mcps_healthy` | `mcps_healthy` | `mcps_healthy` |
-| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit | 32-bit | 32-bit |
-| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating | 32-bit, saturating | 32-bit, saturating |
-| `idle_s` + status bit `0x80` | — | — | night-mode countdown | night-mode countdown |
-| `banks` | — | — | — | enabled emitter MOSFETs |
+| | `fw:2` | `fw:3` | `fw:4` | `fw:5` | `fw:6` |
+| --- | --- | --- | --- | --- | --- |
+| Expander health field | `gates_healthy` | `mcps_healthy` | `mcps_healthy` | `mcps_healthy` | `mcps_healthy` |
+| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit | 32-bit | 32-bit | 32-bit |
+| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating | 32-bit, saturating | 32-bit, saturating | 32-bit, saturating |
+| `idle_s` + status bit `0x80` | — | — | night-mode countdown | night-mode countdown | night-mode countdown |
+| `banks` | — | — | — | enabled emitter MOSFETs | enabled emitter MOSFETs |
+| `maint_s` | — | — | — | — | lifetime USB-maintenance seconds |
 
-`fw:4` and `fw:5` are purely additive, so the parser read those documents
-correctly before it knew `idle_s` or `banks` existed — it skips unknown keys.
+`fw:4` to `fw:6` are purely additive, so the parser read those documents
+correctly before it knew `idle_s`, `banks` or `maint_s` existed — it skips
+unknown keys.
 What it could not do is tell a *suspended* or *narrowed* counter from a broken
 one, which is the whole reason for reading them. A counter too old to report
 `banks` is running all three, so the field defaults to `7` rather than `0`;
@@ -281,6 +283,26 @@ across the window is a genuine zero rather than a gap — the same value a quiet
 night produces anyway. What `idle_s` adds is the ability to tell that zero from
 a counter whose emitter FETs have died, which otherwise produces an identical
 row. It is stored on every reading as `hives[].bee_counter.idle_s`.
+
+### Maintenance sessions
+
+A HiveTraffic counter can be put into a USB maintenance session (`maint on` on
+its console) for bench and field testing. During a session the lifetime totals
+are frozen — crossings go to the session's test counters — so the differenced
+interval reads as low or zero traffic although the hive may have been busy.
+`fw:6` counters report `maint_s`, their lifetime seconds in maintenance
+(including a session still running; like the totals it restarts from zero with
+the counter). HiveHub forwards it as `hives[].bee_counter.maint_s`, only for
+`fw:6`+ counters, because on an older one `0` would claim "no maintenance" when
+the truth is "cannot say".
+
+The read APIs difference it like the totals and return, per interval,
+`bee_counter_N_interval_maint_s` / `hives[].bee_counter.interval_maint_s`: the
+seconds of that interval spent in maintenance (`0` = none, absent = cannot say).
+The derived count is kept — it is what was counted outside the session — but
+the dashboard's traffic chart shades those intervals as **Counter maintenance**,
+and the insight engine skips them like night-idle rows (the baseline still
+advances, so the following interval is not inflated).
 
 Counters running firmware older than `fw:4` have no control characteristic. The
 write is skipped and they keep counting; the OTA relay will bring them up to a

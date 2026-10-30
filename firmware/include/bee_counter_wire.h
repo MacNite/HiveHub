@@ -32,6 +32,11 @@
 //            counter too old to report it is running all three banks, which is
 //            why bank_mask defaults to ALL rather than to zero: the absence of
 //            the field means "everything is on", never "nothing is".
+//   fw >= 6  adds "maint_s": lifetime seconds the counter has spent in USB
+//            maintenance sessions, including one still running. The totals are
+//            frozen during a session, so an interval in which maint_s moved
+//            was (partly) a bench test, not a hive with no traffic. Like the
+//            totals it lives in RAM and restarts from zero with the counter.
 //
 // Both must keep working, and not as a courtesy: a counter in the field reports
 // fw:2 until it is updated over the air, and HiveHub's OTA relay has to read
@@ -80,6 +85,11 @@ constexpr uint8_t REV_NIGHT_MODE = 4;
 // write on it rather than writing hopefully: an older counter ignores the
 // opcode and logs it, which would print every cycle forever.
 constexpr uint8_t REV_LED_BANKS = 5;
+
+// First protocol revision carrying "maint_s". Below it the field is not
+// "zero maintenance" but unknown, which is why the hub forwards maint_s only
+// for a counter at this revision or later.
+constexpr uint8_t REV_MAINTENANCE = 6;
 
 // All three emitter banks enabled — the mask a counter runs unless told
 // otherwise, the mask it returns to after any reset, and what this parser
@@ -137,6 +147,9 @@ struct Measurement {
     // counter look like it had been switched off entirely — the exact
     // misreading that would then be written into stored history.
     uint8_t  bank_mask        = BANK_MASK_ALL;
+    // Lifetime seconds in USB maintenance sessions ("maint_s", fw >= 6),
+    // saturating. 0 on an older counter, where it means "cannot say".
+    uint32_t maint_s          = 0;
 };
 
 // How many gates this counter is actually watching, given its bank mask. The
@@ -357,6 +370,8 @@ inline bool parseMeasurement(const char* json, size_t len, Measurement& out) {
             out.glitch_count = value;
         } else if (klen == 6 && memcmp(key, "idle_s", 6) == 0) {
             out.idle_s = value;
+        } else if (klen == 7 && memcmp(key, "maint_s", 7) == 0) {
+            out.maint_s = value;
         } else if (klen == 5 && memcmp(key, "banks", 5) == 0) {
             // Masked to the three banks this hardware has, so a counter on a
             // future four-FET board cannot report a bank HiveHub would then

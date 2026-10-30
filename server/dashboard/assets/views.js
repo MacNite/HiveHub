@@ -526,8 +526,12 @@ function chartCard(title, sub, series, opts = {}) {
     ? el("span", { class: "lg lg-static", title: "Readings taken while the hive was open are not charted" },
         el("span", { class: "swatch swatch-inspection" }), "Inspection")
     : null;
+  const maintLegend = chart.opts.maintenance && chart.opts.maintenance.length
+    ? el("span", { class: "lg lg-static", title: "The counter was in a USB maintenance session: its totals were frozen, so these intervals are a bench test, not hive traffic" },
+        el("span", { class: "swatch swatch-maintenance" }), "Counter maintenance")
+    : null;
   const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item),
-    inspLegend,
+    inspLegend, maintLegend,
     series.length ? chartTools(chart, title, hint) : null);
   activeCharts.push(chart);
   if (series.length) attachChartCursor(chart);
@@ -2171,6 +2175,25 @@ function renderConnectivity(root, state) {
   root.append(node);
 }
 
+// The intervals of one hive's counter that overlapped a USB maintenance session
+// (bee_counter_N_interval_maint_s > 0, derived by the read API from the
+// counter's maint_s), as { start, end } bands: from the previous reading of that
+// counter to the one that reported the maintenance.
+export function counterMaintenanceWindows(measurements, hive) {
+  const okKey = `bee_counter_${hive}_ok`;
+  const maintKey = `bee_counter_${hive}_interval_maint_s`;
+  const rows = (measurements || [])
+    .filter((m) => m && m[okKey])
+    .map((m) => ({ t: new Date(m.measured_at).getTime(), maint: Number(m[maintKey]) }))
+    .filter((r) => Number.isFinite(r.t))
+    .sort((a, b) => a.t - b.t);
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i].maint > 0) out.push({ start: rows[i - 1].t, end: rows[i].t, label: "Counter maintenance" });
+  }
+  return out;
+}
+
 function renderCounter(root, state) {
   const refs = selectedRefs(state);
   const cards = [];
@@ -2184,7 +2207,8 @@ function renderCounter(root, state) {
     const inS = seriesFrom(ref.measurements, `bee_counter_${ref.hive}_interval_in`, `${refLabel(state, ref)} in`, PALETTE[2]);
     const outS = seriesFrom(ref.measurements, `bee_counter_${ref.hive}_interval_out`, `${refLabel(state, ref)} out`, PALETTE[3]);
     if (inS.points.length || outS.points.length) {
-      charts.push(chartCard(`Traffic — ${refLabel(state, ref)}`, "Bees in/out per interval", [inS, outS], { yDigits: 0 }));
+      charts.push(chartCard(`Traffic — ${refLabel(state, ref)}`, "Bees in/out per interval", [inS, outS],
+        { yDigits: 0, maintenance: counterMaintenanceWindows(ref.measurements, ref.hive) }));
     }
   }
   if (!charts.length) {

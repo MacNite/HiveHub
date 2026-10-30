@@ -25,6 +25,10 @@
 // marker on the x-axis at each edge — the stretches where a beekeeper had the
 // hive open and the readings say more about the inspection than the colony.
 //
+// opts.maintenance has the same shape and is drawn the same way in its own
+// colour: the bee-counter intervals that overlapped a USB maintenance session
+// on the counter (its totals were frozen, so the count there is a bench test).
+//
 // When opts.cursorT (epoch millis) is set, draws a vertical guide at that time
 // plus a marker on each series at its nearest point, and stashes the pixel<->
 // time mapping on canvas._xScale so callers can turn a pointer x back into a
@@ -135,7 +139,7 @@ function gapThreshold(points, sendIntervalMs, factor) {
 // puzzling. An open inspection (end == null) runs to the right edge.
 const MIN_BAND_PX = 3;
 
-function drawInspectionBands(ctx, windows, geom) {
+function drawInspectionBands(ctx, windows, geom, colors = {}) {
   const { padL, padT, plotW, plotH, xOf, tMin, tMax } = geom;
   // Clipped to the plot area plus the few pixels of axis the edge ticks reach
   // into, so a band floored at MIN_BAND_PX at the right-hand edge cannot paint
@@ -143,8 +147,8 @@ function drawInspectionBands(ctx, windows, geom) {
   ctx.beginPath();
   ctx.rect(padL, padT, plotW, plotH + 5);
   ctx.clip();
-  const fill = themeColor("--chart-inspection", "rgba(123,63,176,0.10)");
-  const edge = themeColor("--chart-inspection-edge", "rgba(123,63,176,0.55)");
+  const fill = colors.fill || themeColor("--chart-inspection", "rgba(123,63,176,0.10)");
+  const edge = colors.edge || themeColor("--chart-inspection-edge", "rgba(123,63,176,0.55)");
 
   for (const w of windows) {
     const start = w.start;
@@ -284,6 +288,16 @@ export function drawLineChart(canvas, series, opts = {}) {
     ctx.save();
     drawInspectionBands(ctx, opts.inspections, {
       padL, padT, plotW, plotH, xOf, tMin, tMax,
+    });
+    ctx.restore();
+  }
+  if (opts.maintenance && opts.maintenance.length) {
+    ctx.save();
+    drawInspectionBands(ctx, opts.maintenance, {
+      padL, padT, plotW, plotH, xOf, tMin, tMax,
+    }, {
+      fill: themeColor("--chart-maintenance", "rgba(176,112,20,0.12)"),
+      edge: themeColor("--chart-maintenance-edge", "rgba(176,112,20,0.60)"),
     });
     ctx.restore();
   }

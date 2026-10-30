@@ -2,13 +2,16 @@
 // See bee_counter_client.h: the wired I2C BeeCounter path no longer exists.
 
 #include "bee_counter_client.h"
+// The tolerant fw:2..6 document decoder. Pure logic, and outside the feature
+// guard because writeSnapshotToHive() below needs its revision constants in
+// every build.
+#include "bee_counter_wire.h"
 
 #if ENABLE_WIRELESS_BEECOUNTER
 #include <string.h>       // strlcpy for the counter's reported version
 #include <NimBLEDevice.h>
 #include <esp_attr.h>     // RTC_DATA_ATTR
 #include "ble_stack.h"
-#include "bee_counter_wire.h"   // the tolerant fw:2/3/4 document decoder
 #include "gatt_rotation.h"      // fair share of the per-wake read budget
 #include "hive_config.h"
 #include "night_mode.h"
@@ -84,6 +87,9 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap, const char* mac)
     // and "counter too old to say" the same absence in stored history, and the
     // whole point is to tell a deliberately dark bank from a dead FET.
     bc["banks"]            = snap.bank_mask;
+    // Only where the counter can report it: absent means "cannot say", which
+    // the backend must not read as "no maintenance".
+    if (snap.fw_version >= wire::REV_MAINTENANCE) bc["maint_s"] = snap.maint_s;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +140,7 @@ bool parseTrafficJson(const char* json, size_t len, Snapshot& out) {
     out.glitch_count  = m.glitch_count;
     out.idle_s        = m.idle_s;
     out.bank_mask     = m.bank_mask;
+    out.maint_s       = m.maint_s;
     return true;
 }
 
@@ -330,7 +337,7 @@ bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
                     // difference between "old firmware" and "broken link".
                     Serial.printf("[TRAFFIC] %s: fw=%s wire=v%u in=%lu out=%lu "
                                   "uptime=%lus mcps=%u/3 status=0x%02X "
-                                  "banks=0x%02X\n",
+                                  "banks=0x%02X maint=%lus\n",
                                   mac.c_str(),
                                   out.version[0] ? out.version : "?",
                                   (unsigned)out.fw_version,
@@ -339,7 +346,8 @@ bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
                                   (unsigned long)out.uptime_s,
                                   (unsigned)out.mcps_healthy,
                                   out.status_flags,
-                                  (unsigned)out.bank_mask);
+                                  (unsigned)out.bank_mask,
+                                  (unsigned long)out.maint_s);
                 }
             }
         }

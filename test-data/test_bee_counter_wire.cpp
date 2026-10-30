@@ -48,6 +48,15 @@ static Measurement parseOrDie(const char* json) {
 
 // ---------------------------------------------------------------------------
 // The captured documents.
+// Revision 6, exactly as HiveTraffic 0.5.x serializes it
+// (Firmware/include/measurement_json.h): every v5 key unchanged plus
+// "maint_s", here ten minutes of bench testing over the counter's lifetime.
+static const char* kV6 =
+    "{\"fw\":6,\"ver\":\"0.5.1\",\"uptime_s\":7200,\"status\":15,"
+    "\"num_gates\":24,\"mcps_healthy\":3,\"total_in\":410,"
+    "\"total_out\":402,\"glitches\":1,\"idle_s\":0,\"banks\":7,"
+    "\"maint_s\":600}";
+
 // ---------------------------------------------------------------------------
 
 // A counter still on the pre-v3 firmware: "gates_healthy", 16-bit uptime and
@@ -448,6 +457,29 @@ static void test_mismatched_revision_and_field_name() {
   eqi("v2 prefers old", d.mcps_healthy, 3);
 }
 
+static void test_v6_document() {
+  // The maintenance figure is the point of the revision: without it the hub
+  // accepted fw:6 and silently dropped the one field that tells a bench test
+  // from a quiet hive.
+  g_case = "fw:6";
+  std::printf("fw:6 document (maintenance seconds):\n");
+  const Measurement m = parseOrDie(kV6);
+  eqi("protocol_version", m.protocol_version, 6);
+  eqs("version", m.version, "0.5.1");
+  eqi("maint_s", m.maint_s, 600);
+  // Additive: everything v5 carried still decodes.
+  eqi("bank_mask", m.bank_mask, 7);
+  eqi("idle_s", m.idle_s, 0);
+  eqi("total_in", m.total_in, 410);
+  eqi("total_out", m.total_out, 402);
+  check("REV_MAINTENANCE is 6", REV_MAINTENANCE == 6);
+  // Older revisions carry no figure; the parser leaves 0 and the hub omits it.
+  eqi("v5 maint_s", parseOrDie(kV5).maint_s, 0);
+  // Saturated, as the counter reports it once it can count no further.
+  const char* sat = "{\"fw\":6,\"maint_s\":4294967295}";
+  eqi("saturated", parseOrDie(sat).maint_s, 4294967295UL);
+}
+
 int main() {
   test_v2_document();
   test_v3_document();
@@ -455,6 +487,7 @@ int main() {
   test_v4_suspended_document();
   test_v5_document();
   test_v5_narrowed_document();
+  test_v6_document();
   test_older_counters_report_every_bank_on();
   test_phantom_banks_are_masked_off();
   test_bank_constants_match_the_counter();

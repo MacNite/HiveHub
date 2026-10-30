@@ -46,6 +46,10 @@
      what makes a ten-minute inspection findable on a month-wide chart. */
   --chart-inspection: rgba(123, 63, 176, .10);
   --chart-inspection-edge: rgba(123, 63, 176, .55);
+  /* Bee-counter maintenance sessions (USB bench tests on the counter): amber,
+     distinct from the inspection purple, equally weak. */
+  --chart-maintenance: rgba(176, 112, 20, .12);
+  --chart-maintenance-edge: rgba(176, 112, 20, .60);
 
   /* Ordinal ramp for ordered series — the microphone and vibration frequency
      bands, drawn low → high. One hue in monotone lightness steps so the colour
@@ -100,6 +104,8 @@
      invisible on #211f18, and the edge rule needs to clear the gridlines. */
   --chart-inspection: rgba(167, 122, 214, .14);
   --chart-inspection-edge: rgba(167, 122, 214, .60);
+  --chart-maintenance: rgba(226, 168, 80, .16);
+  --chart-maintenance-edge: rgba(226, 168, 80, .65);
   /* Re-stepped, not inverted: still low → high, but dim → bright so the weak
      end clears the dark card instead of disappearing into it. */
   --band-1: #33598a;
@@ -407,6 +413,10 @@ select:disabled { opacity: .7; cursor: not-allowed; }
 .chart-legend .swatch-inspection {
   background: var(--chart-inspection);
   border: 1px solid var(--chart-inspection-edge);
+}
+.chart-legend .swatch-maintenance {
+  background: var(--chart-maintenance);
+  border: 1px solid var(--chart-maintenance-edge);
 }
 
 /* Inspection panel (Device & admin → Configuration → Inspection). One row per

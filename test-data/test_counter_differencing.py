@@ -124,6 +124,45 @@ difference_bee_counter_intervals([wired])
 check("a device-reported (wired) interval is left as it was",
       wired["hives"][0]["bee_counter"]["interval_in"], 7)
 
+
+# Audit F01: a USB maintenance session freezes the totals; the interval it
+# falls in must say so instead of passing for a quiet hive.
+def maint_rows(*readings):
+    return [
+        {"device_id": "A", "measured_at": T0 + timedelta(minutes=10 * i),
+         "bee_counter_1_ok": True, "bee_counter_1_mac": "AA",
+         "bee_counter_1_total_in": total, "bee_counter_1_uptime_s": 10_000 + 600 * i,
+         **({"bee_counter_1_maint_s": maint} if maint is not None else {})}
+        for i, (total, maint) in enumerate(readings)
+    ]
+
+
+mr = difference_bee_counter_intervals(maint_rows((100, 0), (100, 540), (130, 540), (130, None)))
+check("the maintenance interval is marked with its seconds",
+      [r.get("bee_counter_1_interval_maint_s") for r in mr], [None, 540, 0, None])
+check("the count outside the session is still derived",
+      [r.get("bee_counter_1_interval_in") for r in mr], [None, 0, 30, 0])
+legacy = difference_bee_counter_intervals(maint_rows((100, None), (110, None)))
+check("a counter without maint_s is 'cannot say', not 'no maintenance'",
+      "bee_counter_1_interval_maint_s" in legacy[1], False)
+upgraded = difference_bee_counter_intervals(maint_rows((100, None), (110, 0)))
+check("the first v6 reading after an older one is still 'cannot say'",
+      "bee_counter_1_interval_maint_s" in upgraded[1], False)
+# The figure lives in RAM: after a restart all of it is new.
+rb = maint_rows((100, 900), (20, 60))
+rb[1]["bee_counter_1_uptime_s"] = 300
+check("after a restart the whole new figure falls in the interval",
+      difference_bee_counter_intervals(rb)[1].get("bee_counter_1_interval_maint_s"), 60)
+m = {}
+_flatten_hive_to_measurement(m, {"index": 4, "bee_counter": {"ok": True, "maint_s": 77}})
+check("the nested maint_s is aliased for every hive", m.get("bee_counter_4_maint_s"), 77)
+nested = maint_rows((100, 0), (100, 300))
+for r in nested:
+    r["hives"] = [{"index": 1, "bee_counter": {"ok": True}}]
+difference_bee_counter_intervals(nested)
+check("the maintenance seconds reach the nested object too",
+      nested[1]["hives"][0]["bee_counter"].get("interval_maint_s"), 300)
+
 if failures:
     print(f"\n{failures} check(s) failed")
     sys.exit(1)

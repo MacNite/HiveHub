@@ -84,6 +84,13 @@ struct Snapshot {
     uint8_t  bank_mask        = BEECOUNTER_BANK_MASK_ALL;
     // 32-bit as of revision 3, saturating on the device rather than wrapping.
     uint32_t glitch_count     = 0;
+    // Lifetime seconds the counter has spent in USB maintenance sessions
+    // ("maint_s", wire revision 6+), including one still running. The totals
+    // are frozen during a session, so the backend marks an interval in which
+    // this moved as maintenance rather than as a quiet hive. Forwarded only
+    // for a v6+ counter: on an older one 0 would claim "no maintenance" when
+    // the truth is "cannot say".
+    uint32_t maint_s          = 0;
 };
 
 // Per-hive form for the hives[] array: writes a nested "bee_counter" object.

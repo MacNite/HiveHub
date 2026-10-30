@@ -116,7 +116,7 @@ class HiveBeeCounterIn(BaseModel):
     interval_out: Optional[int] = None
     # The diagnostic fields the counter also reports — protocol_version,
     # status_flags, uptime_s, num_gates, mcps_healthy, glitch_count, idle_s,
-    # banks — are deliberately NOT declared. extra="allow" carries them through
+    # banks, maint_s — are deliberately NOT declared. extra="allow" carries them through
     # into hive_readings.raw_json, which is where they belong: nothing charts or
     # alerts on them, so a column each would be dead weight.
     #
@@ -140,6 +140,12 @@ class HiveBeeCounterIn(BaseModel):
     # reading, including the 7 of a counter nobody has narrowed, because a field
     # that appeared only when interesting would make "all banks on" and "counter
     # too old to say" the same absence.
+    #
+    # maint_s (wire revision 6) is the counter's lifetime seconds in USB
+    # maintenance sessions, during which its totals are frozen. The read APIs
+    # difference it into interval_maint_s so an interval that was a bench test
+    # is not read as a quiet hive (see counter_intervals.py). The hub sends it
+    # only for v6+ counters: its absence means "cannot say", not "none".
 
 
 class HiveHeartIn(BaseModel):

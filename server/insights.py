@@ -105,7 +105,7 @@ from typing import Any, Iterable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from counter_intervals import counter_restarted, interval_between
+from counter_intervals import counter_restarted, interval_between, maintenance_seconds_between
 from hiveheart_fft import (
     decode_fft,
     dominant_range,
@@ -957,7 +957,9 @@ def _extract_counter_series(
 
     Rows taken while the counter was idled for the night (``idle_s`` > 0) are
     a deliberately blind period, not zero traffic: they advance the baseline
-    but add no point. A reading from a different counter (``mac`` changed)
+    but add no point. So are intervals that overlapped a USB maintenance
+    session (the counter's ``maint_s`` moved): the totals were frozen and the
+    crossings went to its test counters, so the count is a bench artefact. A reading from a different counter (``mac`` changed)
     restarts the baseline instead of being read as a reboot.
     """
     ok_field = f"bee_counter_{channel}_ok"
@@ -966,6 +968,7 @@ def _extract_counter_series(
     idle_field = f"bee_counter_{channel}_idle_s"
     mac_field = f"bee_counter_{channel}_mac"
     uptime_field = f"bee_counter_{channel}_uptime_s"
+    maint_field = f"bee_counter_{channel}_maint_s"
 
     def _as_float(v: Any) -> Optional[float]:
         if v is None:
@@ -992,16 +995,25 @@ def _extract_counter_series(
     prev_mac: Optional[str] = None
     prev_uptime: Optional[float] = None
     prev_ts: Optional[datetime] = None
+    prev_maint: Optional[float] = None
     for ts, m in rows:
         interval_val = _as_float(m.get(interval_field))
         cur_total = _as_float(m.get(total_field))
         uptime = _as_float(m.get(uptime_field))
+        maint = _as_float(m.get(maint_field))
         mac = m.get(mac_field)
         if mac and prev_mac and mac != prev_mac:
             prev_total = None
+            prev_maint = None
         if mac:
             prev_mac = mac
-        if (_as_float(m.get(idle_field)) or 0) > 0:
+        restarted = counter_restarted(
+            prev_total, cur_total, prev_uptime, uptime,
+            (ts - prev_ts).total_seconds() if prev_ts is not None else None)
+        in_maintenance = (maintenance_seconds_between(prev_maint, maint, restarted) or 0) > 0
+        if maint is not None:
+            prev_maint = maint
+        if (_as_float(m.get(idle_field)) or 0) > 0 or in_maintenance:
             if cur_total is not None:
                 prev_total, prev_uptime, prev_ts = cur_total, uptime, ts
             continue
@@ -1012,9 +1024,6 @@ def _extract_counter_series(
             if prev_total is None:
                 interval_val = None          # no baseline yet — can't attribute
             else:
-                restarted = counter_restarted(
-                    prev_total, cur_total, prev_uptime, uptime,
-                    (ts - prev_ts).total_seconds() if prev_ts is not None else None)
                 interval_val = interval_between(prev_total, cur_total, restarted)
 
         # Advance the differencing baseline on any usable total, regardless of
