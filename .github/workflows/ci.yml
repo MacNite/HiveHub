@@ -243,6 +243,9 @@ jobs:
           # Session revocation, pool-connection nesting (run on a one-connection
           # pool) and auth-before-parse on the upload routes.
           python3 test-data/test_backend_db.py --require-db
+          # Recording lifecycle: the streaming timeout counts from the upload's
+          # start, and a late report overrules a sweep that guessed wrong.
+          python3 test-data/test_recordings_db.py --require-db
 
   # Keep the website/configurator and dashboard scripts at least syntactically
   # sound so a broken script cannot ship unnoticed, and run the portal tests.

@@ -84,16 +84,25 @@ MAX_PCM_SLICE = 256 * 1024
 # is legitimately long. "streaming" waits only for a session that the node caps
 # at 60 s plus its upload, so several minutes of silence there means the hub is
 # gone, not slow.
+#
+# The streaming window is measured from started_at — when the upload actually
+# began — never from requested_at. A request can legitimately wait most of the
+# 45 minutes for the hub to wake, and measuring from the request failed a
+# session the moment it started: `bytes` is only written once the body ends,
+# so a live upload looked like "streaming, no audio, 5 minutes old" to the very
+# first sweep, which the live player's own polling triggers.
 RECORDING_REQUESTED_TIMEOUT_MIN = 45
 RECORDING_STREAMING_TIMEOUT_MIN = 5
 
 # What expire_stale_recordings() writes when the hub never reported. These are
-# guesses, and finalize_from_command_result() lets the hub's own verdict replace
-# them when it turns up late — a hub that could not post its result straight
-# after a session holds it and delivers it on its next cycle.
+# guesses, and both the hub's late command result and a late /finalize replace
+# them when they turn up — a hub that could not post its result straight after
+# a session holds it and delivers it on its next cycle.
 SWEEP_NO_AUDIO_MSG = "the hub started uploading but no audio arrived"
 SWEEP_NEVER_PICKED_UP_MSG = ("the hub never picked this request up \u2014 offline, "
                              "or the command was dropped")
+SWEEP_NO_REPORT_MSG = "the hub did not send its report for this session"
+SWEEP_MESSAGES = (SWEEP_NO_AUDIO_MSG, SWEEP_NEVER_PICKED_UP_MSG, SWEEP_NO_REPORT_MSG)
 
 
 def _path_for(device_id: str, recording_id: int) -> Path:
@@ -227,13 +236,13 @@ def expire_stale_recordings() -> None:
                 UPDATE hive_recordings
                 SET status = 'ready',
                     completed_at = now(),
-                    error = COALESCE(error,
-                        'the hub did not send its report for this session')
+                    error = COALESCE(error, %s)
                 WHERE status = 'streaming'
                   AND bytes > 0
-                  AND requested_at < now() - (%s || ' minutes')::interval;
+                  AND COALESCE(started_at, requested_at)
+                      < now() - (%s || ' minutes')::interval;
                 """,
-                (RECORDING_STREAMING_TIMEOUT_MIN,),
+                (SWEEP_NO_REPORT_MSG, RECORDING_STREAMING_TIMEOUT_MIN),
             )
             cur.execute(
                 """
@@ -243,7 +252,8 @@ def expire_stale_recordings() -> None:
                     error = COALESCE(error, %s)
                 WHERE status = 'streaming'
                   AND bytes = 0
-                  AND requested_at < now() - (%s || ' minutes')::interval;
+                  AND COALESCE(started_at, requested_at)
+                      < now() - (%s || ' minutes')::interval;
                 """,
                 (SWEEP_NO_AUDIO_MSG, RECORDING_STREAMING_TIMEOUT_MIN),
             )
@@ -323,6 +333,28 @@ def finalize_from_command_result(device_id: str, command_id: int,
                 if cur.rowcount:
                     logger.info("recording for command %s: late command result "
                                 "replaced the stale-sweep message", command_id)
+            else:
+                # Late success. The sweep failed this row as "no audio" or
+                # "never picked up", yet the hub says the session worked — and
+                # if audio is on disk the sweep was simply wrong (it ran while
+                # the upload was still in flight, or before the stream closed).
+                # Restore it. With no bytes the sweep's verdict still stands.
+                cur.execute(
+                    """
+                    UPDATE hive_recordings
+                    SET status = 'ready', error = NULL
+                    WHERE command_id = %s AND device_id = %s
+                      AND status = 'failed'
+                      AND bytes > 0
+                      AND error IN (%s, %s);
+                    """,
+                    (command_id, device_id,
+                     SWEEP_NO_AUDIO_MSG, SWEEP_NEVER_PICKED_UP_MSG),
+                )
+                if cur.rowcount:
+                    logger.info("recording for command %s: late successful "
+                                "command result overruled the stale sweep",
+                                command_id)
             conn.commit()
 
 
@@ -590,6 +622,11 @@ def finalize_recording(device_id: str, recording_id: int,
     dashboard would show "recording…" forever.
     """
     status = "ready" if payload.ok else "failed"
+    # A successful report retires a sweep's guess. The sweep may have closed
+    # this row while the session was still running, or just before this POST
+    # landed; its message would otherwise outlive the success that disproves
+    # it. Any other error — a server-side truncation, the hub's own reason —
+    # is a real observation and stays.
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -608,14 +645,16 @@ def finalize_recording(device_id: str, recording_id: int,
                     applied_gain_db = %s,
                     device_error = %s,
                     sample_rate = COALESCE(%s, sample_rate),
-                    error = COALESCE(%s, error)
+                    error = CASE WHEN %s AND error IN (%s, %s, %s) THEN %s
+                                 ELSE COALESCE(%s, error) END
                 WHERE id = %s AND device_id = %s;
                 """,
                 (status, payload.crc32, payload.device_bytes, payload.device_crc32,
                  payload.dropped_bytes, payload.gaps, payload.ring_overruns,
                  payload.ring_dropped_bytes, payload.clipped_pct,
                  payload.applied_gain_db, payload.device_error,
-                 payload.sample_rate, payload.error, recording_id, device_id),
+                 payload.sample_rate, payload.ok, *SWEEP_MESSAGES, payload.error,
+                 payload.error, recording_id, device_id),
             )
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="recording not found")

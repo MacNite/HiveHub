@@ -454,7 +454,9 @@ check("a late failed command result replaces the stale-sweep message",
       len(_late) == 1 and _late[0][1][0] == _reason
       and recordings.SWEEP_NO_AUDIO_MSG in _late[0][1]
       and "status = 'failed'" in _late[0][0])
-check("a late successful command result does not rewrite a failed row",
+# (A late success may restore a row the sweep wrongly failed — that is a status
+# change with the error cleared, covered in test_recordings_db.py.)
+check("a late successful command result never writes its message as the error",
       not any(sql.startswith("UPDATE hive_recordings SET error")
               for sql, _ in _run_late(True, "recorded 1 B")))
 
