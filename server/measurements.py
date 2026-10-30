@@ -486,6 +486,10 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
         )
         mqtt_state["device_id"] = payload.device_id
         mqtt_state["measured_at"] = measured_at
+        # The counter reports lifetime totals only; give the advertised
+        # bee_counter_N_interval_* entities the same derived values the read
+        # APIs return. Before masking, so an inspection blanks them too.
+        attach_publish_intervals(mqtt_state)
         mqtt_state = mask_inspection_readings([mqtt_state])[0]
         mqtt_state.update(mqtt_inspection_state(payload.device_id))
         mqtt_publisher.publish_measurement(
@@ -1331,6 +1335,112 @@ def _elapsed_seconds(earlier, later) -> Optional[float]:
         except TypeError:  # naive vs aware
             return None
     return None
+
+
+# The last successful reading of each of a device's counters strictly before a
+# given time, from hive_readings' (device_id, hive_index, measured_at DESC)
+# index. A week back is plenty: a counter silent for longer than that has no
+# interval worth attributing to one upload.
+COUNTER_BASELINE_SQL = """
+    SELECT DISTINCT ON (hive_index) hive_index, measured_at,
+           bee_counter_total_in, bee_counter_total_out, raw_json
+    FROM hive_readings
+    WHERE device_id = %s AND hive_index = ANY(%s)
+      AND measured_at < %s AND measured_at >= %s
+      AND bee_counter_ok
+    ORDER BY hive_index, measured_at DESC
+"""
+
+# Counters that already have a successful reading AFTER the one being
+# published: an SD-cache line replayed late. Its interval is already contained
+# in the one published for that newer reading, so publishing it as well would
+# count the same bees twice in anything that sums the entity.
+COUNTER_NEWER_SQL = """
+    SELECT DISTINCT hive_index FROM hive_readings
+    WHERE device_id = %s AND hive_index = ANY(%s) AND measured_at > %s
+      AND bee_counter_ok
+"""
+
+
+def publish_intervals(state: dict, baselines: dict[int, dict],
+                      newer: set[int]) -> dict[int, dict]:
+    """Derive the per-interval counts of one just-stored reading for publishing.
+
+    ``state`` is the reading (``device_id``, ``measured_at``, ``hives[]``);
+    ``baselines`` maps hive index -> the previous successful reading of that
+    counter (``measured_at``, ``bee_counter`` dict); ``newer`` the hive indices
+    whose counter already has a later reading. Runs the very differencing the
+    read APIs use (difference_bee_counter_intervals: same reset, MAC and
+    maintenance rules), so MQTT and the API cannot disagree, and keys the
+    baseline on stored history by measured_at rather than on arrival order — a
+    publisher restart, a duplicate upload (never published) or a late replay
+    cannot shift it. Returns hive index -> {interval_in, interval_out,
+    interval_maint_s} for the hives that got a value.
+    """
+    device_id = state.get("device_id")
+    cur = {"device_id": device_id, "measured_at": state.get("measured_at")}
+    rows = [cur]
+    for h in state.get("hives") or []:
+        n = h.get("index")
+        if not isinstance(n, int) or n in newer or n not in baselines:
+            continue
+        bc = h.get("bee_counter") or {}
+        if not bc.get("ok"):
+            continue
+        _flatten_hive_to_measurement(cur, {"index": n, "bee_counter": bc})
+        base = baselines[n]
+        prev = {"device_id": device_id, "measured_at": base["measured_at"]}
+        _flatten_hive_to_measurement(prev, {"index": n, "bee_counter": base["bee_counter"]})
+        rows.append(prev)
+    if len(rows) == 1:
+        return {}
+    difference_bee_counter_intervals(rows)
+    out: dict[int, dict] = {}
+    for n in baselines:
+        vals = {k: cur.get(f"bee_counter_{n}_{k}")
+                for k in ("interval_in", "interval_out", "interval_maint_s")}
+        vals = {k: v for k, v in vals.items() if v is not None}
+        if vals:
+            out[n] = vals
+    return out
+
+
+def attach_publish_intervals(state: dict) -> None:
+    """Fill hives[].bee_counter.interval_* on a just-stored reading (fail-soft).
+
+    Used for the MQTT bridge, whose Home Assistant discovery advertises
+    per-interval entities: the live payload carries lifetime totals only, and
+    the bridge's flattener copies an interval only if one is there.
+    """
+    hives = [h for h in state.get("hives") or []
+             if isinstance(h.get("index"), int) and (h.get("bee_counter") or {}).get("ok")]
+    if not hives:
+        return
+    idx = [h["index"] for h in hives]
+    at = state["measured_at"]
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(COUNTER_BASELINE_SQL,
+                            (state["device_id"], idx, at, at - timedelta(days=7)))
+                baselines = {
+                    r[0]: {"measured_at": r[1],
+                           "bee_counter": {**(_json_obj(r[4]).get("bee_counter") or {}),
+                                           "ok": True, "total_in": r[2], "total_out": r[3]}}
+                    for r in cur.fetchall()
+                }
+                cur.execute(COUNTER_NEWER_SQL, (state["device_id"], idx, at))
+                newer = {r[0] for r in cur.fetchall()}
+    except Exception:
+        logger.exception("Could not derive bee-counter intervals for MQTT (%s)",
+                         state.get("device_id"))
+        return
+    derived = publish_intervals(state, baselines, newer)
+    for h in hives:
+        for k, v in derived.get(h["index"], {}).items():
+            h["bee_counter"].setdefault(k, None)
+            if h["bee_counter"][k] is None:
+                h["bee_counter"][k] = v
 
 
 HIVE_READINGS_SELECT = """

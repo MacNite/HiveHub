@@ -238,6 +238,7 @@ jobs:
           python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hive_tempcomp.py \
                             test-data/test_hiveheart_fft.py \
                             test-data/test_mqtt_ha_discovery.py \
+                            test-data/test_mqtt_counter_intervals.py \
                             test-data/test_relay_ota_gate.py test-data/test_publish.py \
                             test-data/test_channel_links.py \
                             test-data/test_oidc_sso.py

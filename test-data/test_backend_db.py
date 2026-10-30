@@ -441,6 +441,45 @@ def test_daily_weight_extremes_use_every_reading():
                                        params={"start_at": start.isoformat(), "tz": "Mars/Base"}).status_code, 422)
 
 
+def test_mqtt_gets_counter_intervals_from_stored_history():
+    print("=== MQTT intervals are derived from the stored baseline (audit F03) ===")
+    reset()
+    seed_device()
+    client = TestClient(main.app)
+    published = []
+    fake = mock.Mock()
+    fake.is_active.return_value = True
+    fake.publish_measurement.side_effect = lambda dev, state, at, **k: published.append(state)
+
+    def upload(mid, ts, total_in, total_out, uptime):
+        return client.post(
+            "/api/v1/measurements", headers={"x-api-key": "device-key-0123456789abcdef"},
+            json={"device_id": DEVICE, "measurement_id": mid, "timestamp": ts,
+                  "hives": [{"index": 4, "bee_counter": {
+                      "ok": True, "polled": True, "mac": "AA:BB", "total_in": total_in,
+                      "total_out": total_out, "uptime_s": uptime}}]})
+
+    def interval(state):
+        bc = next(h for h in state["hives"] if h["index"] == 4)["bee_counter"]
+        return bc.get("interval_in"), bc.get("interval_out")
+
+    with mock.patch.object(measurements, "mqtt_publisher", fake):
+        check("first upload", upload("b-1", "2026-06-15T12:00:00Z", 100, 200, 10_000).status_code, 200)
+        check("first reading has no baseline", interval(published[-1]), (None, None))
+        check("second upload", upload("b-2", "2026-06-15T12:10:00Z", 110, 205, 10_600).status_code, 200)
+        check("second reading publishes the difference", interval(published[-1]), (10, 5))
+        n = len(published)
+        upload("b-2", "2026-06-15T12:10:00Z", 110, 205, 10_600)
+        check("a duplicate upload is not published again", len(published), n)
+        # An SD-cache line from between the two, replayed late: its span is
+        # already inside the 12:10 interval, so it must not be published twice.
+        upload("b-1b", "2026-06-15T12:05:00Z", 104, 202, 10_300)
+        check("a late replay publishes no interval", interval(published[-1]), (None, None))
+        upload("b-3", "2026-06-15T12:20:00Z", 150, 215, 60)
+        check("a restart with a higher total publishes the count since it",
+              interval(published[-1]), (150, 215))
+
+
 test_session_revocation()
 test_chart_reads_do_not_nest_connections()
 test_daily_weight_extremes_use_every_reading()
@@ -451,6 +490,7 @@ test_import_dedups_on_measurement_id()
 test_uploads_authenticate_before_parsing()
 test_uploads_work_once_authenticated()
 test_upload_size_caps()
+test_mqtt_gets_counter_intervals_from_stored_history()
 reset()
 
 if FAILURES:

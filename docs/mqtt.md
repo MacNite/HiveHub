@@ -78,6 +78,12 @@ device-wide and per-hive sensors:
   solar power & bus voltage, Wi-Fi signal, firmware version.
 - **Per hive:** weight (and a temperature-compensated weight for hives 1–2),
   in-hive temperature & humidity, and bee-counter totals & per-interval counts.
+  The counter reports lifetime totals only; the per-interval counts are derived
+  when a reading is stored, against the previous stored reading of the same
+  counter, with the same rules as the dashboard and the read APIs (see
+  [hivetraffic-bee-counter.md](hivetraffic-bee-counter.md#intervals-are-differenced-server-side)).
+  The first reading of a counter, and an SD-cache line replayed after a newer
+  one, carry no interval.
 
 The per-hive temperature/humidity here is the hive's **resolved** value — the
 one picked from the highest-priority source available for that hive.

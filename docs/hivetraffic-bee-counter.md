@@ -418,7 +418,8 @@ reboot are unrecoverable. The rule lives in `server/counter_intervals.py`; the
 hub's night-mode traffic gate applies the uptime part too. See
 `2026-easy-bee-counter/docs/ble-mode.md` for the device side and the rationale.
 
-This differencing happens in two places, with identical semantics:
+This differencing happens in three places, with identical semantics (the
+restart and maintenance rules are shared in `server/counter_intervals.py`):
 
 * The insight engine (`server/insights.py::_extract_counter_series`), which
   feeds the swarm/foraging detectors and the insight cards.
@@ -429,6 +430,15 @@ This differencing happens in two places, with identical semantics:
   bee-counter panel) would read every BLE row as zero traffic. Only `NULL`
   intervals are filled, so historical rows from the removed wired path — which
   reported a real device interval — are left untouched.
+* The MQTT bridge (`server/measurements.py::attach_publish_intervals`), which
+  gives the Home Assistant `bee_counter_N_interval_in/out` entities a value:
+  each just-stored reading is differenced against the previous *stored*
+  successful reading of the same counter (by `measured_at`, so a skipped
+  rotation turn, a publisher restart or a duplicate upload cannot shift the
+  baseline) through the same `difference_bee_counter_intervals`. An SD-cache
+  line replayed after a newer reading of that counter publishes no interval —
+  its span is already inside the newer one, and publishing both would count the
+  same bees twice in anything that sums the entity.
 
 Because the BLE path reports no per-interval or per-gate detail, those columns
 arrive `NULL` for HiveTraffic readings; the derived interval is authoritative.
