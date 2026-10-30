@@ -64,6 +64,7 @@ int main() {
   for (uint8_t n = 1; n <= 36; n++) {
     for (uint8_t b = 1; b <= 8; b++) {
       int window = (n + b - 1) / b;
+      CHECK(gattrot::wakesPerVisit(n, b) == (uint32_t)window);
       for (uint32_t start = 0; start < n; start++) {
         std::vector<int> r = simulate(n, b, window, start);
         for (int c : r) CHECK(c >= 1);
@@ -76,6 +77,13 @@ int main() {
       CHECK(hi - lo <= 1);
     }
   }
+
+  // ── wakesPerVisit: under budget is every wake; a zero budget is not a
+  //    division by zero ───────────────────────────────────────────────────
+  CHECK(gattrot::wakesPerVisit(0, 4) == 1);
+  CHECK(gattrot::wakesPerVisit(4, 4) == 1);
+  CHECK(gattrot::wakesPerVisit(16, 4) == 4);
+  CHECK(gattrot::wakesPerVisit(5, 0) == 1);
 
   // ── A stale cursor after the registry shrank is wrapped, not trusted ─────
   {

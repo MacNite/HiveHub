@@ -48,4 +48,13 @@ inline uint32_t next(const Plan& p, uint8_t n) {
   return ((uint32_t)p.start + p.count) % n;
 }
 
+// The longest gap, in wakes, between two reads of the same candidate:
+// ceil(n / budget), and 1 while everything fits in one wake. Anything that
+// must last until a sensor's next visit (a night-mode grant) is sized by this,
+// not by one wake.
+inline uint32_t wakesPerVisit(uint8_t n, uint8_t budget) {
+  if (budget == 0 || n <= budget) return 1;
+  return ((uint32_t)n + budget - 1) / budget;
+}
+
 }  // namespace gattrot

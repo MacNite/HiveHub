@@ -96,6 +96,12 @@ namespace {
 // Where the next wake resumes the counter reads. See gatt_rotation.h.
 RTC_DATA_ATTR uint32_t rtcTrafficReadCursor = 0;
 
+// Wakes that ran the counter reads, and the wake each hive's baseline totals
+// came from. Under read rotation a counter's baseline can be several upload
+// cycles old, and the night-mode traffic gate needs to know how many.
+RTC_DATA_ATTR uint32_t rtcTrafficWake = 0;
+RTC_DATA_ATTR uint32_t rtcCounterTotalsWake[MAX_HIVES] = {0};
+
 // Parse the HiveTraffic measurement JSON (see 2026-easy-bee-counter
 // docs/ble-mode.md) into a Snapshot. Returns false on malformed JSON or a
 // document carrying no "fw". Fields absent in the document keep their Snapshot
@@ -199,6 +205,8 @@ bool writeBankMask(NimBLERemoteService* svc, uint8_t mask) {
 struct NightContext {
     nightmode::Config cfg;
     uint16_t          minute = nightmode::MINUTES_PER_DAY;   // "no clock"
+    // Seconds until this counter is visited again: the upload interval times
+    // the read rotation's wakes per visit. Grants are sized by this.
     uint32_t          cycle_s = 600;
     bool              relay_pending = false;
 };
@@ -241,6 +249,8 @@ nightmode::Traffic trafficSince(uint8_t h, const Snapshot& snap) {
         t.crossings =
             nightmode::crossingsBetween(rtcCounterTotalIn[h], snap.total_in) +
             nightmode::crossingsBetween(rtcCounterTotalOut[h], snap.total_out);
+        const uint32_t wakes = rtcTrafficWake - rtcCounterTotalsWake[h];
+        t.cycles = wakes ? wakes : 1;
     }
     return t;
 }
@@ -250,6 +260,7 @@ void rememberTotals(uint8_t h, const Snapshot& snap) {
     if (h >= MAX_HIVES || !snap.present) return;
     rtcCounterTotalIn[h]  = snap.total_in;
     rtcCounterTotalOut[h] = snap.total_out;
+    rtcCounterTotalsWake[h] = rtcTrafficWake;
     rtcCounterTotalsValid |= (1UL << h);
 }
 
@@ -359,7 +370,11 @@ bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
         const nightmode::Decision decision =
             nightmode::decide(night.cfg, night.minute, trafficSince(slot, out),
                               night.cycle_s, night.relay_pending);
-        if (night.cfg.enabled) {
+        // Written while night mode is on, and also once it is off to a counter
+        // that still reports a grant from before: the "keep counting" answer
+        // is worthless if it never reaches the counter that is not counting.
+        if (nightmode::mustWriteIdle(night.cfg.enabled,
+                                     out.present ? out.idle_s : 0)) {
             if (writeIdleGrant(svc, decision.duration_s)) {
                 Serial.printf("[TRAFFIC] %s: night mode %s (%lus) — %s\n",
                               mac.c_str(),
@@ -409,7 +424,6 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
     NightContext night;
     night.cfg           = nightConfig();
     night.minute        = localMinuteOfDay();
-    night.cycle_s       = (uint32_t)(sendIntervalMs / 1000UL);
     night.relay_pending = relayInFlight();
 
     // At most one HiveTraffic counter per hive: the first paired one.
@@ -434,6 +448,19 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
         Serial.printf("[TRAFFIC] %u counters paired, GATT read budget %u: reading %u from #%u this wake\n",
                       (unsigned)n, (unsigned)MAX_GATT_READS_PER_CYCLE, (unsigned)plan.count,
                       (unsigned)plan.start);
+    }
+    rtcTrafficWake++;
+    // A grant has to last until this counter's next visit, which under read
+    // rotation is several upload cycles away, not one.
+    night.cycle_s = nightmode::revisitSeconds(
+        (uint32_t)(sendIntervalMs / 1000UL),
+        gattrot::wakesPerVisit(n, MAX_GATT_READS_PER_CYCLE));
+    if (night.cfg.enabled && !nightmode::grantCoversRevisit(night.cycle_s)) {
+        Serial.printf("[TRAFFIC] night mode: counters are revisited every %lus, "
+                      "longer than the %lus grant cap — they will resume "
+                      "counting between visits\n",
+                      (unsigned long)night.cycle_s,
+                      (unsigned long)nightmode::MAX_GRANT_S);
     }
 
     blestack::acquire();

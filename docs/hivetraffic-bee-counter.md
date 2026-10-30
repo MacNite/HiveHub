@@ -235,12 +235,26 @@ as long as the window lasts:
 Every path that is not certain returns "keep counting": no valid local time, no
 traffic baseline yet, a window whose ends are equal, a relay in flight. The
 worst outcome of a bug here is a counter that counts, which is what it did
-before the feature existed. The grant is deliberately short (two upload cycles,
-capped at an hour on both sides), so a HiveHub that dies mid-night cannot leave
-a counter blind — the deadline simply runs out.
+before the feature existed. The grant is deliberately short (two *visits* of
+that counter, capped at an hour and never past the end of the window), so a
+HiveHub that dies mid-night cannot leave a counter blind — the deadline simply
+runs out.
+
+A visit is one upload cycle while every counter is read on every wake. With more
+counters than `MAX_GATT_READS_PER_CYCLE` (4) the reads rotate, and a counter is
+visited only every `ceil(counters / 4)` cycles; the grant follows that interval.
+When the interval exceeds the one-hour cap (e.g. 16 counters at a 20-minute
+upload interval) a grant cannot reach the next visit, the counter resumes
+counting in between, and the serial log says so.
+
+Turning night mode off is applied on the counter's next visit: a counter that
+still reports `idle_s > 0` is sent `SET_IDLE(0)` even though the feature is now
+off. The setting itself is fetched at the end of an upload cycle, so the visit
+after that is the one that releases it.
 
 The traffic gate is the "not yet" rule: if more bees crossed in the last cycle
-than the threshold, night mode waits. It is evaluated from the totals of the
+than the threshold, night mode waits. For a rotated counter the crossings since
+its last visit are compared against the threshold times the cycles in between. It is evaluated from the totals of the
 *previous* cycle, held in RTC memory across HiveHub's own deep sleep, which for
 a threshold like "fewer than 100 crossings in the last ten minutes" is the
 intended reading. A hive with no baseline yet — first cycle after a reboot — is
