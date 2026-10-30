@@ -42,26 +42,51 @@
   });
 
   // ── Hive registry ────────────────────────────────────────────────────────────
-  // Mirrors the on-device provisioning portal's model (firmware/src/portal.cpp):
-  // each hive owns at most one scale channel (HX711 pin pair, a NAU7802 channel —
-  // main bus or behind a TCA9548A mux — or a wireless beehivemonitoring.com
-  // HiveScale) and at most one in-hive sensor (a wired DS18B20 ROM or one
-  // wireless BLE/GATT pairing). Up to MAX_HIVES (matches firmware's default).
+  // Mirrors the on-device provisioning portal's model (firmware/src/portal.cpp)
+  // and the authoritative lane rule in firmware/include/ble_lanes.h: each hive
+  // owns at most one scale channel (HX711 pin pair, a NAU7802 channel — main bus
+  // or behind a TCA9548A mux — or a wireless beehivemonitoring.com HiveScale)
+  // and up to three in-hive pairings, one per lane:
+  //   beacon  — HolyIot / RuuviTag / HiveInside, OR a wired DS18B20 probe (the
+  //             probe and the beacon are the same in-hive temperature slot);
+  //   counter — a HiveTraffic entrance counter;
+  //   heart   — a HiveHeart.
+  // Up to MAX_HIVES (matches firmware's default).
   var MAX_HIVES = 18;
-  var SENSOR_TYPES = [
+  var BEACON_TYPES = [
     ["holyiot", "HolyIot 25015 — beacon"],
     ["ruuvitag", "RuuviTag — beacon"],
-    ["hiveinside_nrf54", "HiveInside (nRF54LM20A) — beacon"],
-    ["hiveheart", "HiveHeart — GATT (beehivemonitoring.com)"],
-    ["beecounter", "HiveTraffic counter — GATT (any hive)"]
+    ["hiveinside_nrf54", "HiveInside (nRF54LM20A) — beacon"]
   ];
-  // Passively-scanned beacon types (one shared scan window, no GATT connection).
-  // The nRF54 HiveInside advertises continuously, so it joins the beacon set.
-  // (The legacy ESP32-C6 HiveInside GATT prototype was removed from the ecosystem.)
+  // Same mapping as blelanes::laneFor / the portal's laneOf: anything that is
+  // not a scale, counter or heart is a beacon.
+  function laneOf(t) {
+    return t === "hivescale" ? "scale" : (t === "beecounter" ? "counter" : (t === "hiveheart" ? "heart" : "beacon"));
+  }
+  var LANE_LABEL = {
+    beacon: "Beacon sensor",
+    counter: "HiveTraffic counter — GATT",
+    heart: "HiveHeart — GATT (beehivemonitoring.com)"
+  };
+  // Passively-scanned types (one shared scan window): the beacons, plus the
+  // HiveHeart, which the scan locates by MAC before connecting. The nRF54
+  // HiveInside advertises continuously, so it joins the beacon set. (The legacy
+  // ESP32-C6 HiveInside GATT prototype was removed from the ecosystem.)
   var SCAN_TYPES = { holyiot: 1, ruuvitag: 1, hiveinside_nrf54: 1, hiveheart: 1 };
 
   var hiveList = $("#hive-list");
-  var HIVES = []; // {i, n, sk, ds: string|null, bl: {t,m}|null, wm}
+  var HIVES = []; // {i, n, sk, ds: string|null, bl: [{t,m}] (one per lane), wm}
+
+  function pairingIn(h, lane) {
+    for (var i = 0; i < h.bl.length; i++) if (laneOf(h.bl[i].t) === lane) return h.bl[i];
+    return null;
+  }
+  function laneTaken(h, lane) {
+    return (lane === "beacon" && h.ds !== null) || pairingIn(h, lane) !== null;
+  }
+  function anyPairing(pred) {
+    return HIVES.some(function (h) { return h.bl.some(pred); });
+  }
 
   function isC6() { return val("#mcu") === "xiao_esp32c6"; }
 
@@ -124,15 +149,15 @@
     return html;
   }
 
-  function sensorTypeSelectHtml(selected) {
-    return SENSOR_TYPES.map(function (t) {
+  function beaconTypeSelectHtml(selected) {
+    return BEACON_TYPES.map(function (t) {
       return '<option value="' + t[0] + '"' + (t[0] === selected ? " selected" : "") + '>' + t[1] + '</option>';
     }).join("");
   }
 
   function addHive() {
     if (HIVES.length >= MAX_HIVES) { toast("⚠ Max " + MAX_HIVES + " hives"); return; }
-    HIVES.push({ i: nextHiveIndex(), n: "", sk: nextFreeScaleKey(), ds: null, bl: null, wm: "" });
+    HIVES.push({ i: nextHiveIndex(), n: "", sk: nextFreeScaleKey(), ds: null, bl: [], wm: "" });
     renderHives();
     render();
   }
@@ -155,27 +180,43 @@
           '<input type="text" data-hwm placeholder="AA:BB:CC:DD:EE:FF" /></div>'
         : "";
 
-      var sensorHtml;
+      // One row per filled lane, then an add button for each free one.
+      var removeBtn = function (lane) {
+        return '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-hsensor-remove="' + lane + '">✕</button></div>';
+      };
+      var macRow = function (lane, typeHtml) {
+        return '<div class="field row" style="align-items:flex-end;margin-bottom:.3rem" data-lane="' + lane + '">' +
+          typeHtml +
+          '<div class="field" style="margin:0;flex:1"><label>' + (typeHtml ? "MAC address" : LANE_LABEL[lane] + " MAC") + '</label>' +
+            '<input type="text" data-hbm="' + lane + '" placeholder="AA:BB:CC:DD:EE:FF" /></div>' +
+          removeBtn(lane) +
+        '</div>';
+      };
+      var sensorHtml = "";
       if (h.ds !== null) {
-        sensorHtml =
-          '<div class="field row" style="align-items:flex-end">' +
+        sensorHtml +=
+          '<div class="field row" style="align-items:flex-end;margin-bottom:.3rem" data-lane="beacon">' +
             '<div class="field" style="margin:0;flex:1"><label>DS18B20 ROM <span class="hint">— optional, 16 hex chars; blank falls back to probe order</span></label>' +
               '<input type="text" data-hds pattern="[0-9A-Fa-f]{16}" maxlength="16" placeholder="28FF64B2711304A3" /></div>' +
-            '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-hsensor-remove>✕</button></div>' +
+            removeBtn("beacon") +
           '</div>';
-      } else if (h.bl !== null) {
-        sensorHtml =
-          '<div class="field row" style="align-items:flex-end">' +
-            '<div class="field" style="margin:0"><label>Sensor type</label><select data-hbt>' + sensorTypeSelectHtml(h.bl.t) + '</select></div>' +
-            '<div class="field" style="margin:0;flex:1"><label>MAC address</label><input type="text" data-hbm placeholder="AA:BB:CC:DD:EE:FF" /></div>' +
-            '<div style="flex:0 0 auto"><button type="button" class="btn ghost small" data-hsensor-remove>✕</button></div>' +
-          '</div>';
-      } else {
-        sensorHtml =
-          '<p class="muted" style="font-size:.85rem;margin:.2rem 0">No in-hive sensor.</p>' +
-          '<button type="button" class="btn ghost small" data-add-ds style="margin-right:.4rem">➕ Add DS18B20</button>' +
-          '<button type="button" class="btn ghost small" data-add-ble>➕ Add BLE sensor</button>';
       }
+      var beacon = pairingIn(h, "beacon");
+      if (beacon) {
+        sensorHtml += macRow("beacon",
+          '<div class="field" style="margin:0"><label>Beacon type</label><select data-hbt>' + beaconTypeSelectHtml(beacon.t) + '</select></div>');
+      }
+      if (pairingIn(h, "counter")) sensorHtml += macRow("counter", "");
+      if (pairingIn(h, "heart")) sensorHtml += macRow("heart", "");
+      if (!sensorHtml) sensorHtml = '<p class="muted" style="font-size:.85rem;margin:.2rem 0">No in-hive sensor.</p>';
+      var adds = [];
+      if (!laneTaken(h, "beacon")) {
+        adds.push('<button type="button" class="btn ghost small" data-add-ds>➕ DS18B20</button>');
+        adds.push('<button type="button" class="btn ghost small" data-add-lane="beacon">➕ Beacon</button>');
+      }
+      if (!laneTaken(h, "counter")) adds.push('<button type="button" class="btn ghost small" data-add-lane="counter">➕ HiveTraffic counter</button>');
+      if (!laneTaken(h, "heart")) adds.push('<button type="button" class="btn ghost small" data-add-lane="heart">➕ HiveHeart</button>');
+      if (adds.length) sensorHtml += '<div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.3rem">' + adds.join("") + '</div>';
 
       card.innerHTML =
         '<div class="row" style="align-items:flex-end">' +
@@ -209,18 +250,30 @@
         dsInput.addEventListener("input", function () { h.ds = this.value.trim().toUpperCase(); render(); });
       }
       var btSel = $('[data-hbt]', card);
-      if (btSel) btSel.addEventListener("change", function () { h.bl.t = this.value; render(); });
-      var bmInput = $('[data-hbm]', card);
-      if (bmInput) {
-        bmInput.value = (h.bl && h.bl.m) || "";
-        bmInput.addEventListener("input", function () { h.bl.m = this.value.trim(); render(); });
-      }
-      var rmSensor = $('[data-hsensor-remove]', card);
-      if (rmSensor) rmSensor.addEventListener("click", function () { h.ds = null; h.bl = null; renderHives(); render(); });
+      if (btSel) btSel.addEventListener("change", function () { pairingIn(h, "beacon").t = this.value; render(); });
+      card.querySelectorAll("[data-hbm]").forEach(function (input) {
+        var p = pairingIn(h, input.getAttribute("data-hbm"));
+        input.value = (p && p.m) || "";
+        input.addEventListener("input", function () { p.m = this.value.trim(); render(); });
+      });
+      card.querySelectorAll("[data-hsensor-remove]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var lane = btn.getAttribute("data-hsensor-remove");
+          if (lane === "beacon") h.ds = null;
+          h.bl = h.bl.filter(function (p) { return laneOf(p.t) !== lane; });
+          renderHives(); render();
+        });
+      });
       var addDs = $('[data-add-ds]', card);
-      if (addDs) addDs.addEventListener("click", function () { h.ds = ""; h.bl = null; renderHives(); render(); });
-      var addBle = $('[data-add-ble]', card);
-      if (addBle) addBle.addEventListener("click", function () { h.bl = { t: "holyiot", m: "" }; h.ds = null; renderHives(); render(); });
+      if (addDs) addDs.addEventListener("click", function () { h.ds = ""; renderHives(); render(); });
+      card.querySelectorAll("[data-add-lane]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var lane = btn.getAttribute("data-add-lane");
+          var t = lane === "counter" ? "beecounter" : (lane === "heart" ? "hiveheart" : "holyiot");
+          if (!laneTaken(h, lane)) h.bl.push({ t: t, m: "" });
+          renderHives(); render();
+        });
+      });
     });
 
     $("#hive-empty").style.display = HIVES.length ? "none" : "block";
@@ -228,9 +281,7 @@
     $("#add-hive").disabled = full;
     $("#hive-full").style.display = full ? "block" : "none";
 
-    var anyInHiveBle = HIVES.some(function (h) { return h.bl && SCAN_TYPES[h.bl.t]; }) ||
-                        HIVES.some(function (h) { return h.bl && h.bl.t === "beecounter"; }) ||
-                        HIVES.some(function (h) { return h.sk === "ble"; });
+    var anyInHiveBle = HIVES.some(function (h) { return h.bl.length > 0 || h.sk === "ble"; });
     $("#inhive-global").style.display = anyInHiveBle ? "block" : "none";
   }
 
@@ -427,8 +478,14 @@
 
     if (h.ds !== null) o.ds = h.ds || "";
 
+    // Every filled lane, in lane order; a pairing without a MAC is not
+    // emitted (the portal drops it too). The DS18B20 sits in "ds" above and
+    // already excludes a beacon on the same hive.
     o.bl = [];
-    if (h.bl !== null && h.bl.m && h.bl.m.trim()) o.bl.push({ t: h.bl.t, m: h.bl.m.trim() });
+    ["beacon", "counter", "heart"].forEach(function (lane) {
+      var p = pairingIn(h, lane);
+      if (p && p.m && p.m.trim()) o.bl.push({ t: p.t, m: p.m.trim() });
+    });
     if (h.sk === "ble" && h.wm && h.wm.trim()) o.bl.push({ t: "hivescale", m: h.wm.trim() });
 
     return JSON.stringify(o);
@@ -436,12 +493,15 @@
 
   // ── HIVES + the global flags their sensor choices imply ─────────────────────
   function buildHives(p) {
-    var anyBeacon = HIVES.some(function (h) { return h.bl && SCAN_TYPES[h.bl.t]; });
-    var anyBeehive = HIVES.some(function (h) { return (h.bl && h.bl.t === "hiveheart") || h.sk === "ble"; });
-    var anyBeecounter = HIVES.some(function (h) { return h.bl && h.bl.t === "beecounter"; });
+    // Derived from the whole set of pairings, so a hive with a counter AND a
+    // beacon (or a HiveHeart) enables every feature it needs.
+    var anyBeacon = anyPairing(function (b) { return SCAN_TYPES[b.t]; });
+    var anyBeehive = anyPairing(function (b) { return b.t === "hiveheart"; }) ||
+                     HIVES.some(function (h) { return h.sk === "ble"; });
+    var anyBeecounter = anyPairing(function (b) { return b.t === "beecounter"; });
 
     p("// ==============================");
-    p("// HIVES (up to 16 — matches the on-device provisioning portal's registry)");
+    p("// HIVES (up to " + MAX_HIVES + " — matches the on-device provisioning portal's registry)");
     p("// ==============================");
     p("// Each HIVE_i_JSON pre-seeds hive i's scale source and in-hive sensor on");
     p("// FIRST BOOT, in the exact blob shape the portal itself saves to NVS (see");

@@ -852,8 +852,10 @@ void buildMeasurementDoc(JsonDocument& doc) {
     // registry position, matching this loop. A hive emits a bee_counter object
     // only when it actually has a paired HiveTraffic counter — present data
     // when the read succeeded, ok:false when the paired counter was
-    // unreachable this cycle. Hives without a pairing report nothing (there is
-    // no wired path and no implicit hive-1/2 counter anymore).
+    // unreachable this cycle, and ok:false + polled:false when the read
+    // rotation did not get to it this wake (a schedule, not a fault). Hives
+    // without a pairing report nothing (there is no wired path and no implicit
+    // hive-1/2 counter anymore).
     // The paired MAC comes from the registry rather than the snapshot: it is
     // configuration, it is known whether or not the counter answered, and
     // keeping it out of beecnt::Snapshot keeps that MAX_HIVES-sized stack array

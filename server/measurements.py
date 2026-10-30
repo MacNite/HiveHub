@@ -17,6 +17,7 @@ from auth import (
     require_user_id,
 )
 from config import MIN_PLAUSIBLE_YEAR, logger
+from counter_intervals import counter_restarted, interval_between, maintenance_seconds_between
 from db import get_conn
 from devices import ensure_device_config
 from hiveheart_fft import decode_fft
@@ -485,6 +486,10 @@ def create_measurement(payload: MeasurementIn, x_api_key: str = Header(default="
         )
         mqtt_state["device_id"] = payload.device_id
         mqtt_state["measured_at"] = measured_at
+        # The counter reports lifetime totals only; give the advertised
+        # bee_counter_N_interval_* entities the same derived values the read
+        # APIs return. Before masking, so an inspection blanks them too.
+        attach_publish_intervals(mqtt_state)
         mqtt_state = mask_inspection_readings([mqtt_state])[0]
         mqtt_state.update(mqtt_inspection_state(payload.device_id))
         mqtt_publisher.publish_measurement(
@@ -1224,8 +1229,20 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     * Rows where the channel was unreachable (``bee_counter_{ch}_ok`` falsy) are
       skipped and never advance the baseline, so a dead counter can't inject a
       bogus delta.
-    * A counter reboot or uint32 wrap (``total_now < total_prev``) is attributed
-      as ``total_now`` so the restart from zero is not seen as a huge negative.
+    * A counter reboot or uint32 wrap is attributed as ``total_now`` (the count
+      since the restart). A reboot is recognised by the totals going down, or
+      by the counter's ``uptime_s`` going backwards / being shorter than the
+      time since the previous sample — the latter catches a counter that
+      restarted and counted past its old total before the next poll, which the
+      totals alone read as an ordinary (far too small) interval. See
+      counter_intervals.counter_restarted.
+    * An interval in which the counter's ``maint_s`` moved overlapped a USB
+      maintenance session (totals frozen, crossings went to the test
+      counters). The derived count stays — it is what was counted outside the
+      session — and ``bee_counter_{ch}_interval_maint_s`` says how many seconds
+      of the interval were maintenance (0 = none; absent = cannot say, e.g. a
+      counter older than wire revision 6), so charts and insights can tell a
+      bench test from a quiet hive.
     * Each device is differenced on its own: a result set spanning several hubs
       (the master-key latest endpoint) used to difference hub A's counter against
       hub B's. And a reading from a different counter (``bee_counter_{n}_mac``
@@ -1236,6 +1253,12 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     shallow copy by ``measured_at`` only to compute the deltas). Run this *after*
     attach_hive_readings so the flat ``bee_counter_{n}_*`` aliases exist for hives
     3–18 (which have no fixed table columns); otherwise only hives 1–2 are filled.
+
+    The derived counts are computed once, on the flat keys, and then copied into
+    the canonical nested ``hives[].bee_counter.interval_*`` as well, so a client
+    reading either shape of the same response sees the same number. (Only the
+    flat keys used to be filled, and nested consumers got null for every BLE
+    reading.)
     """
     ordered = sorted(
         (m for m in measurements if m.get("measured_at") is not None),
@@ -1244,29 +1267,180 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     for ch in range(1, MAX_HIVES + 1):
         ok_key = f"bee_counter_{ch}_ok"
         mac_key = f"bee_counter_{ch}_mac"
-        for direction in ("in", "out"):
-            interval_key = f"bee_counter_{ch}_interval_{direction}"
-            total_key = f"bee_counter_{ch}_total_{direction}"
-            # Per device: (previous total, the counter it came from).
-            prev: dict = {}
-            for m in ordered:
-                if not m.get(ok_key):
-                    continue
-                cur_total = m.get(total_key)
-                mac = m.get(mac_key)
-                prev_total, prev_mac = prev.get(m.get("device_id"), (None, None))
-                if mac and prev_mac and mac != prev_mac:
-                    prev_total = None  # a different counter: no baseline yet
-                if m.get(interval_key) is None and cur_total is not None:
-                    if prev_total is None:
-                        pass  # no baseline yet — can't attribute the first reading
-                    elif cur_total >= prev_total:
-                        m[interval_key] = cur_total - prev_total
-                    else:
-                        m[interval_key] = cur_total  # reboot / wrap
-                if cur_total is not None:
-                    prev[m.get("device_id")] = (cur_total, mac or prev_mac)
+        uptime_key = f"bee_counter_{ch}_uptime_s"
+        maint_key = f"bee_counter_{ch}_maint_s"
+        total_keys = {d: f"bee_counter_{ch}_total_{d}" for d in ("in", "out")}
+        interval_keys = {d: f"bee_counter_{ch}_interval_{d}" for d in ("in", "out")}
+        # Per device: the previous sample of this channel's counter.
+        prev: dict = {}
+        for m in ordered:
+            if not m.get(ok_key):
+                continue
+            totals = {d: m.get(k) for d, k in total_keys.items()}
+            mac = m.get(mac_key)
+            uptime = m.get(uptime_key)
+            p = prev.get(m.get("device_id"))
+            if p is not None and mac and p["mac"] and mac != p["mac"]:
+                p = None  # a different counter: no baseline yet
+            if p is not None:
+                # One verdict for the counter, from either direction: a reset
+                # restarts both totals at once.
+                elapsed = _elapsed_seconds(p["at"], m["measured_at"])
+                restarted = any(
+                    counter_restarted(p["totals"][d], totals[d], p["uptime"], uptime, elapsed)
+                    for d in totals
+                )
+                for d, key in interval_keys.items():
+                    # (No baseline in this direction: can't attribute it.)
+                    if (m.get(key) is None and totals[d] is not None
+                            and p["totals"][d] is not None):
+                        m[key] = interval_between(p["totals"][d], totals[d], restarted)
+                maint = maintenance_seconds_between(p["maint"], m.get(maint_key), restarted)
+                if maint is not None:
+                    m[f"bee_counter_{ch}_interval_maint_s"] = maint
+            if any(t is not None for t in totals.values()):
+                prev[m.get("device_id")] = {
+                    "totals": {d: totals[d] if totals[d] is not None
+                               else (p["totals"][d] if p else None) for d in totals},
+                    "mac": mac or (p["mac"] if p else None),
+                    "uptime": uptime, "maint": m.get(maint_key), "at": m["measured_at"],
+                }
+    for m in measurements:
+        _copy_intervals_to_nested(m)
     return measurements
+
+
+def _copy_intervals_to_nested(m: dict) -> None:
+    """Mirror the flat ``bee_counter_{n}_interval_*`` into ``hives[n].bee_counter``.
+
+    Only fills a nested value that is missing: a device-reported interval (wired
+    history) is already in both places and stays as it was.
+    """
+    for h in m.get("hives") or []:
+        n = h.get("index")
+        bc = h.get("bee_counter")
+        if not n or not isinstance(bc, dict):
+            continue
+        for key in ("interval_in", "interval_out", "interval_maint_s"):
+            flat = m.get(f"bee_counter_{n}_{key}")
+            if bc.get(key) is None and flat is not None:
+                bc[key] = flat
+
+
+def _elapsed_seconds(earlier, later) -> Optional[float]:
+    """Seconds between two measured_at values, or None if either is not a datetime."""
+    if isinstance(earlier, datetime) and isinstance(later, datetime):
+        try:
+            return (later - earlier).total_seconds()
+        except TypeError:  # naive vs aware
+            return None
+    return None
+
+
+# The last successful reading of each of a device's counters strictly before a
+# given time, from hive_readings' (device_id, hive_index, measured_at DESC)
+# index. A week back is plenty: a counter silent for longer than that has no
+# interval worth attributing to one upload.
+COUNTER_BASELINE_SQL = """
+    SELECT DISTINCT ON (hive_index) hive_index, measured_at,
+           bee_counter_total_in, bee_counter_total_out, raw_json
+    FROM hive_readings
+    WHERE device_id = %s AND hive_index = ANY(%s)
+      AND measured_at < %s AND measured_at >= %s
+      AND bee_counter_ok
+    ORDER BY hive_index, measured_at DESC
+"""
+
+# Counters that already have a successful reading AFTER the one being
+# published: an SD-cache line replayed late. Its interval is already contained
+# in the one published for that newer reading, so publishing it as well would
+# count the same bees twice in anything that sums the entity.
+COUNTER_NEWER_SQL = """
+    SELECT DISTINCT hive_index FROM hive_readings
+    WHERE device_id = %s AND hive_index = ANY(%s) AND measured_at > %s
+      AND bee_counter_ok
+"""
+
+
+def publish_intervals(state: dict, baselines: dict[int, dict],
+                      newer: set[int]) -> dict[int, dict]:
+    """Derive the per-interval counts of one just-stored reading for publishing.
+
+    ``state`` is the reading (``device_id``, ``measured_at``, ``hives[]``);
+    ``baselines`` maps hive index -> the previous successful reading of that
+    counter (``measured_at``, ``bee_counter`` dict); ``newer`` the hive indices
+    whose counter already has a later reading. Runs the very differencing the
+    read APIs use (difference_bee_counter_intervals: same reset, MAC and
+    maintenance rules), so MQTT and the API cannot disagree, and keys the
+    baseline on stored history by measured_at rather than on arrival order — a
+    publisher restart, a duplicate upload (never published) or a late replay
+    cannot shift it. Returns hive index -> {interval_in, interval_out,
+    interval_maint_s} for the hives that got a value.
+    """
+    device_id = state.get("device_id")
+    cur = {"device_id": device_id, "measured_at": state.get("measured_at")}
+    rows = [cur]
+    for h in state.get("hives") or []:
+        n = h.get("index")
+        if not isinstance(n, int) or n in newer or n not in baselines:
+            continue
+        bc = h.get("bee_counter") or {}
+        if not bc.get("ok"):
+            continue
+        _flatten_hive_to_measurement(cur, {"index": n, "bee_counter": bc})
+        base = baselines[n]
+        prev = {"device_id": device_id, "measured_at": base["measured_at"]}
+        _flatten_hive_to_measurement(prev, {"index": n, "bee_counter": base["bee_counter"]})
+        rows.append(prev)
+    if len(rows) == 1:
+        return {}
+    difference_bee_counter_intervals(rows)
+    out: dict[int, dict] = {}
+    for n in baselines:
+        vals = {k: cur.get(f"bee_counter_{n}_{k}")
+                for k in ("interval_in", "interval_out", "interval_maint_s")}
+        vals = {k: v for k, v in vals.items() if v is not None}
+        if vals:
+            out[n] = vals
+    return out
+
+
+def attach_publish_intervals(state: dict) -> None:
+    """Fill hives[].bee_counter.interval_* on a just-stored reading (fail-soft).
+
+    Used for the MQTT bridge, whose Home Assistant discovery advertises
+    per-interval entities: the live payload carries lifetime totals only, and
+    the bridge's flattener copies an interval only if one is there.
+    """
+    hives = [h for h in state.get("hives") or []
+             if isinstance(h.get("index"), int) and (h.get("bee_counter") or {}).get("ok")]
+    if not hives:
+        return
+    idx = [h["index"] for h in hives]
+    at = state["measured_at"]
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(COUNTER_BASELINE_SQL,
+                            (state["device_id"], idx, at, at - timedelta(days=7)))
+                baselines = {
+                    r[0]: {"measured_at": r[1],
+                           "bee_counter": {**(_json_obj(r[4]).get("bee_counter") or {}),
+                                           "ok": True, "total_in": r[2], "total_out": r[3]}}
+                    for r in cur.fetchall()
+                }
+                cur.execute(COUNTER_NEWER_SQL, (state["device_id"], idx, at))
+                newer = {r[0] for r in cur.fetchall()}
+    except Exception:
+        logger.exception("Could not derive bee-counter intervals for MQTT (%s)",
+                         state.get("device_id"))
+        return
+    derived = publish_intervals(state, baselines, newer)
+    for h in hives:
+        for k, v in derived.get(h["index"], {}).items():
+            h["bee_counter"].setdefault(k, None)
+            if h["bee_counter"][k] is None:
+                h["bee_counter"][k] = v
 
 
 HIVE_READINGS_SELECT = """
@@ -1515,6 +1689,14 @@ def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
             c.get("mcps_healthy") if c.get("mcps_healthy") is not None else c.get("gates_healthy"))
         put(f"bee_counter_{n}_num_gates", c.get("num_gates"))
         put(f"bee_counter_{n}_idle_s", c.get("idle_s"))
+        # The counter's uptime: the differencing reads a restart from it.
+        put(f"bee_counter_{n}_uptime_s", c.get("uptime_s"))
+        # Lifetime USB-maintenance seconds (wire revision 6): the differencing
+        # marks the intervals it moved in.
+        put(f"bee_counter_{n}_maint_s", c.get("maint_s"))
+        # False when the hub's read rotation did not dial this counter this
+        # cycle (ok is then false too, but it is a schedule, not a fault).
+        put(f"bee_counter_{n}_polled", c.get("polled"))
 
 
 _HIVEHEART_FLAT_FFT_RE = re.compile(r"^hiveheart_(\d+)_fft$")

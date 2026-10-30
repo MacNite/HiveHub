@@ -126,9 +126,9 @@ All HiveTraffic devices share one service/characteristic (overridable via
 The characteristic returns a compact JSON document — **totals only**:
 
 ```json
-{ "fw":5, "ver":"0.3.0", "uptime_s":1234, "status":15, "num_gates":24,
+{ "fw":6, "ver":"0.5.1", "uptime_s":1234, "status":15, "num_gates":24,
   "mcps_healthy":3, "total_in":100, "total_out":95, "glitches":2, "idle_s":0,
-  "banks":7 }
+  "banks":7, "maint_s":0 }
 ```
 
 `fw` is the wire-protocol revision; `ver` is the counter's own image version,
@@ -147,21 +147,23 @@ HiveHub reads it, fills a totals-only `beecnt::Snapshot`, and disconnects.
 The wire format is totals-only by design: no latch/reset command exists over
 BLE, so a missed connection can never lose counts.
 
-### Four wire revisions, all supported
+### Five wire revisions, all supported
 
 `firmware/include/bee_counter_wire.h` reads `fw` **first** and branches on it.
 Every revision parses, and they produce the same record:
 
-| | `fw:2` | `fw:3` | `fw:4` | `fw:5` |
-| --- | --- | --- | --- | --- |
-| Expander health field | `gates_healthy` | `mcps_healthy` | `mcps_healthy` | `mcps_healthy` |
-| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit | 32-bit | 32-bit |
-| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating | 32-bit, saturating | 32-bit, saturating |
-| `idle_s` + status bit `0x80` | — | — | night-mode countdown | night-mode countdown |
-| `banks` | — | — | — | enabled emitter MOSFETs |
+| | `fw:2` | `fw:3` | `fw:4` | `fw:5` | `fw:6` |
+| --- | --- | --- | --- | --- | --- |
+| Expander health field | `gates_healthy` | `mcps_healthy` | `mcps_healthy` | `mcps_healthy` | `mcps_healthy` |
+| `uptime_s` | 16-bit on the device, clamped at 65535 (18 h 12 min) | 32-bit | 32-bit | 32-bit | 32-bit |
+| `glitches` | 16-bit, pinned at 65535 | 32-bit, saturating | 32-bit, saturating | 32-bit, saturating | 32-bit, saturating |
+| `idle_s` + status bit `0x80` | — | — | night-mode countdown | night-mode countdown | night-mode countdown |
+| `banks` | — | — | — | enabled emitter MOSFETs | enabled emitter MOSFETs |
+| `maint_s` | — | — | — | — | lifetime USB-maintenance seconds |
 
-`fw:4` and `fw:5` are purely additive, so the parser read those documents
-correctly before it knew `idle_s` or `banks` existed — it skips unknown keys.
+`fw:4` to `fw:6` are purely additive, so the parser read those documents
+correctly before it knew `idle_s`, `banks` or `maint_s` existed — it skips
+unknown keys.
 What it could not do is tell a *suspended* or *narrowed* counter from a broken
 one, which is the whole reason for reading them. A counter too old to report
 `banks` is running all three, so the field defaults to `7` rather than `0`;
@@ -235,12 +237,32 @@ as long as the window lasts:
 Every path that is not certain returns "keep counting": no valid local time, no
 traffic baseline yet, a window whose ends are equal, a relay in flight. The
 worst outcome of a bug here is a counter that counts, which is what it did
-before the feature existed. The grant is deliberately short (two upload cycles,
-capped at an hour on both sides), so a HiveHub that dies mid-night cannot leave
-a counter blind — the deadline simply runs out.
+before the feature existed. The grant is deliberately short (two *visits* of
+that counter, capped at an hour and never past the end of the window), so a
+HiveHub that dies mid-night cannot leave a counter blind — the deadline simply
+runs out.
+
+A visit is one upload cycle while every counter is read on every wake.
+A paired counter that is not read on a wake is reported as
+`hives[].bee_counter` `{ "ok": false, "polled": false, "mac": … }` — skipped by
+the schedule, not unreachable — and the dashboard shows it as **Not polled**
+with the age of its last reading rather than as a fault. `ok:false` with
+`polled:true` (or with no `polled` key, from a hub older than the flag) still
+means the counter did not answer. With more
+counters than `MAX_GATT_READS_PER_CYCLE` (4) the reads rotate, and a counter is
+visited only every `ceil(counters / 4)` cycles; the grant follows that interval.
+When the interval exceeds the one-hour cap (e.g. 16 counters at a 20-minute
+upload interval) a grant cannot reach the next visit, the counter resumes
+counting in between, and the serial log says so.
+
+Turning night mode off is applied on the counter's next visit: a counter that
+still reports `idle_s > 0` is sent `SET_IDLE(0)` even though the feature is now
+off. The setting itself is fetched at the end of an upload cycle, so the visit
+after that is the one that releases it.
 
 The traffic gate is the "not yet" rule: if more bees crossed in the last cycle
-than the threshold, night mode waits. It is evaluated from the totals of the
+than the threshold, night mode waits. For a rotated counter the crossings since
+its last visit are compared against the threshold times the cycles in between. It is evaluated from the totals of the
 *previous* cycle, held in RTC memory across HiveHub's own deep sleep, which for
 a threshold like "fewer than 100 crossings in the last ten minutes" is the
 intended reading. A hive with no baseline yet — first cycle after a reboot — is
@@ -267,6 +289,26 @@ across the window is a genuine zero rather than a gap — the same value a quiet
 night produces anyway. What `idle_s` adds is the ability to tell that zero from
 a counter whose emitter FETs have died, which otherwise produces an identical
 row. It is stored on every reading as `hives[].bee_counter.idle_s`.
+
+### Maintenance sessions
+
+A HiveTraffic counter can be put into a USB maintenance session (`maint on` on
+its console) for bench and field testing. During a session the lifetime totals
+are frozen — crossings go to the session's test counters — so the differenced
+interval reads as low or zero traffic although the hive may have been busy.
+`fw:6` counters report `maint_s`, their lifetime seconds in maintenance
+(including a session still running; like the totals it restarts from zero with
+the counter). HiveHub forwards it as `hives[].bee_counter.maint_s`, only for
+`fw:6`+ counters, because on an older one `0` would claim "no maintenance" when
+the truth is "cannot say".
+
+The read APIs difference it like the totals and return, per interval,
+`bee_counter_N_interval_maint_s` / `hives[].bee_counter.interval_maint_s`: the
+seconds of that interval spent in maintenance (`0` = none, absent = cannot say).
+The derived count is kept — it is what was counted outside the session — but
+the dashboard's traffic chart shades those intervals as **Counter maintenance**,
+and the insight engine skips them like night-idle rows (the baseline still
+advances, so the following interval is not inflated).
 
 Counters running firmware older than `fw:4` have no control characteristic. The
 write is skipped and they keep counting; the OTA relay will bring them up to a
@@ -365,11 +407,19 @@ the interval charts will show a step, and it is real.
 
 The wire format carries only the **monotonic lifetime totals**. The backend
 derives each interval as `total_now − total_prev` between consecutive readings,
-so a missed connection loses nothing and a counter reboot (totals going
-backwards) is handled cleanly. See `2026-easy-bee-counter/docs/ble-mode.md` for
-the device side and the rationale.
+so a missed connection loses nothing. The counter keeps its totals in RAM, so
+a reboot restarts them from zero; the interval across a reboot is the count
+since the restart. A reboot is recognised by the totals going backwards **or**
+by the counter's `uptime_s` going backwards / being shorter than the time since
+the previous reading — the second rule catches a counter that rebooted and
+counted past its old total before the next poll, which the totals alone would
+read as a small ordinary interval. Crossings between the previous poll and the
+reboot are unrecoverable. The rule lives in `server/counter_intervals.py`; the
+hub's night-mode traffic gate applies the uptime part too. See
+`2026-easy-bee-counter/docs/ble-mode.md` for the device side and the rationale.
 
-This differencing happens in two places, with identical semantics:
+This differencing happens in three places, with identical semantics (the
+restart and maintenance rules are shared in `server/counter_intervals.py`):
 
 * The insight engine (`server/insights.py::_extract_counter_series`), which
   feeds the swarm/foraging detectors and the insight cards.
@@ -380,6 +430,15 @@ This differencing happens in two places, with identical semantics:
   bee-counter panel) would read every BLE row as zero traffic. Only `NULL`
   intervals are filled, so historical rows from the removed wired path — which
   reported a real device interval — are left untouched.
+* The MQTT bridge (`server/measurements.py::attach_publish_intervals`), which
+  gives the Home Assistant `bee_counter_N_interval_in/out` entities a value:
+  each just-stored reading is differenced against the previous *stored*
+  successful reading of the same counter (by `measured_at`, so a skipped
+  rotation turn, a publisher restart or a duplicate upload cannot shift the
+  baseline) through the same `difference_bee_counter_intervals`. An SD-cache
+  line replayed after a newer reading of that counter publishes no interval —
+  its span is already inside the newer one, and publishing both would count the
+  same bees twice in anything that sums the entity.
 
 Because the BLE path reports no per-interval or per-gate detail, those columns
 arrive `NULL` for HiveTraffic readings; the derived interval is authoritative.

@@ -399,6 +399,64 @@ def test_large_crc_survives_into_the_relay_payload():
         check(f"[{t}] the image URL is included", bool(sent.get("url")))
 
 
+def _register(**fields):
+    """POST /api/v1/firmware/releases with `fields`, the image present on disk.
+
+    Goes through FirmwareReleaseIn (the request model FastAPI validates against)
+    and then the handler, with the database write captured instead of run.
+    """
+    import tempfile
+    from pathlib import Path
+
+    import firmware
+    from pydantic import ValidationError
+    from schemas import FirmwareReleaseIn
+
+    try:
+        payload = FirmwareReleaseIn(**fields)
+    except ValidationError as e:
+        return "invalid", str(e)
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / payload.filename).write_bytes(b"\xe9image")
+        written = {}
+        with mock.patch.object(firmware, "FIRMWARE_DIR", Path(d)), \
+             mock.patch.object(firmware, "upsert_firmware_release",
+                               side_effect=lambda *a, **k: written.update(args=a, **k)):
+            try:
+                return "ok", (firmware.create_firmware_release(payload), written)
+            except HTTPException as e:
+                return "refused", e.detail
+
+
+def test_json_release_registration_accepts_beecounter():
+    # The multipart upload took a counter image, but the JSON endpoint's request
+    # model only listed hivescale/hiveinside, so the documented REST path failed
+    # validation before it ever reached the board check.
+    status, result = _register(version="0.5.1", filename="hivetraffic_esp32-c6_0.5.1.bin",
+                               target="beecounter")
+    check("beecounter release passes request validation", status == "ok")
+    if status == "ok":
+        body, written = result
+        check("beecounter release is stored under its own target",
+              body["target"] == "beecounter" and written["args"][3] == "beecounter")
+        check("beecounter release is stamped esp32-c6",
+              body["board"] == "esp32-c6" and written.get("board") == "esp32-c6")
+    status, _ = _register(version="0.5.1", filename="hivetraffic-0.5.1.bin",
+                          target="beecounter", board="esp32-c6")
+    check("an unstamped counter image with board=esp32-c6 is accepted", status == "ok")
+
+
+def test_json_release_registration_still_checks_the_counter_board():
+    status, _ = _register(version="0.5.1", filename="hivetraffic-0.5.1.bin",
+                          target="beecounter", board="esp32")
+    check("beecounter release declared for esp32 is refused", status == "refused")
+    status, _ = _register(version="0.5.1", filename="hivetraffic_esp32_0.5.1.bin",
+                          target="beecounter")
+    check("beecounter image stamped esp32 is refused", status == "refused")
+    status, _ = _register(version="0.5.1", filename="x.bin", target="bogus")
+    check("an unknown target still fails validation", status == "invalid")
+
+
 def test_zz_no_check_failures():
     """Fail the pytest run if any check() above failed.
 

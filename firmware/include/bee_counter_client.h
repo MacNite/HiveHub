@@ -28,6 +28,12 @@ namespace beecnt {
 // bee_counter_wire.h, which owns the fw:2 / fw:3 branch and the decoding.
 struct Snapshot {
     bool     present          = false;  // device connected and parsed this cycle
+    // Was a read attempted this cycle at all? With more paired counters than
+    // MAX_GATT_READS_PER_CYCLE the reads rotate across wakes, and a counter
+    // whose turn it is not is skipped without being dialled. That is a
+    // schedule, not a fault, and "polled":false is what keeps it from being
+    // reported as an unreachable counter.
+    bool     polled           = false;
     uint8_t  fw_version       = 0;      // wire-protocol revision ("fw")
     // Image version ("ver", e.g. "0.1.0"), empty when the counter runs firmware
     // older than the field. NOT the same thing as fw_version above: that one
@@ -84,6 +90,13 @@ struct Snapshot {
     uint8_t  bank_mask        = BEECOUNTER_BANK_MASK_ALL;
     // 32-bit as of revision 3, saturating on the device rather than wrapping.
     uint32_t glitch_count     = 0;
+    // Lifetime seconds the counter has spent in USB maintenance sessions
+    // ("maint_s", wire revision 6+), including one still running. The totals
+    // are frozen during a session, so the backend marks an interval in which
+    // this moved as maintenance rather than as a quiet hive. Forwarded only
+    // for a v6+ counter: on an older one 0 would claim "no maintenance" when
+    // the truth is "cannot say".
+    uint32_t maint_s          = 0;
 };
 
 // Per-hive form for the hives[] array: writes a nested "bee_counter" object.

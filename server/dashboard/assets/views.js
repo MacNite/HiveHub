@@ -526,8 +526,12 @@ function chartCard(title, sub, series, opts = {}) {
     ? el("span", { class: "lg lg-static", title: "Readings taken while the hive was open are not charted" },
         el("span", { class: "swatch swatch-inspection" }), "Inspection")
     : null;
+  const maintLegend = chart.opts.maintenance && chart.opts.maintenance.length
+    ? el("span", { class: "lg lg-static", title: "The counter was in a USB maintenance session: its totals were frozen, so these intervals are a bench test, not hive traffic" },
+        el("span", { class: "swatch swatch-maintenance" }), "Counter maintenance")
+    : null;
   const legend = el("div", { class: "chart-legend" }, ...legendItems.map((li) => li.item),
-    inspLegend,
+    inspLegend, maintLegend,
     series.length ? chartTools(chart, title, hint) : null);
   activeCharts.push(chart);
   if (series.length) attachChartCursor(chart);
@@ -2171,20 +2175,46 @@ function renderConnectivity(root, state) {
   root.append(node);
 }
 
+// The intervals of one hive's counter that overlapped a USB maintenance session
+// (bee_counter_N_interval_maint_s > 0, derived by the read API from the
+// counter's maint_s), as { start, end } bands: from the previous reading of that
+// counter to the one that reported the maintenance.
+export function counterMaintenanceWindows(measurements, hive) {
+  const okKey = `bee_counter_${hive}_ok`;
+  const maintKey = `bee_counter_${hive}_interval_maint_s`;
+  const rows = (measurements || [])
+    .filter((m) => m && m[okKey])
+    .map((m) => ({ t: new Date(m.measured_at).getTime(), maint: Number(m[maintKey]) }))
+    .filter((r) => Number.isFinite(r.t))
+    .sort((a, b) => a.t - b.t);
+  const out = [];
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i].maint > 0) out.push({ start: rows[i - 1].t, end: rows[i].t, label: "Counter maintenance" });
+  }
+  return out;
+}
+
 function renderCounter(root, state) {
   const refs = selectedRefs(state);
   const cards = [];
   for (const ref of refs) {
-    const m = ref.latest || {};
-    cards.push(metricCard(`${refLabel(state, ref)} in`, fmtInt(m[`bee_counter_${ref.hive}_total_in`]), "", "Total entrances"));
-    cards.push(metricCard(`${refLabel(state, ref)} out`, fmtInt(m[`bee_counter_${ref.hive}_total_out`]), "", "Total exits"));
+    // The newest reading that has totals, not just the newest reading: a
+    // counter the read rotation skipped (or one that did not answer) leaves
+    // the latest row empty, and its last known totals with their age say more
+    // than a dash.
+    const hasTotals = (r) => r && r[`bee_counter_${ref.hive}_total_in`] != null;
+    const m = [ref.latest, ...(ref.measurements || [])].find(hasTotals) || {};
+    const stale = m !== ref.latest && m.measured_at ? ` · ${relAge(m.measured_at)}` : "";
+    cards.push(metricCard(`${refLabel(state, ref)} in`, fmtInt(m[`bee_counter_${ref.hive}_total_in`]), "", `Total entrances${stale}`));
+    cards.push(metricCard(`${refLabel(state, ref)} out`, fmtInt(m[`bee_counter_${ref.hive}_total_out`]), "", `Total exits${stale}`));
   }
   const charts = [];
   for (const ref of refs) {
     const inS = seriesFrom(ref.measurements, `bee_counter_${ref.hive}_interval_in`, `${refLabel(state, ref)} in`, PALETTE[2]);
     const outS = seriesFrom(ref.measurements, `bee_counter_${ref.hive}_interval_out`, `${refLabel(state, ref)} out`, PALETTE[3]);
     if (inS.points.length || outS.points.length) {
-      charts.push(chartCard(`Traffic — ${refLabel(state, ref)}`, "Bees in/out per interval", [inS, outS], { yDigits: 0 }));
+      charts.push(chartCard(`Traffic — ${refLabel(state, ref)}`, "Bees in/out per interval", [inS, outS],
+        { yDigits: 0, maintenance: counterMaintenanceWindows(ref.measurements, ref.hive) }));
     }
   }
   if (!charts.length) {
@@ -2441,6 +2471,19 @@ function beeCounterFault(state, n) {
   return { code: flags != null ? `status ${hexByte(flags)}` : null, text: parts.join(" ") };
 }
 
+// A paired counter the hub did not dial this cycle: with more counters than the
+// per-wake GATT read budget the reads rotate across wakes. hives[].bee_counter
+// .polled is false then (hubs from before the flag never send it, and their
+// ok:false keeps meaning "did not answer"). Not a fault — the useful detail is
+// how old the last good reading is.
+function beeCounterSkipped(state, n) {
+  const parts = ["Not read this cycle: more counters are paired than HiveHub reads per wake, so the reads take turns."];
+  const last = newestReadingWhere(state, (r) => hiveSensorField(r, n, "bee_counter", "ok"));
+  parts.push(last?.measured_at ? `Last reading ${relAge(last.measured_at)}.`
+                               : "No reading in the loaded range yet.");
+  return { text: parts.join(" ") };
+}
+
 // Sensor-health panel for the Device & admin page: one row per subsystem the
 // device reports a health flag for, OK vs Fault. A subsystem whose flag is null
 // (not fitted / not configured) is omitted rather than shown as a false fault.
@@ -2454,6 +2497,11 @@ function sensorStatusCard(state) {
   const add = (label, ok, detail) => {
     if (ok == null) return;
     checks.push({ label, ok: !!ok, detail: ok ? null : (typeof detail === "function" ? detail() : detail) || null });
+  };
+  // A row that is neither OK nor a fault this cycle (a counter skipped by the
+  // read rotation): its own badge, and not counted among the faults.
+  const skip = (label, detail) => {
+    checks.push({ label, ok: true, skipped: true, detail: detail() });
   };
   const hub = (label, field) =>
     add(label, m[field], () => (HUB_FAULT_REASONS[field] ? { text: HUB_FAULT_REASONS[field] } : null));
@@ -2473,7 +2521,12 @@ function sensorStatusCard(state) {
   for (const n of availableHives(state)) {
     const hive = hiveLabel(state, n);
     add(`In-hive sensor · ${hive}`, hiveSensorField(m, n, "accel", "ok"), () => inHiveSensorFault(state, n));
-    add(`Bee counter · ${hive}`, hiveSensorField(m, n, "bee_counter", "ok"), () => beeCounterFault(state, n));
+    if (hiveSensorField(m, n, "bee_counter", "ok") === false &&
+        hiveSensorField(m, n, "bee_counter", "polled") === false) {
+      skip(`Bee counter · ${hive}`, () => beeCounterSkipped(state, n));
+    } else {
+      add(`Bee counter · ${hive}`, hiveSensorField(m, n, "bee_counter", "ok"), () => beeCounterFault(state, n));
+    }
   }
   const faults = checks.filter((c) => !c.ok).length;
   const badge = !checks.length
@@ -2496,7 +2549,9 @@ function sensorStatusCard(state) {
                   c.detail.text)
               : null),
           el("span", { class: "v" },
-            el("span", { class: `badge ${c.ok ? "good" : "danger"}` }, c.ok ? "OK" : "Fault")))))
+            c.skipped
+              ? el("span", { class: "badge muted" }, "Not polled")
+              : el("span", { class: `badge ${c.ok ? "good" : "danger"}` }, c.ok ? "OK" : "Fault")))))
     : el("p", { class: "muted-text" },
         "No sensor health reported yet — it appears once the device sends its first reading.");
 

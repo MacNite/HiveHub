@@ -105,6 +105,7 @@ from typing import Any, Iterable, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from counter_intervals import counter_restarted, interval_between, maintenance_seconds_between
 from hiveheart_fft import (
     decode_fft,
     dominant_range,
@@ -943,9 +944,11 @@ def _extract_counter_series(
       where the counter never resets and the interval is derived here as
       ``total_now - total_prev`` between consecutive readings (see
       2026-easy-bee-counter/docs/ble-mode.md). A missed poll just widens the
-      next interval; a counter reboot or uint32 wrap
-      (``total_now < total_prev``) is treated as ``total_now`` so the restart
-      from zero is not mistaken for a huge negative delta.
+      next interval; a counter reboot or uint32 wrap is treated as
+      ``total_now`` so the restart from zero is not mistaken for a huge
+      negative delta. A reboot is read from the totals going down or from the
+      counter's ``uptime_s`` (counter_intervals.counter_restarted), so one that
+      already counted past its old total is not read as a small interval.
 
     Differencing needs chronological order, so rows are sorted before the
     deltas are computed. The total baseline advances on every row that carries
@@ -954,7 +957,9 @@ def _extract_counter_series(
 
     Rows taken while the counter was idled for the night (``idle_s`` > 0) are
     a deliberately blind period, not zero traffic: they advance the baseline
-    but add no point. A reading from a different counter (``mac`` changed)
+    but add no point. So are intervals that overlapped a USB maintenance
+    session (the counter's ``maint_s`` moved): the totals were frozen and the
+    crossings went to its test counters, so the count is a bench artefact. A reading from a different counter (``mac`` changed)
     restarts the baseline instead of being read as a reboot.
     """
     ok_field = f"bee_counter_{channel}_ok"
@@ -962,6 +967,8 @@ def _extract_counter_series(
     total_field = f"bee_counter_{channel}_total_{direction}"
     idle_field = f"bee_counter_{channel}_idle_s"
     mac_field = f"bee_counter_{channel}_mac"
+    uptime_field = f"bee_counter_{channel}_uptime_s"
+    maint_field = f"bee_counter_{channel}_maint_s"
 
     def _as_float(v: Any) -> Optional[float]:
         if v is None:
@@ -986,17 +993,29 @@ def _extract_counter_series(
     out: Series = []
     prev_total: Optional[float] = None
     prev_mac: Optional[str] = None
+    prev_uptime: Optional[float] = None
+    prev_ts: Optional[datetime] = None
+    prev_maint: Optional[float] = None
     for ts, m in rows:
         interval_val = _as_float(m.get(interval_field))
         cur_total = _as_float(m.get(total_field))
+        uptime = _as_float(m.get(uptime_field))
+        maint = _as_float(m.get(maint_field))
         mac = m.get(mac_field)
         if mac and prev_mac and mac != prev_mac:
             prev_total = None
+            prev_maint = None
         if mac:
             prev_mac = mac
-        if (_as_float(m.get(idle_field)) or 0) > 0:
+        restarted = counter_restarted(
+            prev_total, cur_total, prev_uptime, uptime,
+            (ts - prev_ts).total_seconds() if prev_ts is not None else None)
+        in_maintenance = (maintenance_seconds_between(prev_maint, maint, restarted) or 0) > 0
+        if maint is not None:
+            prev_maint = maint
+        if (_as_float(m.get(idle_field)) or 0) > 0 or in_maintenance:
             if cur_total is not None:
-                prev_total = cur_total
+                prev_total, prev_uptime, prev_ts = cur_total, uptime, ts
             continue
 
         # Fall back to differencing the monotonic lifetime total when the
@@ -1004,15 +1023,13 @@ def _extract_counter_series(
         if interval_val is None and cur_total is not None:
             if prev_total is None:
                 interval_val = None          # no baseline yet — can't attribute
-            elif cur_total >= prev_total:
-                interval_val = cur_total - prev_total
             else:
-                interval_val = cur_total     # reboot / wrap: count since restart
+                interval_val = interval_between(prev_total, cur_total, restarted)
 
         # Advance the differencing baseline on any usable total, regardless of
         # which source supplied this row's interval.
         if cur_total is not None:
-            prev_total = cur_total
+            prev_total, prev_uptime, prev_ts = cur_total, uptime, ts
 
         if interval_val is not None:
             out.append((ts, interval_val))

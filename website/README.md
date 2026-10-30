@@ -89,16 +89,25 @@ layout:
 
 ### Hives & sensors
 
-Use **➕ Add hive** to add up to 16 hives (2 by default, matching the
-historical starting point). Each hive card has:
+Use **➕ Add hive** to add up to 18 hives (`MAX_HIVES`, 2 by default, matching
+the historical starting point). Each hive card has:
 
 - a **Scale** dropdown: no scale, an HX711 pin pair (classic board only), a
   NAU7802 channel (main bus or behind a TCA9548A mux), or a wireless
   beehivemonitoring.com HiveScale (MAC field). Already-used channels are
   hidden from other hives' dropdowns, same as the portal;
-- an **in-hive sensor**: either one wired DS18B20 (ROM optional — blank falls
-  back to probe enumeration order) or one wireless sensor, picked from the
-  same catalog the portal offers:
+- **in-hive sensors**, one per lane — the same rule the portal and the
+  firmware apply (`firmware/include/ble_lanes.h`):
+  - a temperature **beacon** (HolyIot, RuuviTag or HiveInside) *or* a wired
+    DS18B20 (ROM optional — blank falls back to probe enumeration order);
+  - a **HiveTraffic** entrance counter;
+  - a **HiveHeart**.
+
+  Each lane has its own add button, offered only while the lane is free, so a
+  hive can carry e.g. a counter next to a climate beacon, a HiveHeart or a
+  DS18B20. The build flags (`ENABLE_BLE_SCAN`, `ENABLE_BEEHIVE_GATT`,
+  `ENABLE_WIRELESS_BEECOUNTER`, `ENABLE_DS18B20_HIVE_TEMP`) are derived from
+  every pairing of every hive:
 
 | Type | Transport | Firmware |
 |---|---|---|
@@ -108,9 +117,9 @@ historical starting point). Each hive card has:
 | HiveHeart *(beehivemonitoring.com)* | GATT | ✅ supported, any hive |
 | HiveTraffic *(entrance bee counter)* | BLE/GATT | ✅ supported, any hive (wired I2C BeeCounters are no longer supported) |
 
-A hive can combine a wireless HiveScale (as its scale source) with a separate
-in-hive sensor — the tool emits both into that hive's `bl` array, matching
-`MAX_BLE_PER_HIVE`. The **collision-avoidance** overrides (`BLE_OVERRIDE_DS18B20`
+A hive can also combine a wireless HiveScale (as its scale source) with its
+in-hive sensors — the tool emits all of them into that hive's `bl` array,
+matching `MAX_BLE_PER_HIVE`. The **collision-avoidance** overrides (`BLE_OVERRIDE_DS18B20`
 / `_MICS`) and the shared BLE scan settings appear once any hive uses a
 beacon/GATT sensor.
 

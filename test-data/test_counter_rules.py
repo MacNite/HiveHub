@@ -373,4 +373,35 @@ rows_mixed = _rows(3, start,
 series_mixed = insights._extract_counter_series(rows_mixed, 1, "out")
 check("device interval preferred over totals", [v for _, v in series_mixed] == [2.0, 2.0, 2.0])
 
+# Audit F07: a restart the totals alone cannot see. The counter rebooted after
+# the 205 reading and counted 230 crossings before the next poll, so its total
+# went UP (205 -> 230). Its uptime fell (6000 -> 300 s): all 230 are since the
+# restart, not 25.
+hidden_out = [200, 205, 230, 236]
+hidden_up = [5400, 6000, 300, 900]
+rows_hidden = _rows(len(hidden_out), start,
+                    bee_counter_1_ok=_const(True),
+                    bee_counter_1_total_out=lambda i: hidden_out[i],
+                    bee_counter_1_uptime_s=lambda i: hidden_up[i])
+vals_hidden = [v for _, v in insights._extract_counter_series(rows_hidden, 1, "out")]
+check("restart with a higher new total is read from uptime", vals_hidden == [5.0, 230.0, 6.0])
+
+# Audit F01: an interval that overlapped a USB maintenance session (maint_s
+# moved, totals frozen) is a bench artefact, not a quiet hive: no point, but the
+# baseline still advances so the next interval is not inflated.
+m_out = [200, 210, 210, 222]
+m_maint = [0, 0, 480, 480]
+rows_m = _rows(len(m_out), start,
+               bee_counter_1_ok=_const(True),
+               bee_counter_1_total_out=lambda i: m_out[i],
+               bee_counter_1_uptime_s=lambda i: 9000 + 600 * i,
+               bee_counter_1_maint_s=lambda i: m_maint[i])
+vals_m = [v for _, v in insights._extract_counter_series(rows_m, 1, "out")]
+check("a maintenance interval adds no zero to the series", vals_m == [10.0, 12.0])
+# Absent maint_s (pre-v6 counter) is not evidence of maintenance either way.
+rows_old = _rows(3, start, bee_counter_1_ok=_const(True),
+                 bee_counter_1_total_out=lambda i: 100 + 5 * i)
+check("pre-v6 rows are unaffected",
+      [v for _, v in insights._extract_counter_series(rows_old, 1, "out")] == [5.0, 5.0])
+
 print("\nAll checks passed. ✅")

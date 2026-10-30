@@ -2,13 +2,16 @@
 // See bee_counter_client.h: the wired I2C BeeCounter path no longer exists.
 
 #include "bee_counter_client.h"
+// The tolerant fw:2..6 document decoder. Pure logic, and outside the feature
+// guard because writeSnapshotToHive() below needs its revision constants in
+// every build.
+#include "bee_counter_wire.h"
 
 #if ENABLE_WIRELESS_BEECOUNTER
 #include <string.h>       // strlcpy for the counter's reported version
 #include <NimBLEDevice.h>
 #include <esp_attr.h>     // RTC_DATA_ATTR
 #include "ble_stack.h"
-#include "bee_counter_wire.h"   // the tolerant fw:2/3/4 document decoder
 #include "gatt_rotation.h"      // fair share of the per-wake read budget
 #include "hive_config.h"
 #include "night_mode.h"
@@ -21,11 +24,14 @@ namespace beecnt {
 void writeSnapshotToHive(JsonObject hive, const Snapshot& snap, const char* mac) {
     // Nested per-hive form for the hives[] array (server maps it onto the
     // hive_readings bee_counter_* columns). Only hives with a configured
-    // counter get this object at all; ok:false means "paired but unreachable
-    // this cycle". Totals-only: the backend differences consecutive totals
+    // counter get this object at all; ok:false with polled:true means "paired
+    // but unreachable this cycle", ok:false with polled:false means "not read
+    // this cycle" (the read rotation skipped it — see gatt_rotation.h), which
+    // is not a fault. Totals-only: the backend differences consecutive totals
     // into intervals, so interval_*/per_gate_* fields are never emitted.
     JsonObject bc = hive["bee_counter"].to<JsonObject>();
     bc["ok"] = snap.present;
+    bc["polled"] = snap.polled || snap.present;
     // Which counter this row belongs to. Written BEFORE the !present return:
     // identity is pairing state, not a measurement, so it is known — and most
     // worth having — precisely when the counter did not answer. Both are
@@ -84,6 +90,9 @@ void writeSnapshotToHive(JsonObject hive, const Snapshot& snap, const char* mac)
     // and "counter too old to say" the same absence in stored history, and the
     // whole point is to tell a deliberately dark bank from a dead FET.
     bc["banks"]            = snap.bank_mask;
+    // Only where the counter can report it: absent means "cannot say", which
+    // the backend must not read as "no maintenance".
+    if (snap.fw_version >= wire::REV_MAINTENANCE) bc["maint_s"] = snap.maint_s;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +104,15 @@ namespace {
 
 // Where the next wake resumes the counter reads. See gatt_rotation.h.
 RTC_DATA_ATTR uint32_t rtcTrafficReadCursor = 0;
+
+// Wakes that ran the counter reads, and the wake each hive's baseline totals
+// came from. Under read rotation a counter's baseline can be several upload
+// cycles old, and the night-mode traffic gate needs to know how many.
+RTC_DATA_ATTR uint32_t rtcTrafficWake = 0;
+RTC_DATA_ATTR uint32_t rtcCounterTotalsWake[MAX_HIVES] = {0};
+// The counter's uptime at that baseline: a restart is read from it going
+// backwards (nightmode::counterRestarted).
+RTC_DATA_ATTR uint32_t rtcCounterUptime[MAX_HIVES] = {0};
 
 // Parse the HiveTraffic measurement JSON (see 2026-easy-bee-counter
 // docs/ble-mode.md) into a Snapshot. Returns false on malformed JSON or a
@@ -125,6 +143,7 @@ bool parseTrafficJson(const char* json, size_t len, Snapshot& out) {
     out.glitch_count  = m.glitch_count;
     out.idle_s        = m.idle_s;
     out.bank_mask     = m.bank_mask;
+    out.maint_s       = m.maint_s;
     return true;
 }
 
@@ -199,6 +218,8 @@ bool writeBankMask(NimBLERemoteService* svc, uint8_t mask) {
 struct NightContext {
     nightmode::Config cfg;
     uint16_t          minute = nightmode::MINUTES_PER_DAY;   // "no clock"
+    // Seconds until this counter is visited again: the upload interval times
+    // the read rotation's wakes per visit. Grants are sized by this.
     uint32_t          cycle_s = 600;
     bool              relay_pending = false;
 };
@@ -238,9 +259,15 @@ nightmode::Traffic trafficSince(uint8_t h, const Snapshot& snap) {
     if (h >= MAX_HIVES || !snap.present) return t;
     if (rtcCounterTotalsValid & (1UL << h)) {
         t.known = true;
-        t.crossings =
-            nightmode::crossingsBetween(rtcCounterTotalIn[h], snap.total_in) +
-            nightmode::crossingsBetween(rtcCounterTotalOut[h], snap.total_out);
+        const bool restarted = nightmode::counterRestarted(
+            rtcCounterTotalIn[h], snap.total_in,
+            rtcCounterTotalOut[h], snap.total_out,
+            rtcCounterUptime[h], snap.uptime_s);
+        t.crossings = nightmode::crossingsSince(
+            rtcCounterTotalIn[h], snap.total_in,
+            rtcCounterTotalOut[h], snap.total_out, restarted);
+        const uint32_t wakes = rtcTrafficWake - rtcCounterTotalsWake[h];
+        t.cycles = wakes ? wakes : 1;
     }
     return t;
 }
@@ -250,6 +277,8 @@ void rememberTotals(uint8_t h, const Snapshot& snap) {
     if (h >= MAX_HIVES || !snap.present) return;
     rtcCounterTotalIn[h]  = snap.total_in;
     rtcCounterTotalOut[h] = snap.total_out;
+    rtcCounterTotalsWake[h] = rtcTrafficWake;
+    rtcCounterUptime[h]     = snap.uptime_s;
     rtcCounterTotalsValid |= (1UL << h);
 }
 
@@ -311,7 +340,7 @@ bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
                     // difference between "old firmware" and "broken link".
                     Serial.printf("[TRAFFIC] %s: fw=%s wire=v%u in=%lu out=%lu "
                                   "uptime=%lus mcps=%u/3 status=0x%02X "
-                                  "banks=0x%02X\n",
+                                  "banks=0x%02X maint=%lus\n",
                                   mac.c_str(),
                                   out.version[0] ? out.version : "?",
                                   (unsigned)out.fw_version,
@@ -320,7 +349,8 @@ bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
                                   (unsigned long)out.uptime_s,
                                   (unsigned)out.mcps_healthy,
                                   out.status_flags,
-                                  (unsigned)out.bank_mask);
+                                  (unsigned)out.bank_mask,
+                                  (unsigned long)out.maint_s);
                 }
             }
         }
@@ -359,7 +389,11 @@ bool readTrafficSlot(const String& mac, Snapshot& out, uint8_t slot,
         const nightmode::Decision decision =
             nightmode::decide(night.cfg, night.minute, trafficSince(slot, out),
                               night.cycle_s, night.relay_pending);
-        if (night.cfg.enabled) {
+        // Written while night mode is on, and also once it is off to a counter
+        // that still reports a grant from before: the "keep counting" answer
+        // is worthless if it never reaches the counter that is not counting.
+        if (nightmode::mustWriteIdle(night.cfg.enabled,
+                                     out.present ? out.idle_s : 0)) {
             if (writeIdleGrant(svc, decision.duration_s)) {
                 Serial.printf("[TRAFFIC] %s: night mode %s (%lus) — %s\n",
                               mac.c_str(),
@@ -409,7 +443,6 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
     NightContext night;
     night.cfg           = nightConfig();
     night.minute        = localMinuteOfDay();
-    night.cycle_s       = (uint32_t)(sendIntervalMs / 1000UL);
     night.relay_pending = relayInFlight();
 
     // At most one HiveTraffic counter per hive: the first paired one.
@@ -435,10 +468,24 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
                       (unsigned)n, (unsigned)MAX_GATT_READS_PER_CYCLE, (unsigned)plan.count,
                       (unsigned)plan.start);
     }
+    rtcTrafficWake++;
+    // A grant has to last until this counter's next visit, which under read
+    // rotation is several upload cycles away, not one.
+    night.cycle_s = nightmode::revisitSeconds(
+        (uint32_t)(sendIntervalMs / 1000UL),
+        gattrot::wakesPerVisit(n, MAX_GATT_READS_PER_CYCLE));
+    if (night.cfg.enabled && !nightmode::grantCoversRevisit(night.cycle_s)) {
+        Serial.printf("[TRAFFIC] night mode: counters are revisited every %lus, "
+                      "longer than the %lus grant cap — they will resume "
+                      "counting between visits\n",
+                      (unsigned long)night.cycle_s,
+                      (unsigned long)nightmode::MAX_GRANT_S);
+    }
 
     blestack::acquire();
     for (uint8_t k = 0; k < plan.count; k++) {
         const Candidate& c = cand[gattrot::at(plan, k, n)];
+        out[c.hive].polled = true;
         // readTrafficSlot reads, then decides, then applies — all on one
         // connection. The decision has to follow the read because the
         // traffic gate is about the cycle that just ended, and it has to

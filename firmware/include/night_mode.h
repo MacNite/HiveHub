@@ -91,10 +91,15 @@ struct Config {
     uint32_t max_traffic  = 0;
 };
 
-// One hive's traffic since the previous cycle.
+// One hive's traffic since the previous read of its counter.
 struct Traffic {
     bool     known      = false;   // is there a previous reading to difference?
     uint32_t crossings  = 0;       // in + out over that interval
+    // How many upload cycles that interval spans. 1 unless the GATT read budget
+    // rotates this counter (gatt_rotation.h): then the crossings were collected
+    // over several cycles, and comparing them against a per-cycle threshold
+    // would keep a quiet hive "busy" for as long as it is not read every wake.
+    uint32_t cycles     = 1;
 };
 
 struct Decision {
@@ -127,12 +132,69 @@ inline uint32_t crossingsBetween(uint32_t previous, uint32_t current) {
     return current >= previous ? current - previous : current;
 }
 
-// How long a single grant should run, given the configured upload interval.
+// Did the counter restart between two reads? Its totals live in RAM, so a
+// restart is usually a decrease — but a counter that rebooted and then counted
+// past its old total before the next read shows an increase, and differencing
+// that undercounts by everything it counted before. Its uptime going backwards
+// is the signal that does not depend on how busy the hive was. Same rule as the
+// backend (server/counter_intervals.py), minus its wall-clock check: HiveHub
+// does not keep the time of the previous read across deep sleep.
+inline bool counterRestarted(uint32_t prev_in, uint32_t cur_in,
+                             uint32_t prev_out, uint32_t cur_out,
+                             uint32_t prev_uptime_s, uint32_t cur_uptime_s) {
+    return cur_in < prev_in || cur_out < prev_out || cur_uptime_s < prev_uptime_s;
+}
+
+// Crossings in + out between two reads, given counterRestarted().
+inline uint32_t crossingsSince(uint32_t prev_in, uint32_t cur_in,
+                               uint32_t prev_out, uint32_t cur_out,
+                               bool restarted) {
+    if (restarted) return cur_in + cur_out;
+    return (cur_in - prev_in) + (cur_out - prev_out);
+}
+
+// How long a single grant should run, given how often HiveHub visits this
+// counter. That is the upload interval only while every counter is read every
+// wake; under GATT read rotation it is revisitSeconds() below.
 inline uint32_t grantSeconds(uint32_t cycle_seconds) {
     uint64_t grant = (uint64_t)cycle_seconds * GRANT_CYCLES;
     if (grant < MIN_GRANT_S) grant = MIN_GRANT_S;
     if (grant > MAX_GRANT_S) grant = MAX_GRANT_S;
     return (uint32_t)grant;
+}
+
+// Seconds between two visits of the same counter: the upload interval times
+// the number of wakes the read rotation needs to come back to it. Granting
+// only two upload cycles to a counter visited every fourth wake had it resume
+// sensing for half of every night-window revisit.
+inline uint32_t revisitSeconds(uint32_t cycle_seconds, uint32_t cycles_per_visit) {
+    if (cycles_per_visit == 0) cycles_per_visit = 1;
+    uint64_t s = (uint64_t)cycle_seconds * cycles_per_visit;
+    return s > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)s;
+}
+
+// Can one grant bridge the gap to the next visit? Not when the revisit
+// interval exceeds MAX_GRANT_S: the safety cap wins, and the counter resumes
+// counting before HiveHub comes back. That is the safe direction, but it is
+// not what the schedule promises, so the caller says so instead of pretending.
+inline bool grantCoversRevisit(uint32_t revisit_seconds) {
+    return grantSeconds(revisit_seconds) >= revisit_seconds;
+}
+
+// Minutes from `minute` until the window [start, end) closes. Only meaningful
+// while inWindow(minute, start, end).
+inline uint16_t minutesUntilWindowEnd(uint16_t minute, uint16_t end) {
+    return (uint16_t)(end > minute ? end - minute : MINUTES_PER_DAY - minute + end);
+}
+
+// Must this cycle write the control characteristic at all? While night mode is
+// enabled, yes — every decision, including a resume, is applied. Once it is
+// disabled the write is still owed to a counter that reports it is idle: it is
+// holding a grant issued while the feature was on, and skipping the write left
+// it blind until that grant ran out (up to MAX_GRANT_S) after the beekeeper had
+// already turned the feature off. A counter that is counting needs nothing.
+inline bool mustWriteIdle(bool enabled, uint32_t reported_idle_s) {
+    return enabled || reported_idle_s > 0;
 }
 
 // Decide what to tell one counter this cycle.
@@ -183,7 +245,11 @@ inline Decision decide(const Config& cfg, uint16_t minute_of_day,
             d.reason = Reason::TrafficUnknown;
             return d;
         }
-        if (traffic.crossings > cfg.max_traffic) {
+        // max_traffic is per upload cycle; a rotated counter's crossings
+        // cover several.
+        const uint64_t limit = (uint64_t)cfg.max_traffic *
+                               (traffic.cycles ? traffic.cycles : 1);
+        if (traffic.crossings > limit) {
             d.reason = Reason::TrafficAboveLimit;
             return d;
         }
@@ -191,6 +257,11 @@ inline Decision decide(const Config& cfg, uint16_t minute_of_day,
 
     d.suspend    = true;
     d.duration_s = grantSeconds(cycle_seconds);
+    // Never past the end of the window: a grant sized for the revisit interval
+    // can be up to an hour, and the morning is when the counting matters.
+    const uint32_t to_end =
+        (uint32_t)minutesUntilWindowEnd(minute_of_day, cfg.end_minute) * 60u;
+    if (d.duration_s > to_end) d.duration_s = to_end;
     d.reason     = Reason::Suspend;
     return d;
 }

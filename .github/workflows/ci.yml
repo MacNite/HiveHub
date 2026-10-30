@@ -238,6 +238,7 @@ jobs:
           python3 -m pytest -q test-data/test_tempcomp.py test-data/test_hive_tempcomp.py \
                             test-data/test_hiveheart_fft.py \
                             test-data/test_mqtt_ha_discovery.py \
+                            test-data/test_mqtt_counter_intervals.py \
                             test-data/test_relay_ota_gate.py test-data/test_publish.py \
                             test-data/test_channel_links.py \
                             test-data/test_oidc_sso.py
@@ -253,6 +254,7 @@ jobs:
         run: |
           diff -u server/insights.py test-data/mock-server/insights.py
           diff -u server/hiveheart_fft.py test-data/mock-server/hiveheart_fft.py
+          diff -u server/counter_intervals.py test-data/mock-server/counter_intervals.py
       # --require-db turns an unreachable database into a failure rather than a
       # skip, so a broken service container can never leave this job green while
       # silently testing nothing.
@@ -287,3 +289,8 @@ jobs:
         run: |
           npm install --no-save --silent jsdom@30.1.2
           node test-data/test_portal_pairing.js
+      # The website configurator, driven through its buttons in jsdom: every
+      # per-hive sensor combination the firmware's lane rule allows must be
+      # expressible, with the build flags derived from the whole set.
+      - name: Website configurator hive tests
+        run: node test-data/test_configurator_hives.js

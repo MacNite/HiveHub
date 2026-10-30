@@ -282,6 +282,82 @@ static void test_a_whole_night_of_cycles() {
     CHECK(decide(c, hm(6, 0), quiet(0), CYCLE_S, false).suspend == false);
 }
 
+static void test_disabling_resumes_an_idle_counter() {
+    // decide() answers "keep counting" (duration 0) once the feature is off,
+    // but that answer has to be written to a counter still holding a grant from
+    // when it was on — otherwise it stays blind until the grant runs out.
+    g_case = "turning night mode off releases a suspended counter";
+    Config off;                                 // enabled == false
+    const Decision d = decide(off, hm(23, 0), quiet(), CYCLE_S, false);
+    CHECK(!d.suspend);
+    CHECK(d.duration_s == 0);
+    CHECK(mustWriteIdle(off.enabled, 1200));    // idle counter: write resume
+    CHECK(!mustWriteIdle(off.enabled, 0));      // counting: nothing to say
+    CHECK(mustWriteIdle(true, 0));              // on: every decision is applied
+    CHECK(mustWriteIdle(true, 600));
+}
+
+static void test_grant_follows_the_revisit_interval() {
+    // 16 counters, 4 reads per wake, 600 s cadence: each counter is visited
+    // every 2400 s. A grant of two UPLOAD cycles (1200 s) left it counting for
+    // half of every revisit; the grant has to be sized to the visit instead.
+    g_case = "a rotated counter's grant covers the gap to its next visit";
+    const uint32_t revisit = revisitSeconds(CYCLE_S, 4);
+    CHECK(revisit == 2400);
+    const Decision d = decide(enabled(), hm(23, 0), quiet(), revisit, false);
+    CHECK(d.suspend);
+    CHECK(d.duration_s >= revisit);
+    CHECK(d.duration_s == MAX_GRANT_S);         // 2 x 2400 capped at an hour
+    CHECK(grantCoversRevisit(revisit));
+    // Beyond the hour cap the policy cannot be kept: say so.
+    CHECK(!grantCoversRevisit(revisitSeconds(CYCLE_S, 7)));   // 4200 s
+    CHECK(revisitSeconds(CYCLE_S, 0) == CYCLE_S);             // defensive
+    CHECK(revisitSeconds(0xFFFFFFFFUL, 2) == 0xFFFFFFFFUL);   // no wrap
+}
+
+static void test_grant_never_runs_past_the_window() {
+    // A grant sized for a long revisit would otherwise keep the beam dark well
+    // into the morning.
+    g_case = "grants stop at the end of the night window";
+    const Decision late = decide(enabled(), hm(5, 40), quiet(), 2400, false);
+    CHECK(late.suspend);
+    CHECK(late.duration_s == 20 * 60);
+    const Decision last = decide(enabled(), hm(5, 59), quiet(), CYCLE_S, false);
+    CHECK(last.suspend);
+    CHECK(last.duration_s == 60);
+    // Before midnight the distance wraps the day correctly.
+    CHECK(minutesUntilWindowEnd(hm(23, 0), hm(6, 0)) == 7 * 60);
+    CHECK(decide(enabled(), hm(23, 0), quiet(), CYCLE_S, false).duration_s ==
+          grantSeconds(CYCLE_S));
+}
+
+static void test_traffic_gate_scales_with_rotation() {
+    // max_traffic is "per upload cycle". A counter read every third wake reports
+    // three cycles' worth of crossings, which must not read as three times as busy.
+    g_case = "the traffic gate is per cycle even under read rotation";
+    Config c = enabled();
+    c.max_traffic = 100;
+    Traffic t = quiet(250);
+    t.cycles = 3;
+    CHECK(decide(c, hm(21, 0), t, CYCLE_S * 3, false).suspend);
+    t.crossings = 301;
+    CHECK(decide(c, hm(21, 0), t, CYCLE_S * 3, false).reason == Reason::TrafficAboveLimit);
+    t.cycles = 0;                               // defensive: treated as one
+    t.crossings = 101;
+    CHECK(!decide(c, hm(21, 0), t, CYCLE_S, false).suspend);
+}
+
+static void test_restart_is_read_from_uptime() {
+    // The totals went UP (100 -> 150) but the counter rebooted in between:
+    // uptime fell from 10 000 s to 60 s, so all 150 are since the restart.
+    g_case = "a restart with a higher new total is still a restart";
+    CHECK(counterRestarted(100, 150, 40, 45, 10000, 60));
+    CHECK(crossingsSince(100, 150, 40, 45, true) == 195);
+    CHECK(!counterRestarted(100, 150, 40, 45, 10000, 10600));
+    CHECK(crossingsSince(100, 150, 40, 45, false) == 55);
+    CHECK(counterRestarted(100, 3, 40, 45, 0, 0));   // decrease, no uptime
+}
+
 int main() {
     std::printf("night_mode tests\n");
     test_window_wraps_midnight();
@@ -298,6 +374,11 @@ int main() {
     test_grant_is_bounded();
     test_crossings_handle_a_counter_reboot();
     test_a_whole_night_of_cycles();
+    test_disabling_resumes_an_idle_counter();
+    test_grant_follows_the_revisit_interval();
+    test_grant_never_runs_past_the_window();
+    test_traffic_gate_scales_with_rotation();
+    test_restart_is_read_from_uptime();
 
     if (g_failures == 0) {
         std::printf("all tests passed\n");

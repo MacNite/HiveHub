@@ -238,7 +238,13 @@ as constant after boot.
 
 `bee_counter_N_interval_in` / `_interval_out` are also accepted and are fully
 live — the BLE path leaves them null on ingest and the read APIs backfill them
-by differencing consecutive totals.
+by differencing consecutive totals. The derived value is written to both shapes
+of a read response, the flat `bee_counter_N_interval_*` alias and the nested
+`hives[].bee_counter.interval_*`, so they always agree. Alongside, `bee_counter_N_interval_maint_s` /
+`hives[].bee_counter.interval_maint_s` give the seconds of that interval the
+counter spent in a USB maintenance session (totals frozen; `0` = none, absent =
+cannot say — the counter predates wire revision 6). See
+[hivetraffic-bee-counter.md](hivetraffic-bee-counter.md#maintenance-sessions).
 
 The wired-only telemetry — `_busy_retries`, `_read_attempts`,
 `_latch_succeeded`, and the per-gate 24-byte arrays
@@ -580,7 +586,10 @@ Registers or updates a firmware release. The binary must already exist in `FIRMW
 ```
 
 `target` defaults to `hivescale` and may also be `hiveinside` or `beecounter`
-(the HiveTraffic counter). Response:
+(the HiveTraffic counter). An optional `board` is checked against the target and
+the board-stamped filename: `esp32`/`esp32-c6` for `hivescale` (required, or
+derivable from the filename), `nrf54lm20a` for `hiveinside`, `esp32-c6` for
+`beecounter`. A mismatch is refused with `400`. Response:
 
 ```json
 { "status": "ok", "version": "0.9.3", "target": "hivescale", "crc32": 2882343476 }

@@ -116,7 +116,7 @@ class HiveBeeCounterIn(BaseModel):
     interval_out: Optional[int] = None
     # The diagnostic fields the counter also reports — protocol_version,
     # status_flags, uptime_s, num_gates, mcps_healthy, glitch_count, idle_s,
-    # banks — are deliberately NOT declared. extra="allow" carries them through
+    # banks, maint_s, polled — are deliberately NOT declared. extra="allow" carries them through
     # into hive_readings.raw_json, which is where they belong: nothing charts or
     # alerts on them, so a column each would be dead weight.
     #
@@ -140,6 +140,18 @@ class HiveBeeCounterIn(BaseModel):
     # reading, including the 7 of a counter nobody has narrowed, because a field
     # that appeared only when interesting would make "all banks on" and "counter
     # too old to say" the same absence.
+    #
+    # maint_s (wire revision 6) is the counter's lifetime seconds in USB
+    # maintenance sessions, during which its totals are frozen. The read APIs
+    # difference it into interval_maint_s so an interval that was a bench test
+    # is not read as a quiet hive (see counter_intervals.py). The hub sends it
+    # only for v6+ counters: its absence means "cannot say", not "none".
+    #
+    # polled is the hub's, not the counter's: false when the hub's GATT read
+    # rotation did not dial this counter this cycle (more counters paired than
+    # the per-wake budget). ok is false then too, but it is a schedule, not an
+    # unreachable counter. Hubs older than the flag never send it, and their
+    # ok:false keeps its old meaning.
 
 
 class HiveHeartIn(BaseModel):
@@ -668,10 +680,12 @@ class FirmwareReleaseIn(BaseModel):
     version: str
     filename: str
     active: bool = True
-    # "beecounter" is no longer an accepted target: BeeCounter firmware was
-    # delivered over the (removed) wired I2C relay, and no BLE/GATT OTA exists
-    # yet — a registered beecounter image could never reach a device.
-    target: Literal["hivescale", "hiveinside"] = "hivescale"
+    # The same three targets as firmware.FIRMWARE_TARGETS and the multipart
+    # upload: "beecounter" is the HiveTraffic counter, whose image the hub
+    # relays over BLE GATT (update_beecounter). This endpoint used to accept
+    # only the first two, so the documented JSON registration of a counter
+    # image failed request validation while the upload path took it.
+    target: Literal["hivescale", "hiveinside", "beecounter"] = "hivescale"
 
     @field_validator("target", mode="before")
     @classmethod
@@ -684,8 +698,8 @@ class FirmwareReleaseIn(BaseModel):
     # Board/architecture this image was built for. Required in effect for the
     # "hivescale" target ("esp32" / "esp32-c6") so OTA never serves a 30-pin
     # ESP32 (Xtensa) image to an ESP32-C6 (RISC-V) or vice versa; for
-    # "hiveinside" the only valid board is "nrf54lm20a". When omitted for a
-    # hivescale release it is derived from the board-stamped filename.
+    # "hiveinside" the only valid board is "nrf54lm20a", for "beecounter"
+    # "esp32-c6". When omitted it is derived from the board-stamped filename.
     board: Optional[str] = None
 
 
