@@ -1415,9 +1415,12 @@ One recording:
 | `gain_mode` | `"auto"` when `gain_db` is `127`, otherwise `"manual"` — so a client never has to know the sentinel |
 | `applied_gain_db` | the gain the node reports it **applied** (from its DATA header), −20…+40 dB. `null` when unknown: node older than HiveInside 0.8.0, hub older than firmware 0.33.0, or no audio arrived. Divide samples by `10^(applied_gain_db/20)` to compare clips made at different gains |
 | `clipped_pct` | samples that hit the rail; ≥5 % means lower the gain (or, with automatic gain, that something louder than the first half second came along) |
-| `crc_ok` | the hub's CRC matched the server's over the bytes on disk |
+| `crc_ok` | the node's and hub's CRCs agree **and** the hub's CRC matches the one the server computed over the bytes on disk (server 0.7.1+) |
+| `upload_intact` | `true`: the bytes on disk are exactly what the hub uploaded (CRC and, when the hub reports it, length). `false`: they are not — the upload was cut short, capped at `MAX_RECORDING_BYTES`, or altered. `null`: nothing to compare (no hub CRC, or a recording stored before server 0.7.1) |
+| `truncated` | the server stopped writing at `MAX_RECORDING_BYTES` |
+| `hub_bytes` | how many bytes the hub says it uploaded; `null` when it did not report it |
 | `confirmation` | `verified` / `reported` / `confirmed` / `unknown` — how much of the hub's account of the session actually arrived. See [How sure we are](audio-recording.md#how-sure-we-are-confirmation) |
-| `complete` | ready, corroborated, no gaps, no dropped bytes, no CRC disagreement |
+| `complete` | ready, corroborated, no gaps, no dropped bytes, no CRC disagreement, and nothing the server can see lost in the upload (`upload_intact` not `false`) |
 | `hub_message` | the hub's own words about the session, verbatim — usually more specific than anything the server can infer |
 
 ### `GET /api/v1/recordings/{recording_id}/audio.wav`

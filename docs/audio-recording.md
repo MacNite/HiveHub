@@ -240,8 +240,8 @@ the dashboard shows as the *Checksum* figure.
 
 | Value | Shown as | What happened |
 |---|---|---|
-| `verified` | verified | The detailed `/finalize` report arrived and its CRC matched what the server computed over the bytes on disk |
-| `reported` | unverified | `/finalize` arrived, but the CRCs disagree or the hub sent none. Only a CRC that actually disagrees marks the recording incomplete — an absent one is not evidence of damage |
+| `verified` | verified | The detailed `/finalize` report arrived, the node's and hub's CRCs agree, and the hub's CRC (and byte count) match what the server computed over the bytes on disk |
+| `reported` | unverified | `/finalize` arrived, but a CRC or length disagrees, or a CRC is missing — an older hub, or a recording stored before server 0.7.1 began computing its own. Only a value that actually disagrees marks the recording incomplete — an absent one is not evidence of damage |
 | `confirmed` | hub confirmed | `/finalize` never arrived, but the hub's **command result** said the session succeeded. Nothing checked the bytes, but the hub did say it finished |
 | `unknown` | not confirmed | Neither report arrived. The audio on disk plays; nothing corroborates it |
 

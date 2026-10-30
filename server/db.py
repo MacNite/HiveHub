@@ -694,6 +694,18 @@ def init_db():
                 ALTER TABLE hive_recordings
                     ADD COLUMN IF NOT EXISTS applied_gain_db INTEGER;
 
+                -- What the server itself received, so "verified" covers the
+                -- bytes on disk and not only the hub's and node's word for
+                -- them: the CRC computed while writing, the length the hub
+                -- says it sent, and whether the server's size cap cut it.
+                -- See migrations/036_recording_server_crc.sql.
+                ALTER TABLE hive_recordings
+                    ADD COLUMN IF NOT EXISTS server_crc32 BIGINT;
+                ALTER TABLE hive_recordings
+                    ADD COLUMN IF NOT EXISTS hub_bytes BIGINT;
+                ALTER TABLE hive_recordings
+                    ADD COLUMN IF NOT EXISTS truncated BOOLEAN NOT NULL DEFAULT false;
+
                 CREATE INDEX IF NOT EXISTS hive_recordings_device_idx
                     ON hive_recordings (device_id, requested_at DESC);
                 CREATE INDEX IF NOT EXISTS hive_recordings_hive_idx

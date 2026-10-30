@@ -9,7 +9,9 @@ test_recordings.py covers the pure parts; this covers the timing and the
   live player's own polling;
 - a genuinely stalled upload still expires;
 - a late /finalize or a late successful command result overrules a sweep that
-  guessed wrong, while a real error is never wiped.
+  guessed wrong, while a real error is never wiped;
+- "verified" covers the bytes the server stored: its own CRC and length are
+  checked against the hub's report.
 
 Usage:
     DATABASE_URL=postgresql://... PYTHONPATH=server python3 test_recordings_db.py
@@ -19,6 +21,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
@@ -193,12 +196,48 @@ def test_late_successful_command_result_overrules_the_sweep():
           state(rec_id), ("failed", "node refused: busy"))
 
 
+def test_stored_audio_is_verified():
+    print("The hub's report is checked against the bytes on disk")
+    body = bytes(range(256)) * 25
+    crc = zlib.crc32(body)
+
+    rec_id, _ = new_recording()
+    stream(rec_id, [body[:3200], body[3200:]])
+    finalize(rec_id, ok=True, bytes=len(body), crc32=crc,
+             device_bytes=len(body), device_crc32=crc)
+    r = recordings.get_recording(rec_id)
+    check("an intact upload is verified and complete",
+          (r["confirmation"], r["complete"], r["upload_intact"]),
+          ("verified", True, True))
+
+    # The proxy delivered only the first half; hub and node agree on the whole.
+    rec_id, _ = new_recording()
+    stream(rec_id, [body[:3200]])
+    finalize(rec_id, ok=True, bytes=len(body), crc32=crc,
+             device_bytes=len(body), device_crc32=crc)
+    r = recordings.get_recording(rec_id)
+    check("a body cut short is neither verified nor complete",
+          (r["confirmation"], r["complete"], r["upload_intact"]),
+          ("reported", False, False))
+    check("...but its audio is still there to play", (r["status"], r["bytes"]),
+          ("ready", 3200))
+
+    # An older hub that reports no byte count is compared on the CRC alone.
+    rec_id, _ = new_recording()
+    stream(rec_id, [body])
+    finalize(rec_id, ok=True, crc32=crc, device_bytes=len(body), device_crc32=crc)
+    r = recordings.get_recording(rec_id)
+    check("no byte count from the hub: the CRC still verifies",
+          (r["confirmation"], r["hub_bytes"]), ("verified", None))
+
+
 reset()
 test_late_pickup_is_not_failed_mid_stream()
 test_stalled_stream_still_expires()
 test_recent_stream_is_left_alone()
 test_late_finalize_overrules_the_sweep()
 test_late_successful_command_result_overrules_the_sweep()
+test_stored_audio_is_verified()
 reset()
 sql("DELETE FROM devices WHERE device_id = %s;", (DEVICE,))
 db_pool.close()

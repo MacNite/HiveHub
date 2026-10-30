@@ -27,6 +27,7 @@ docs/audio-recording.md.
 """
 
 import struct
+import zlib
 from pathlib import Path
 from typing import Optional
 
@@ -126,9 +127,12 @@ def _row_to_dict(r) -> dict:
     has — can I trust what I am about to hear? Three states, because there are
     genuinely three:
 
-      "verified"  the hub sent its detailed report and the checksum matched
-      "reported"  the detailed report arrived but the checksum did not match,
-                  or the hub sent no checksum at all
+      "verified"  the hub sent its detailed report, the node's and hub's
+                  checksums matched, AND the bytes on disk match what the hub
+                  says it uploaded — the server's own CRC and length
+      "reported"  the detailed report arrived but something did not match,
+                  or a checksum is missing (an older hub, or a recording
+                  stored before the server computed its own)
       "confirmed" the hub reported the session succeeded, but the detailed
                   report never arrived, so nothing verified the bytes
       "unknown"   nothing came back at all; the audio is whatever landed
@@ -140,11 +144,28 @@ def _row_to_dict(r) -> dict:
      completed_at, duration_ds, gain_db, sample_rate, num_bytes, crc32,
      device_bytes, device_crc32, dropped_bytes, gaps, ring_overruns,
      ring_dropped_bytes, clipped_pct, applied_gain_db, error,
-     requested_by, command_status, command_message) = r
+     requested_by, server_crc32, hub_bytes, truncated,
+     command_status, command_message) = r
     seconds = (num_bytes or 0) / float(sample_rate * BYTES_PER_SAMPLE) if sample_rate else 0.0
     both_crcs = crc32 is not None and device_crc32 is not None
-    crc_ok = both_crcs and crc32 == device_crc32
     crc_mismatch = both_crcs and crc32 != device_crc32
+    # Did the server keep what the hub sent? `crc32` is the hub's checksum over
+    # what it uploaded; server_crc32 is ours over what reached the disk. A
+    # proxy that cut the body short, or our own size cap, shows up here and
+    # nowhere else — the hub and node agree perfectly about audio we never got.
+    stored_mismatch = bool(
+        truncated
+        or (hub_bytes is not None and (num_bytes or 0) != hub_bytes)
+        or (server_crc32 is not None and crc32 is not None
+            and server_crc32 != crc32)
+    )
+    if stored_mismatch:
+        upload_intact = False
+    elif server_crc32 is not None and crc32 is not None:
+        upload_intact = True
+    else:
+        upload_intact = None  # nothing to compare against
+    crc_ok = both_crcs and not crc_mismatch and upload_intact is True
     if device_bytes is not None:
         confirmation = "verified" if crc_ok else "reported"
     elif command_status == "done":
@@ -157,6 +178,7 @@ def _row_to_dict(r) -> dict:
         status == "ready"
         and confirmation != "unknown"
         and not crc_mismatch
+        and not stored_mismatch
         and not dropped_bytes
         and not gaps
         and not ring_overruns
@@ -186,6 +208,11 @@ def _row_to_dict(r) -> dict:
         "clipped_pct": clipped_pct,
         "complete": complete,
         "crc_ok": crc_ok,
+        # True: the bytes on disk are exactly what the hub uploaded. False: they
+        # are not (cut short, capped, or altered). None: nothing to compare.
+        "upload_intact": upload_intact,
+        "truncated": bool(truncated),
+        "hub_bytes": hub_bytes,
         "confirmation": confirmation,
         # What the hub itself said about the session. Worth surfacing verbatim:
         # when something goes wrong it is usually more specific than anything
@@ -208,6 +235,7 @@ _SELECT = """
            r.sample_rate, r.bytes, r.crc32, r.device_bytes, r.device_crc32,
            r.dropped_bytes, r.gaps, r.ring_overruns, r.ring_dropped_bytes,
            r.clipped_pct, r.applied_gain_db, r.error, r.requested_by,
+           r.server_crc32, r.hub_bytes, r.truncated,
            c.status, c.result->>'message'
     FROM hive_recordings r
     LEFT JOIN device_commands c ON c.id = r.command_id
@@ -551,6 +579,7 @@ async def stream_recording(device_id: str, recording_id: int, request: Request):
     path.parent.mkdir(parents=True, exist_ok=True)
 
     written = 0
+    crc = 0
     truncated = False
     disconnected = False
     with open(path, "wb") as fh:
@@ -569,6 +598,7 @@ async def stream_recording(device_id: str, recording_id: int, request: Request):
                     fh.write(chunk)
                     fh.flush()
                     written += len(chunk)
+                    crc = zlib.crc32(chunk, crc)
                 if truncated:
                     break
         except ClientDisconnect:
@@ -591,8 +621,9 @@ async def stream_recording(device_id: str, recording_id: int, request: Request):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE hive_recordings SET bytes = %s, filename = %s WHERE id = %s;",
-                (written, path.name, recording_id),
+                "UPDATE hive_recordings SET bytes = %s, server_crc32 = %s, "
+                "truncated = %s, filename = %s WHERE id = %s;",
+                (written, crc, truncated, path.name, recording_id),
             )
             if truncated:
                 cur.execute(
@@ -622,6 +653,9 @@ def finalize_recording(device_id: str, recording_id: int,
     dashboard would show "recording…" forever.
     """
     status = "ready" if payload.ok else "failed"
+    # `bytes` defaults to 0 in the schema, so only a hub that actually sent it
+    # gets compared against what landed; a missing field is "unknown", not 0.
+    hub_bytes = payload.bytes if "bytes" in payload.model_fields_set else None
     # A successful report retires a sweep's guess. The sweep may have closed
     # this row while the session was still running, or just before this POST
     # landed; its message would otherwise outlive the success that disproves
@@ -645,6 +679,7 @@ def finalize_recording(device_id: str, recording_id: int,
                     applied_gain_db = %s,
                     device_error = %s,
                     sample_rate = COALESCE(%s, sample_rate),
+                    hub_bytes = %s,
                     error = CASE WHEN %s AND error IN (%s, %s, %s) THEN %s
                                  ELSE COALESCE(%s, error) END
                 WHERE id = %s AND device_id = %s;
@@ -653,7 +688,7 @@ def finalize_recording(device_id: str, recording_id: int,
                  payload.dropped_bytes, payload.gaps, payload.ring_overruns,
                  payload.ring_dropped_bytes, payload.clipped_pct,
                  payload.applied_gain_db, payload.device_error,
-                 payload.sample_rate, payload.ok, *SWEEP_MESSAGES, payload.error,
+                 payload.sample_rate, hub_bytes, payload.ok, *SWEEP_MESSAGES, payload.error,
                  payload.error, recording_id, device_id),
             )
             if cur.rowcount == 0:
