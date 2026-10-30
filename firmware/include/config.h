@@ -519,12 +519,6 @@
 #define HIVEINSIDE_OTA_CHUNK_MAX 244
 #endif
 
-// True when the GATT-client scaffolding (address-type capture during the scan,
-// used to connect by the node's identity address) must be compiled in. The OTA
-// relay is now the only consumer — a beacon nRF54 HiveInside is never connected
-// to for measurements.
-#define HIVEINSIDE_GATT_CLIENT (HIVEINSIDE_OTA_ENABLED)
-
 // ==============================
 // HIVEINSIDE AUDIO (on-request microphone stream)
 // ==============================
@@ -539,6 +533,14 @@
 #ifndef HIVEINSIDE_AUDIO_ENABLED
 #define HIVEINSIDE_AUDIO_ENABLED ENABLE_BLE_SCAN
 #endif
+
+// True when the GATT-client scaffolding (address-type capture during the scan,
+// used to connect by the node's identity address) must be compiled in. Both
+// relays connect to the node — OTA and audio — so either one needs it; a beacon
+// nRF54 HiveInside is never connected to for measurements. Defined after both
+// flags so neither can be read before it is set, and an audio-only build
+// (HIVEINSIDE_OTA_ENABLED 0) keeps the address cache locateByScan() relies on.
+#define HIVEINSIDE_GATT_CLIENT (HIVEINSIDE_OTA_ENABLED || HIVEINSIDE_AUDIO_ENABLED)
 
 // PCM staging ring, in bytes, between the NimBLE host task and the TLS upload
 // loop. The node emits 32000 B/s and never waits for us, so this is really

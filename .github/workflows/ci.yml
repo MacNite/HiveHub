@@ -73,6 +73,19 @@ jobs:
             flags: -DENABLE_SHT4X_AMBIENT=0 -DENABLE_SHT3X_AMBIENT=1
             libs: |
               adafruit/Adafruit SHT31 Library@2.2.2
+          # The HiveInside relays share GATT-client scaffolding (the scan's
+          # address-type cache). Both are on by default, so only these builds
+          # prove each one compiles without the other — an audio-only build
+          # once lost the cache with the OTA flag and failed to compile.
+          - name: hiveinside-audio-only
+            flags: -DHIVEINSIDE_OTA_ENABLED=0 -DHIVEINSIDE_AUDIO_ENABLED=1
+            libs: ""
+          - name: hiveinside-ota-only
+            flags: -DHIVEINSIDE_OTA_ENABLED=1 -DHIVEINSIDE_AUDIO_ENABLED=0
+            libs: ""
+          - name: hiveinside-no-relays
+            flags: -DHIVEINSIDE_OTA_ENABLED=0 -DHIVEINSIDE_AUDIO_ENABLED=0
+            libs: ""
     name: firmware-build-variant (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
