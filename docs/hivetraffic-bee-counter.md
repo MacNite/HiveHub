@@ -242,7 +242,13 @@ that counter, capped at an hour and never past the end of the window), so a
 HiveHub that dies mid-night cannot leave a counter blind — the deadline simply
 runs out.
 
-A visit is one upload cycle while every counter is read on every wake. With more
+A visit is one upload cycle while every counter is read on every wake.
+A paired counter that is not read on a wake is reported as
+`hives[].bee_counter` `{ "ok": false, "polled": false, "mac": … }` — skipped by
+the schedule, not unreachable — and the dashboard shows it as **Not polled**
+with the age of its last reading rather than as a fault. `ok:false` with
+`polled:true` (or with no `polled` key, from a hub older than the flag) still
+means the counter did not answer. With more
 counters than `MAX_GATT_READS_PER_CYCLE` (4) the reads rotate, and a counter is
 visited only every `ceil(counters / 4)` cycles; the grant follows that interval.
 When the interval exceeds the one-hour cap (e.g. 16 counters at a 20-minute

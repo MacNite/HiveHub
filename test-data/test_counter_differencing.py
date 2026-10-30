@@ -163,6 +163,22 @@ difference_bee_counter_intervals(nested)
 check("the maintenance seconds reach the nested object too",
       nested[1]["hives"][0]["bee_counter"].get("interval_maint_s"), 300)
 
+
+# Audit F06: a counter the hub's read rotation skipped reports ok:false with
+# polled:false. The flag must reach the flat alias the dashboard also reads,
+# and the skipped row must not become a baseline or an interval.
+m = {}
+_flatten_hive_to_measurement(m, {"index": 6, "bee_counter": {"ok": False, "polled": False,
+                                                             "mac": "AA"}})
+check("the polled flag is aliased", (m.get("bee_counter_6_ok"), m.get("bee_counter_6_polled")),
+      (False, False))
+skipped = rows(("A", 100, "AA"), ("A", 999, "AA"), ("A", 130, "AA"))
+skipped[1]["bee_counter_1_ok"] = False
+skipped[1]["bee_counter_1_polled"] = False
+check("a skipped row is neither a baseline nor an interval",
+      [r.get("bee_counter_1_interval_in") for r in difference_bee_counter_intervals(skipped)],
+      [None, None, 30])
+
 if failures:
     print(f"\n{failures} check(s) failed")
     sys.exit(1)

@@ -1584,6 +1584,9 @@ def _flatten_hive_to_measurement(m: dict, h: dict) -> None:
         # Lifetime USB-maintenance seconds (wire revision 6): the differencing
         # marks the intervals it moved in.
         put(f"bee_counter_{n}_maint_s", c.get("maint_s"))
+        # False when the hub's read rotation did not dial this counter this
+        # cycle (ok is then false too, but it is a schedule, not a fault).
+        put(f"bee_counter_{n}_polled", c.get("polled"))
 
 
 _HIVEHEART_FLAT_FFT_RE = re.compile(r"^hiveheart_(\d+)_fft$")

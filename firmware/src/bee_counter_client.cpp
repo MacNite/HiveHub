@@ -24,11 +24,14 @@ namespace beecnt {
 void writeSnapshotToHive(JsonObject hive, const Snapshot& snap, const char* mac) {
     // Nested per-hive form for the hives[] array (server maps it onto the
     // hive_readings bee_counter_* columns). Only hives with a configured
-    // counter get this object at all; ok:false means "paired but unreachable
-    // this cycle". Totals-only: the backend differences consecutive totals
+    // counter get this object at all; ok:false with polled:true means "paired
+    // but unreachable this cycle", ok:false with polled:false means "not read
+    // this cycle" (the read rotation skipped it — see gatt_rotation.h), which
+    // is not a fault. Totals-only: the backend differences consecutive totals
     // into intervals, so interval_*/per_gate_* fields are never emitted.
     JsonObject bc = hive["bee_counter"].to<JsonObject>();
     bc["ok"] = snap.present;
+    bc["polled"] = snap.polled || snap.present;
     // Which counter this row belongs to. Written BEFORE the !present return:
     // identity is pairing state, not a measurement, so it is known — and most
     // worth having — precisely when the counter did not answer. Both are
@@ -482,6 +485,7 @@ void bleRunCycleRegistry(Snapshot* out, uint8_t cap) {
     blestack::acquire();
     for (uint8_t k = 0; k < plan.count; k++) {
         const Candidate& c = cand[gattrot::at(plan, k, n)];
+        out[c.hive].polled = true;
         // readTrafficSlot reads, then decides, then applies — all on one
         // connection. The decision has to follow the read because the
         // traffic gate is about the cycle that just ended, and it has to

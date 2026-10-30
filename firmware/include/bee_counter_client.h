@@ -28,6 +28,12 @@ namespace beecnt {
 // bee_counter_wire.h, which owns the fw:2 / fw:3 branch and the decoding.
 struct Snapshot {
     bool     present          = false;  // device connected and parsed this cycle
+    // Was a read attempted this cycle at all? With more paired counters than
+    // MAX_GATT_READS_PER_CYCLE the reads rotate across wakes, and a counter
+    // whose turn it is not is skipped without being dialled. That is a
+    // schedule, not a fault, and "polled":false is what keeps it from being
+    // reported as an unreachable counter.
+    bool     polled           = false;
     uint8_t  fw_version       = 0;      // wire-protocol revision ("fw")
     // Image version ("ver", e.g. "0.1.0"), empty when the counter runs firmware
     // older than the field. NOT the same thing as fw_version above: that one
