@@ -2,7 +2,7 @@
 
 > **Project renamed: HiveScale → HiveHub.** The project outgrew its original
 > "dual scale" scope and now acts as a **data collector / hub for many different
-> types of beehive sensors and scales** (up to 16 hives per ESP32), so the name
+> types of beehive sensors and scales** (up to 18 hives per ESP32), so the name
 > was changed to match. A few internal identifiers — the database measurement
 > columns, the OTA `target` value, the Docker image name (`…/hivescale-api`), the
 > device's stored-config (NVS) namespace and MQTT topics — still use the old
@@ -15,7 +15,7 @@
 
 **HiveHub is an ESP32-based data collector for beehive sensors and scales.** It
 gathers weight, temperature, humidity, sound, vibration, power state, and network
-state from one or more hives (up to 16 per ESP32) and sends the readings to a
+state from one or more hives (up to 18 per ESP32) and sends the readings to a
 self-hosted FastAPI backend backed by PostgreSQL, where they can be displayed in
 [HivePal](https://github.com/martinhrvn/hive-pal).
 
