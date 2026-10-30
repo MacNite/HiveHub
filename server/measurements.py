@@ -1242,6 +1242,12 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
     shallow copy by ``measured_at`` only to compute the deltas). Run this *after*
     attach_hive_readings so the flat ``bee_counter_{n}_*`` aliases exist for hives
     3–18 (which have no fixed table columns); otherwise only hives 1–2 are filled.
+
+    The derived counts are computed once, on the flat keys, and then copied into
+    the canonical nested ``hives[].bee_counter.interval_*`` as well, so a client
+    reading either shape of the same response sees the same number. (Only the
+    flat keys used to be filled, and nested consumers got null for every BLE
+    reading.)
     """
     ordered = sorted(
         (m for m in measurements if m.get("measured_at") is not None),
@@ -1277,7 +1283,27 @@ def difference_bee_counter_intervals(measurements: list[dict]) -> list[dict]:
                 if cur_total is not None:
                     prev[m.get("device_id")] = (cur_total, mac or prev_mac, uptime,
                                                 m["measured_at"])
+    for m in measurements:
+        _copy_intervals_to_nested(m)
     return measurements
+
+
+def _copy_intervals_to_nested(m: dict) -> None:
+    """Mirror the flat ``bee_counter_{n}_interval_*`` into ``hives[n].bee_counter``.
+
+    Only fills a nested value that is missing: a device-reported interval (wired
+    history) is already in both places and stays as it was.
+    """
+    for h in m.get("hives") or []:
+        n = h.get("index")
+        bc = h.get("bee_counter")
+        if not n or not isinstance(bc, dict):
+            continue
+        for direction in ("in", "out"):
+            key = f"interval_{direction}"
+            flat = m.get(f"bee_counter_{n}_{key}")
+            if bc.get(key) is None and flat is not None:
+                bc[key] = flat
 
 
 def _elapsed_seconds(earlier, later) -> Optional[float]:

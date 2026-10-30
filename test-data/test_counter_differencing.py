@@ -90,6 +90,40 @@ m = {}
 _flatten_hive_to_measurement(m, {"index": 5, "bee_counter": {"ok": True, "uptime_s": 42}})
 check("the nested uptime is aliased for every hive", m.get("bee_counter_5_uptime_s"), 42)
 
+
+# Audit F08: the derived interval reached the flat alias only, so a client
+# reading the canonical nested hives[] got null for every BLE reading.
+def nested_rows(*totals):
+    out = []
+    for i, total in enumerate(totals):
+        m = {"device_id": "A", "measured_at": T0 + timedelta(minutes=10 * i),
+             "hives": [{"index": n, "bee_counter": {"ok": True, "total_in": total + n,
+                                                    "total_out": 2 * total,
+                                                    "interval_in": None, "interval_out": None}}
+                       for n in (1, 2, 3)]}
+        for h in m["hives"]:
+            _flatten_hive_to_measurement(m, h)
+        out.append(m)
+    return difference_bee_counter_intervals(out)
+
+
+both = nested_rows(100, 110)
+for n in (1, 2, 3):
+    bc = both[1]["hives"][n - 1]["bee_counter"]
+    check(f"hive {n}: nested interval_in equals the flat alias",
+          (bc["interval_in"], both[1].get(f"bee_counter_{n}_interval_in")), (10, 10))
+    check(f"hive {n}: nested interval_out equals the flat alias",
+          (bc["interval_out"], both[1].get(f"bee_counter_{n}_interval_out")), (20, 20))
+check("the first reading stays null in both shapes",
+      (both[0]["hives"][0]["bee_counter"]["interval_in"], both[0].get("bee_counter_1_interval_in")),
+      (None, None))
+wired = {"device_id": "A", "measured_at": T0, "bee_counter_1_ok": True,
+         "bee_counter_1_interval_in": 7,
+         "hives": [{"index": 1, "bee_counter": {"ok": True, "interval_in": 7}}]}
+difference_bee_counter_intervals([wired])
+check("a device-reported (wired) interval is left as it was",
+      wired["hives"][0]["bee_counter"]["interval_in"], 7)
+
 if failures:
     print(f"\n{failures} check(s) failed")
     sys.exit(1)
