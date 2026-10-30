@@ -601,17 +601,27 @@ void buildMeasurementDoc(JsonDocument& doc) {
 
   // ── Wired stereo mics (device-level; left=hive 1, right=hive 2) ────────────
 #if ENABLE_INMP441_MICS
-  bool wiredMicUsed = true;
+  // Per hive, like every other arbitrated sensor: a BLE microphone in hive 1
+  // supersedes the LEFT wired channel only, and one in hive 2 the RIGHT. The
+  // stereo capture is a single I2S read either way, so it runs whenever either
+  // hive still needs its wired channel — dropping it because ONE hive had a BLE
+  // mic used to cost the other hive its acoustics entirely.
+  bool wiredLeftUsed = true, wiredRightUsed = true;
 #if ENABLE_BLE_SCAN
   if (BLE_OVERRIDE_MICS) {
     const blesensor::Snapshot* s1 = snapForHive(bleHiveOfMac, bleSnaps, 0);
     const blesensor::Snapshot* s2 = snapForHive(bleHiveOfMac, bleSnaps, 1);
-    if ((s1 && s1->providesMic()) || (s2 && s2->providesMic())) {
-      wiredMicUsed = false;
-      Serial.println("[ARB] BLE supplies in-hive acoustics; skipping wired INMP441 mics");
+    if (s1 && s1->providesMic()) {
+      wiredLeftUsed = false;
+      Serial.println("[ARB] hive 1: BLE supplies in-hive acoustics; skipping left wired mic");
+    }
+    if (s2 && s2->providesMic()) {
+      wiredRightUsed = false;
+      Serial.println("[ARB] hive 2: BLE supplies in-hive acoustics; skipping right wired mic");
     }
   }
 #endif
+  const bool wiredMicUsed = wiredLeftUsed || wiredRightUsed;
   MicMeasurement micResult;
   if (wiredMicUsed) micResult = readMicSamples();
   // Release the I2S channel the moment the samples are in hand, rather than
@@ -709,19 +719,26 @@ void buildMeasurementDoc(JsonDocument& doc) {
     doc["mic_ok"]                   = micResult.ok;
     doc["mic_sample_rate_hz"]       = (uint32_t)INMP441_SAMPLE_RATE;
     doc["mic_sample_frames"]        = (uint32_t)INMP441_SAMPLE_FRAMES;
+  }
+  // Only the channel a hive still takes from the wire: a superseded channel is
+  // left out, so it can never sit beside that hive's BLE acoustics as a
+  // second, conflicting reading.
+  if (wiredLeftUsed) {
     doc["mic_left_ok"]              = micResult.left.ok;
     doc["mic_left_rms_dbfs"]        = micResult.left.rmsDbfs;
     doc["mic_left_peak_dbfs"]       = micResult.left.peakDbfs;
     doc["mic_left_rms_normalized"]  = micResult.left.rmsNormalized;
-    doc["mic_right_ok"]             = micResult.right.ok;
-    doc["mic_right_rms_dbfs"]       = micResult.right.rmsDbfs;
-    doc["mic_right_peak_dbfs"]      = micResult.right.peakDbfs;
-    doc["mic_right_rms_normalized"] = micResult.right.rmsNormalized;
     doc["mic_left_band_sub_bass_dbfs"]  = micResult.left.bands.sub_bass_dbfs;
     doc["mic_left_band_hum_dbfs"]       = micResult.left.bands.hum_dbfs;
     doc["mic_left_band_piping_dbfs"]    = micResult.left.bands.piping_dbfs;
     doc["mic_left_band_stress_dbfs"]    = micResult.left.bands.stress_dbfs;
     doc["mic_left_band_high_dbfs"]      = micResult.left.bands.high_dbfs;
+  }
+  if (wiredRightUsed) {
+    doc["mic_right_ok"]             = micResult.right.ok;
+    doc["mic_right_rms_dbfs"]       = micResult.right.rmsDbfs;
+    doc["mic_right_peak_dbfs"]      = micResult.right.peakDbfs;
+    doc["mic_right_rms_normalized"] = micResult.right.rmsNormalized;
     doc["mic_right_band_sub_bass_dbfs"] = micResult.right.bands.sub_bass_dbfs;
     doc["mic_right_band_hum_dbfs"]      = micResult.right.bands.hum_dbfs;
     doc["mic_right_band_piping_dbfs"]   = micResult.right.bands.piping_dbfs;

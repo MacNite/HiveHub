@@ -240,8 +240,8 @@ the dashboard shows as the *Checksum* figure.
 
 | Value | Shown as | What happened |
 |---|---|---|
-| `verified` | verified | The detailed `/finalize` report arrived and its CRC matched what the server computed over the bytes on disk |
-| `reported` | unverified | `/finalize` arrived, but the CRCs disagree or the hub sent none. Only a CRC that actually disagrees marks the recording incomplete — an absent one is not evidence of damage |
+| `verified` | verified | The detailed `/finalize` report arrived, the node's and hub's CRCs agree, and the hub's CRC (and byte count) match what the server computed over the bytes on disk |
+| `reported` | unverified | `/finalize` arrived, but a CRC or length disagrees, or a CRC is missing — an older hub, or a recording stored before server 0.7.1 began computing its own. Only a value that actually disagrees marks the recording incomplete — an absent one is not evidence of damage |
 | `confirmed` | hub confirmed | `/finalize` never arrived, but the hub's **command result** said the session succeeded. Nothing checked the bytes, but the hub did say it finished |
 | `unknown` | not confirmed | Neither report arrived. The audio on disk plays; nothing corroborates it |
 
@@ -513,7 +513,7 @@ one-second ring; it is a cheap `logDiag()` now.
 | "HiveInside not found in scan" | Out of range, flat battery, or busy with an OTA |
 | Stuck at "Waiting for the hub to wake" | Normal for up to one reporting interval; longer means the hub is offline |
 | A recording stays at "requested" forever | The command never reached the queue. Check the server log for `could not queue record_audio`; the row is marked failed with the reason from 0.30.0 on |
-| A recording sits at "streaming" | Neither the command result nor `/finalize` arrived — a reset mid-session, or a hub that went offline before its next wake. The audio is on disk and plays anyway; after five minutes the row resolves to ready with `confirmation: unknown`. `SELECT result->>'message' FROM device_commands WHERE command_type = 'record_audio' ORDER BY id DESC LIMIT 1;` is the hub's own account of what happened |
+| A recording sits at "streaming" | Neither the command result nor `/finalize` arrived — a reset mid-session, or a hub that went offline before its next wake. The audio is on disk and plays anyway; five minutes after the upload started (not after the request was queued) the row resolves to ready with `confirmation: unknown`. `SELECT result->>'message' FROM device_commands WHERE command_type = 'record_audio' ORDER BY id DESC LIMIT 1;` is the hub's own account of what happened |
 | Audio is loud for a moment then near-silence | The microphone lost power mid-session. On HiveInside before the sensor-rail fix, a measurement cycle already running when the session started would switch LDO1 off underneath it |
 | "node busy" | An OTA or another session holds the node's single connection |
 | Recording marked incomplete | See the quality flags above |

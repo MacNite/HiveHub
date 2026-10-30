@@ -351,12 +351,12 @@ String normalizeMac(const String& raw) {
 
 #if HIVEINSIDE_GATT_CLIENT
 // ── address types learned from any scan this boot ──────────────────────────
-// The OTA relay needs a node's address type before it can connect, and used to
-// run a scan of its own to learn it. That scan is unsafe after the stack has
-// been torn down and re-initialised (see ble_stack.h), and it was also pure
-// duplication: the measurement scan earlier in the same cycle already saw the
-// node and captured exactly this. Keep it instead of throwing it away with the
-// per-slot accumulators. Plain RAM, so deep sleep clears it — which is correct,
+// The OTA and audio relays need a node's address type before they can connect;
+// the OTA relay used to run a scan of its own to learn it. That scan is unsafe
+// after the stack has been torn down and re-initialised (see ble_stack.h), and
+// it was also pure duplication: the measurement scan earlier in the same cycle
+// already saw the node and captured exactly this. Keep it instead of throwing it
+// away with the per-slot accumulators. Plain RAM, so deep sleep clears it — which is correct,
 // since a re-pairing between cycles must not be answered from a stale entry.
 struct AddrTypeEntry {
   String  mac;

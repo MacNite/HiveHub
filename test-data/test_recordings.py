@@ -18,6 +18,7 @@ import os
 import re
 import struct
 import sys
+import zlib
 from datetime import datetime, timezone
 
 SERVER_DIR = os.path.join(os.path.dirname(__file__), "..", "server")
@@ -66,6 +67,7 @@ def row(**over):
         num_bytes=32000, crc32=123456, device_bytes=32000, device_crc32=123456,
         dropped_bytes=0, gaps=0, ring_overruns=0, ring_dropped_bytes=0,
         clipped_pct=0, applied_gain_db=None, error=None, requested_by="max",
+        server_crc32=123456, hub_bytes=32000, truncated=False,
         command_status="done", command_message=None,
     )
     base.update(over)
@@ -198,6 +200,42 @@ check("an open-ended request reports zero requested duration",
       _row_to_dict(row(duration_ds=0))["requested_duration_s"] == 0.0)
 check("a fixed request reports its duration in seconds",
       _row_to_dict(row(duration_ds=105))["requested_duration_s"] == 10.5)
+
+# ── what the server actually stored (review finding F2) ──────────────────────
+#
+# The hub's and node's checksums agreeing says nothing about the file on disk:
+# a proxy that cuts the upload short, or the server's own size cap, leaves them
+# in perfect agreement about audio the server never received. The review's
+# counterexample — 16 000 bytes stored, 32 000 reported, matching hub/node CRCs,
+# zero loss counters — was called verified and complete. It must not be.
+
+short = _row_to_dict(row(num_bytes=16000, server_crc32=654321))
+check("a body cut short is not complete", short["complete"] is False)
+check("...is not crc_ok", short["crc_ok"] is False)
+check("...is not verified", short["confirmation"] == "reported")
+check("...and says the upload is not intact", short["upload_intact"] is False)
+
+check("a length mismatch alone is enough to fail complete",
+      _row_to_dict(row(num_bytes=16000))["complete"] is False)
+check("a stored-CRC mismatch alone is enough to fail complete",
+      _row_to_dict(row(server_crc32=1))["complete"] is False)
+altered = _row_to_dict(row(server_crc32=1))
+check("an altered byte is not verified",
+      altered["confirmation"] == "reported" and altered["upload_intact"] is False)
+capped = _row_to_dict(row(truncated=True, device_bytes=None, device_crc32=None,
+                          crc32=None, hub_bytes=None))
+check("a recording cut at the server cap is never complete, even hub-confirmed",
+      capped["confirmation"] == "confirmed" and capped["complete"] is False
+      and capped["truncated"] is True)
+check("a clean recording says its upload is intact", d["upload_intact"] is True)
+
+# Recordings stored before the server computed its own CRC are not damaged, but
+# nothing ever checked them either: honest "unverified", still complete.
+legacy = _row_to_dict(row(server_crc32=None, hub_bytes=None))
+check("a pre-036 recording is unverified rather than verified",
+      legacy["confirmation"] == "reported" and legacy["crc_ok"] is False)
+check("...but not called incomplete", legacy["complete"] is True)
+check("...and its upload is simply unknown", legacy["upload_intact"] is None)
 
 # Bytes are what landed, and a partial recording must still report honestly.
 partial = _row_to_dict(row(num_bytes=16000, device_bytes=32000, gaps=2))
@@ -404,6 +442,9 @@ for _label, _chunks in (("before any audio", []),
           f"that arrived",
           bool(_bytes_updates) and _bytes_updates[-1][0] == _expect
           and _out == {"status": "disconnected", "bytes": _expect})
+    check(f"a hub disconnecting {_label} records the server's own CRC of them",
+          bool(_bytes_updates)
+          and _bytes_updates[-1][1] == zlib.crc32(b"".join(_chunks)))
     check(f"a hub disconnecting {_label} leaves the error for the hub's own "
           f"command result to fill",
           not any(sql.startswith("UPDATE hive_recordings SET error")
@@ -454,7 +495,9 @@ check("a late failed command result replaces the stale-sweep message",
       len(_late) == 1 and _late[0][1][0] == _reason
       and recordings.SWEEP_NO_AUDIO_MSG in _late[0][1]
       and "status = 'failed'" in _late[0][0])
-check("a late successful command result does not rewrite a failed row",
+# (A late success may restore a row the sweep wrongly failed — that is a status
+# change with the error cleared, covered in test_recordings_db.py.)
+check("a late successful command result never writes its message as the error",
       not any(sql.startswith("UPDATE hive_recordings SET error")
               for sql, _ in _run_late(True, "recorded 1 B")))
 

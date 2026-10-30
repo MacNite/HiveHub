@@ -1554,6 +1554,17 @@ function hiveAudioPanel(state) {
             + "or choose a fixed lower gain."
           : "Lower the gain for a cleaner recording."));
       }
+      if (rec.upload_intact === false) {
+        detail.append(el("p", { class: "note warn" },
+          rec.truncated
+            ? "The server stopped storing this recording at its size limit; "
+              + "the end is missing."
+            : rec.hub_bytes != null && rec.hub_bytes !== rec.bytes
+              ? `The hub sent ${fmtInt(rec.hub_bytes)} B but only `
+                + `${fmtInt(rec.bytes)} B reached the server — the upload was `
+                + "cut short on the way, often by a proxy."
+              : "The audio on disk does not match what the hub sent."));
+      }
       if (rec.confirmation === "unknown") {
         detail.append(el("p", { class: "note" },
           "The hub never reported on this session, so nothing checked whether "
