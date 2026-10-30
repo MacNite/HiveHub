@@ -580,7 +580,10 @@ Registers or updates a firmware release. The binary must already exist in `FIRMW
 ```
 
 `target` defaults to `hivescale` and may also be `hiveinside` or `beecounter`
-(the HiveTraffic counter). Response:
+(the HiveTraffic counter). An optional `board` is checked against the target and
+the board-stamped filename: `esp32`/`esp32-c6` for `hivescale` (required, or
+derivable from the filename), `nrf54lm20a` for `hiveinside`, `esp32-c6` for
+`beecounter`. A mismatch is refused with `400`. Response:
 
 ```json
 { "status": "ok", "version": "0.9.3", "target": "hivescale", "crc32": 2882343476 }

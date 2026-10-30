@@ -668,10 +668,12 @@ class FirmwareReleaseIn(BaseModel):
     version: str
     filename: str
     active: bool = True
-    # "beecounter" is no longer an accepted target: BeeCounter firmware was
-    # delivered over the (removed) wired I2C relay, and no BLE/GATT OTA exists
-    # yet — a registered beecounter image could never reach a device.
-    target: Literal["hivescale", "hiveinside"] = "hivescale"
+    # The same three targets as firmware.FIRMWARE_TARGETS and the multipart
+    # upload: "beecounter" is the HiveTraffic counter, whose image the hub
+    # relays over BLE GATT (update_beecounter). This endpoint used to accept
+    # only the first two, so the documented JSON registration of a counter
+    # image failed request validation while the upload path took it.
+    target: Literal["hivescale", "hiveinside", "beecounter"] = "hivescale"
 
     @field_validator("target", mode="before")
     @classmethod
@@ -684,8 +686,8 @@ class FirmwareReleaseIn(BaseModel):
     # Board/architecture this image was built for. Required in effect for the
     # "hivescale" target ("esp32" / "esp32-c6") so OTA never serves a 30-pin
     # ESP32 (Xtensa) image to an ESP32-C6 (RISC-V) or vice versa; for
-    # "hiveinside" the only valid board is "nrf54lm20a". When omitted for a
-    # hivescale release it is derived from the board-stamped filename.
+    # "hiveinside" the only valid board is "nrf54lm20a", for "beecounter"
+    # "esp32-c6". When omitted it is derived from the board-stamped filename.
     board: Optional[str] = None
 
 
