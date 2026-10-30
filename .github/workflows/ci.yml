@@ -47,8 +47,9 @@ jobs:
           if-no-files-found: error
 
   # Optional features are off by default, so the builds above never compile
-  # them. Build the C6 once per supported combination so a change there cannot
-  # ship uncompiled: the GATT clients (HiveTraffic counter, HiveHeart / wireless
+  # them. Build the C6 (or `env`, where a feature exists only on another board)
+  # once per supported combination so a change there cannot ship uncompiled:
+  # the GATT clients (HiveTraffic counter, HiveHeart / wireless
   # HiveScale), and the wired DS18B20 probes with each alternative ambient
   # sensor (exactly one may be enabled). Their libraries are the commented-out
   # lib_deps lines in platformio.ini, at the same pins. The images are not
@@ -86,6 +87,14 @@ jobs:
           - name: hiveinside-no-relays
             flags: -DHIVEINSIDE_OTA_ENABLED=0 -DHIVEINSIDE_AUDIO_ENABLED=0
             libs: ""
+          # Wired INMP441 mics exist only on the classic ESP32 (config.h forces
+          # them off on the C6), and they are off by default, so no other build
+          # compiles them or their per-hive BLE arbitration. arduinoFFT is
+          # already in the esp32dev lib_deps.
+          - name: wired-mics
+            env: esp32dev
+            flags: -DENABLE_INMP441_MICS=1
+            libs: ""
     name: firmware-build-variant (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
@@ -108,12 +117,12 @@ jobs:
         run: |
           while IFS= read -r lib; do
             [ -n "$lib" ] || continue
-            pio pkg install -e xiao_esp32c6 --no-save --skip-dependencies --library "$lib"
+            pio pkg install -e "${{ matrix.env || 'xiao_esp32c6' }}" --no-save --skip-dependencies --library "$lib"
           done <<< "$LIBS"
-      - name: Build xiao_esp32c6 (${{ matrix.name }})
+      - name: Build ${{ matrix.env || 'xiao_esp32c6' }} (${{ matrix.name }})
         env:
           PLATFORMIO_BUILD_FLAGS: ${{ matrix.flags }}
-        run: pio run -e xiao_esp32c6
+        run: pio run -e ${{ matrix.env || 'xiao_esp32c6' }}
         working-directory: firmware
 
   # Host-level tests for the checked I2C layer: the exact production headers
