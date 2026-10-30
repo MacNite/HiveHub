@@ -157,6 +157,11 @@ static bool connectTo(const String& mac) {
     }
     NimBLEAddress addr(mac.c_str(), addrType);
     s_client = NimBLEDevice::createClient();
+    if (!s_client) {
+      s_lastError = "no free BLE client slot for the OTA session";
+      Serial.printf("[%s] %s\n", tag(), s_lastError.c_str());
+      return false;
+    }
     s_client->setConnectTimeout(s_target->connectTimeoutS * 1000UL);
     Serial.printf("[%s] connecting to %s ...\n", tag(), addr.toString().c_str());
     if (!s_client->connect(addr)) {
@@ -170,6 +175,11 @@ static bool connectTo(const String& mac) {
   // Direct connect. A seeded MAC may be either type and nothing has told us
   // which, so try both — the same two-pass approach bee_counter_client.cpp uses.
   s_client = NimBLEDevice::createClient();
+  if (!s_client) {
+    s_lastError = "no free BLE client slot for the OTA session";
+    Serial.printf("[%s] %s\n", tag(), s_lastError.c_str());
+    return false;
+  }
   s_client->setConnectTimeout(s_target->connectTimeoutS * 1000UL);
   const uint8_t addrTypes[2] = { BLE_ADDR_PUBLIC, BLE_ADDR_RANDOM };
   for (int t = 0; t < 2; t++) {
@@ -205,7 +215,20 @@ bool begin(const Target& target, const String& mac, uint32_t totalLen,
   // A relay only ever connects — it never scans — so it is safe in any port
   // lifetime. Locating the peer may still need a scan; blesensor::locateByScan
   // answers from this cycle's measurement scan instead wherever it can.
-  blestack::acquire();
+  //
+  // acquire() fails when the BT controller cannot get its memory, and every
+  // NimBLE call after that faults instead of returning an error — so stop here
+  // and let the command report it, as the audio relay does. cleanup() is safe:
+  // there is no client yet, and release() is a no-op for a stack that never
+  // came up.
+  if (!blestack::acquire()) {
+    s_lastError = "BLE stack would not start (out of memory?)";
+    Serial.printf("[%s] %s (free heap %u, largest block %u)\n", tag(),
+                  s_lastError.c_str(), (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+    cleanup();
+    return false;
+  }
   NimBLEDevice::setMTU(247);  // ask for a larger ATT MTU; the device may grant less
 
   if (!connectTo(m)) {
