@@ -1332,6 +1332,24 @@ function recordingTone(rec) {
   return (AUDIO_CONFIRMATION[rec.confirmation] || AUDIO_CONFIRMATION.unknown)[0];
 }
 
+// When the audio was actually captured. A request only reaches the hub on its
+// next wake, so `requested_at` can be most of a send interval earlier than the
+// recording itself; `started_at` is stamped when the hub begins uploading the
+// live stream, which is when the node starts capturing. A request the hub never
+// picked up has no start, so it falls back to when it was asked for.
+function recordingWhen(rec) {
+  return rec?.started_at || rec?.requested_at || null;
+}
+
+// "Requested by max at 14:03" — the request time is only worth spelling out
+// once it differs from the recording time shown in the heading, i.e. once the
+// hub has actually started the session.
+function recordingRequestedLabel(rec) {
+  const by = rec.requested_by ? ` by ${rec.requested_by}` : "";
+  if (!rec.started_at || !rec.requested_at) return by ? `Requested${by}` : null;
+  return `Requested${by} at ${fmtDateTime(rec.requested_at)}`;
+}
+
 // The recording list lives in a 260px rail, so the full "Sep 08, 2026, 01:54 PM"
 // that fmtDateTime gives elsewhere gets ellipsised down to something you cannot
 // tell two sessions apart by. The year is the part worth losing: recordings are
@@ -1478,8 +1496,8 @@ function hiveAudioPanel(state) {
         },
           el("span", { class: `dot ${recordingTone(r)}` }),
           el("span", { class: "pick-when" }, multiNode
-            ? `${recordingShortWhen(r.requested_at)} · hive ${r.hive_index}`
-            : recordingShortWhen(r.requested_at)),
+            ? `${recordingShortWhen(recordingWhen(r))} · hive ${r.hive_index}`
+            : recordingShortWhen(recordingWhen(r))),
           el("span", { class: "pick-len" }, recordingListMeta(r))))));
     }
     return side;
@@ -1500,9 +1518,9 @@ function hiveAudioPanel(state) {
     if (!rec) return detail;
 
     detail.append(
-      el("h4", {}, `${fmtDateTime(rec.requested_at)} · hive ${rec.hive_index}`),
+      el("h4", {}, `${fmtDateTime(recordingWhen(rec))} · hive ${rec.hive_index}`),
       el("p", { class: "note", style: "margin-top:0" },
-        [rec.requested_by ? `Requested by ${rec.requested_by}` : null,
+        [recordingRequestedLabel(rec),
          rec.requested_duration_s ? `${rec.requested_duration_s}s requested` : null]
           .filter(Boolean).join(" · ") || DASH));
 

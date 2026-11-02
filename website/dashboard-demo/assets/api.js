@@ -232,9 +232,12 @@ async function presentRecordings() {
 
 function recordingRow(r) {
   const at = new Date(Date.now() - r.minutesAgo * 60000).toISOString();
+  // A real request waits for the hub's next wake, so it is asked for a few
+  // minutes before the audio is captured. The panel shows the capture time.
+  const asked = new Date(Date.now() - (r.minutesAgo + 7) * 60000).toISOString();
   return {
     id: r.id, device_id: "demo", hive_index: r.hive_index, status: "ready",
-    requested_at: at, started_at: at, completed_at: at,
+    requested_at: asked, started_at: at, completed_at: at,
     requested_duration_s: 0, gain_db: r.gain_db,
     gain_mode: r.gain_db === 127 ? "auto" : "manual",
     applied_gain_db: r.applied_gain_db, sample_rate: AUDIO_RATE,
@@ -267,7 +270,9 @@ function pendingRow() {
   return {
     id: pending.id, device_id: "demo", hive_index: pending.hive, status,
     requested_at: new Date(pending.startedAt).toISOString(),
-    started_at: new Date(pending.startedAt).toISOString(),
+    // Like the server: no start until the hub has picked the request up.
+    started_at: status === "requested" ? null
+      : new Date(pending.startedAt + PENDING_REQUESTED_MS).toISOString(),
     completed_at: ready ? new Date().toISOString() : null,
     requested_duration_s: pending.durationS, gain_db: pending.gainDb,
     gain_mode: pending.gainDb === 127 ? "auto" : "manual",
