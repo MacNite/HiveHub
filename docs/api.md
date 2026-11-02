@@ -1417,6 +1417,8 @@ One recording:
 
 | Field | Meaning |
 |---|---|
+| `requested_at` | when the recording was **asked for**. The hub only collects commands on its next wake, so this can be up to a whole send interval before the audio was captured |
+| `started_at` | when the hub began uploading the live stream — i.e. when the node actually started **recording**. This is the time to show a recording under (the dashboard does since server 0.7.2). `null` until the hub picks the request up, and for a request it never picked up |
 | `status` | `requested` → `streaming` → `ready` / `failed`. A stale sweep resolves rows the hub stopped reporting on, so nothing sits in flight forever |
 | `seconds` | derived from `bytes` — what actually arrived, not what was asked for |
 | `dropped_bytes` / `gaps` / `ring_overruns` | audio the node's ring lost, sequence holes on the air, and notifications the hub's own staging ring refused because the upload was behind. Any one of them means the clip is spliced, and they have three different remedies. Split from a single summed `gaps` in firmware 0.30.2 / server 0.5.2; older hubs report the sum under `gaps` |

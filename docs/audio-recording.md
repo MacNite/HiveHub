@@ -145,7 +145,11 @@ surprises people:
 
 The panel is split: the request controls sit in the left rail above the list of
 sessions, newest first, and selecting one fills the right-hand side with its
-player, its quality figures and a download button. On a narrow screen the two
+player, its quality figures and a download button. Each session is labelled with
+the time it was **recorded** — when the hub started the session — not when it
+was requested; the detail pane gives the request time beside it, since the two
+can be a whole reporting interval apart. (Before server 0.7.2 the panel showed
+the request time.) On a narrow screen the two
 columns stack, which is what the shot below shows.
 
 <img src="hive-audio-panel.png" alt="The Hive audio panel: hive and length
